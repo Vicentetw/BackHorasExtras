@@ -36,7 +36,7 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
 
     for (const r of records) {
       await db.query(
-        `INSERT INTO CHECKINOUT (USERID, CHECKTIME)
+        `INSERT INTO CHECKINS (USERID, CHECKTIME)
          VALUES (?, ?)`,
         [r.USERID, r.CHECKTIME]
       );
