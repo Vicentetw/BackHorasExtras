@@ -21,7 +21,33 @@ const db = mysql.createPool({
   port: process.env.MYSQL_ADDON_PORT || 3306
 });
 
+// ===============================
+// IMPORT CHECKINS (CHECKINOUT)
+// ===============================
+app.post('/import/checkins', upload.single('file'), async (req, res) => {
+  try {
+    const csv = req.file.buffer.toString('utf8');
 
+    const records = parse(csv, {
+      columns: true,
+      delimiter: ';',
+      skip_empty_lines: true
+    });
+
+    for (const r of records) {
+      await db.query(
+        `INSERT INTO CHECKINOUT (USERID, CHECKTIME)
+         VALUES (?, ?)`,
+        [r.USERID, r.CHECKTIME]
+      );
+    }
+
+    res.json({ ok: true, checkins: records.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Import checkins failed' });
+  }
+});
 app.post('/import/users', upload.single('file'), async (req, res) => {
   try {
     const csv = req.file.buffer.toString('utf8');
