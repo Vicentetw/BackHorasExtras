@@ -49,33 +49,6 @@ app.post('/import/users', upload.single('file'), async (req, res) => {
     res.status(500).json({ error: 'Import users failed' });
   }
 });
-app.post('/import/users', upload.single('file'), async (req, res) => {
-  try {
-    const csv = req.file.buffer.toString('utf8');
-
-    const records = parse(csv, {
-      columns: true,
-      delimiter: ';',
-      skip_empty_lines: true
-    });
-
-    for (const r of records) {
-      await db.query(
-        `INSERT INTO Users (USERID, Badgenumber, Name)
-         VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           Badgenumber = VALUES(Badgenumber),
-           Name = VALUES(Name)`,
-        [r.USERID, r.Badgenumber, r.Name]
-      );
-    }
-
-    res.json({ ok: true, users: records.length });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Import users failed' });
-  }
-});
 
 // ===============================
 // TEST
