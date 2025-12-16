@@ -42,6 +42,27 @@ function parseCheckTime(value) {
   return null;
 }
 
+// Endpoint para agregar horas extras manuales o licencias
+app.post('/add/manual', async (req, res) => {
+    const { userId, startDatetime, endDatetime, durationMinutes, type, note } = req.body;
+
+    if (!userId || !startDatetime || !endDatetime || !durationMinutes || !type) {
+        return res.status(400).json({ error: 'Faltan datos necesarios para agregar el registro manual' });
+    }
+
+    try {
+        await db.query(
+            `INSERT INTO ManualEntries (userId, startDatetime, endDatetime, durationMinutes, type, note) 
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [userId, startDatetime, endDatetime, durationMinutes, type, note]
+        );
+        res.json({ ok: true, message: 'Registro manual agregado exitosamente' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Hubo un problema al guardar el registro manual' });
+    }
+});
+
 /* ===============================
    IMPORT CHECKINS
 ================================ */
