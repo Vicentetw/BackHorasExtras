@@ -121,6 +121,33 @@ app.post('/add/manual', async (req, res) => {
   }
 });
 
+/* ===============================
+   DELETE MANUAL ENTRY, ONLY MANUAL
+================================ */
+app.delete('/delete/manual/:id', async (req, res) => {
+  const { id } = req.params;
+
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ error: 'ID inválido' });
+  }
+
+  try {
+    const [result] = await db.query(
+      `DELETE FROM ManualEntries WHERE id = ?`,
+      [Number(id)]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Registro manual no encontrado' });
+    }
+
+    res.json({ ok: true, deletedId: id });
+
+  } catch (err) {
+    console.error('DELETE MANUAL ERROR:', err);
+    res.status(500).json({ error: 'Error al borrar registro manual' });
+  }
+});
 
 /* ===============================
    IMPORT CHECKINS
