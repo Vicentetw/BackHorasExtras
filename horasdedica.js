@@ -24,6 +24,24 @@ const db = mysql.createPool({
   queueLimit: 0
 });
 
+function parseCheckTime(value) {
+  if (!value) return null;
+
+  // Caso: DD/MM/YYYY HH:mm
+  if (value.includes('/')) {
+    const [date, time] = value.split(' ');
+    const [dd, mm, yyyy] = date.split('/');
+    return `${yyyy}-${mm}-${dd} ${time}:00`;
+  }
+
+  // Caso: YYYY-MM-DD HH:mm o YYYY-MM-DD HH:mm:ss
+  if (value.includes('-')) {
+    return value.length === 16 ? `${value}:00` : value;
+  }
+
+  return null;
+}
+
 /* ===============================
    IMPORT CHECKINS
 ================================ */
@@ -47,11 +65,15 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
     for (const r of records) {
       if (!r.USERID || !r.CHECKTIME) continue;
 
-      await db.query(
-        `INSERT INTO Checkins (USERID, CHECKTIME)
-         VALUES (?, ?)`,
-        [Number(r.USERID), r.CHECKTIME]
-      );
+      const checktime = parseCheckTime(r.CHECKTIME);
+if (!checktime) continue;
+
+await db.query(
+  `INSERT INTO Checkins (USERID, CHECKTIME)
+   VALUES (?, ?)`,
+  [Number(r.USERID), checktime]
+);
+
 
       inserted++;
     }
