@@ -42,26 +42,85 @@ function parseCheckTime(value) {
   return null;
 }
 
+// Normalizo la fecha para que no de error agregar en forma manual
+function toMySQLDatetime(value) {
+  if (!value) return null;
+
+  // Acepta ISO string o Date
+  const d = new Date(value);
+  if (isNaN(d)) return null;
+
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 // Endpoint para agregar horas extras manuales o licencias
 app.post('/add/manual', async (req, res) => {
-    const { userId, startDatetime, endDatetime, durationMinutes, type, note } = req.body;
+  try {
+    const {
+      userId,
+      startDatetime,
+      endDatetime,
+      durationMinutes,
+      type,
+      note
+    } = req.body;
 
-    if (!userId || !startDatetime || !endDatetime || !durationMinutes || !type) {
-        return res.status(400).json({ error: 'Faltan datos necesarios para agregar el registro manual' });
+    // Validaciones básicas
+    if (
+      !userId ||
+      !startDatetime ||
+      !endDatetime ||
+      typeof durationMinutes !== 'number' ||
+      !type
+    ) {
+      return res.status(400).json({
+        error: 'Datos inválidos o incompletos'
+      });
     }
 
-    try {
-        await db.query(
-            `INSERT INTO ManualEntries (userId, startDatetime, endDatetime, durationMinutes, type, note) 
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [userId, startDatetime, endDatetime, durationMinutes, type, note]
-        );
-        res.json({ ok: true, message: 'Registro manual agregado exitosamente' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Hubo un problema al guardar el registro manual' });
+    // Normalizar fechas para MySQL
+    const start = toMySQLDatetime(startDatetime);
+    const end = toMySQLDatetime(endDatetime);
+
+    if (!start || !end) {
+      return res.status(400).json({
+        error: 'Formato de fecha inválido'
+      });
     }
+
+    if (end <= start) {
+      return res.status(400).json({
+        error: 'endDatetime debe ser mayor que startDatetime'
+      });
+    }
+
+    await db.query(
+      `INSERT INTO ManualEntries
+       (userId, startDatetime, endDatetime, durationMinutes, type, note)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        Number(userId),
+        start,
+        end,
+        Math.round(durationMinutes),
+        type,
+        note || null
+      ]
+    );
+
+    res.json({
+      ok: true,
+      message: 'Registro manual guardado correctamente'
+    });
+
+  } catch (err) {
+    console.error('ADD MANUAL ERROR:', err);
+    res.status(500).json({
+      error: 'Error interno al guardar registro manual'
+    });
+  }
 });
+
 
 /* ===============================
    IMPORT CHECKINS
