@@ -61,30 +61,49 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
     });
 
     let inserted = 0;
+    let skipped = 0;
+    let errors = 0;
 
     for (const r of records) {
-      if (!r.USERID || !r.CHECKTIME) continue;
+      try {
+        if (!r.USERID || !r.CHECKTIME) {
+          skipped++;
+          continue;
+        }
 
-      const checktime = parseCheckTime(r.CHECKTIME);
-if (!checktime) continue;
+        const checktime = parseCheckTime(r.CHECKTIME);
+        if (!checktime) {
+          skipped++;
+          continue;
+        }
 
-await db.query(
-  `INSERT INTO Checkins (USERID, CHECKTIME)
-   VALUES (?, ?)`,
-  [Number(r.USERID), checktime]
-);
+        await db.query(
+          `INSERT INTO Checkins (USERID, CHECKTIME)
+           VALUES (?, ?)`,
+          [Number(r.USERID), checktime]
+        );
 
-
-      inserted++;
+        inserted++;
+      } catch (rowErr) {
+        console.error('ROW ERROR:', r, rowErr.message);
+        errors++;
+      }
     }
 
-    res.json({ ok: true, checkins: inserted });
+    res.json({
+      ok: true,
+      inserted,
+      skipped,
+      errors,
+      total: records.length
+    });
 
   } catch (err) {
-    console.error('IMPORT CHECKINS ERROR:', err);
+    console.error('IMPORT CHECKINS FATAL:', err);
     res.status(500).json({ error: 'Import checkins failed' });
   }
 });
+
 
 /* ===============================
    IMPORT USERS
