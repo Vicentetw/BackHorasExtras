@@ -246,11 +246,13 @@ app.get('/data', async (req, res) => {
       return res.status(400).json({ error: 'month requerido (YYYY-MM)' });
     }
 
+    // 1️⃣ Usuarios
     const [users] = await db.query(
       `SELECT USERID, Badgenumber, Name
        FROM Users`
     );
 
+    // 2️⃣ Fichajes automáticos
     const [checkins] = await db.query(
       `SELECT USERID, CHECKTIME
        FROM Checkins
@@ -259,13 +261,33 @@ app.get('/data', async (req, res) => {
       [month]
     );
 
-    res.json({ users, checkins });
+    // 3️⃣ Fichajes manuales
+    const [manuals] = await db.query(
+      `SELECT 
+         userId,
+         startDatetime,
+         endDatetime,
+         durationMinutes,
+         type,
+         note
+       FROM ManualEntries
+       WHERE DATE_FORMAT(startDatetime, '%Y-%m') = ?
+       ORDER BY userId, startDatetime`,
+      [month]
+    );
+
+    res.json({
+      users,
+      checkins,
+      manuals
+    });
 
   } catch (err) {
     console.error('DATA ERROR:', err);
     res.status(500).json({ error: 'Error backend' });
   }
 });
+
 
 /* ===============================
    START
