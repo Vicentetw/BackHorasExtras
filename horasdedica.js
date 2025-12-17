@@ -176,17 +176,19 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
     }
 
     const csv = req.file.buffer.toString('utf8');
-
     const records = parse(csv, {
-      columns: true,       // Usamos la primera fila como nombres de columnas
-      delimiter: ';',      // Separador de campos en el CSV
+      columns: true,
+      delimiter: ';',
       skip_empty_lines: true,
-      trim: true           // Quita espacios al inicio y final
+      trim: true
     });
 
     let inserted = 0;
     let skipped = 0;
     let errors = 0;
+
+    const batchSize = 50; // número de filas por insert
+    let batch = [];
 
     for (const r of records) {
       try {
@@ -201,23 +203,31 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
           continue;
         }
 
-        // INSERT IGNORE evita errores de duplicado
-        const [result] = await db.query(
-          `INSERT IGNORE INTO Checkins (USERID, CHECKTIME)
-           VALUES (?, ?)`,
-          [Number(r.USERID), checktime]
-        );
+        batch.push([Number(r.USERID), checktime]);
 
-        if (result.affectedRows === 0) {
-          skipped++; // No se insertó porque ya existía
-        } else {
-          inserted++;
+        // Cuando el batch alcanza el tamaño definido, insertamos
+        if (batch.length >= batchSize) {
+          await db.query(
+            `INSERT INTO Checkins (USERID, CHECKTIME) VALUES ?`,
+            [batch]
+          );
+          inserted += batch.length;
+          batch = [];
         }
 
       } catch (rowErr) {
         console.error('ROW ERROR:', r, rowErr.message);
         errors++;
       }
+    }
+
+    // Insertar lo que quede en el batch final
+    if (batch.length > 0) {
+      await db.query(
+        `INSERT INTO Checkins (USERID, CHECKTIME) VALUES ?`,
+        [batch]
+      );
+      inserted += batch.length;
     }
 
     res.json({
