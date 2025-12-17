@@ -42,6 +42,23 @@ function parseCheckTime(value) {
   return null;
 }
 
+// Función para parsear fechas de checkins sin convertir a UTC
+function parseCheckTimeArgentina(value) {
+  if (!value) return null;
+
+  if (value.includes('/')) { // DD/MM/YYYY HH:mm
+    const [date, time] = value.split(' ');
+    const [dd, mm, yyyy] = date.split('/');
+    return `${yyyy}-${mm}-${dd} ${time}:00`; // se guarda tal cual
+  }
+
+  if (value.includes('-')) { // YYYY-MM-DD HH:mm o HH:mm:ss
+    return value.length === 16 ? `${value}:00` : value;
+  }
+
+  return null;
+}
+
 // Normalizo la fecha para que no de error agregar en forma manual
 function toMySQLDatetime(value) {
   if (!value) return null;
@@ -178,7 +195,7 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
           continue;
         }
 
-        const checktime = parseCheckTime(r.CHECKTIME);
+        const checktime = parseCheckTimeArgentina(r.CHECKTIME);
         if (!checktime) {
           skipped++;
           continue;
