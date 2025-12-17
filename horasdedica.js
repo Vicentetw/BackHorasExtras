@@ -187,47 +187,66 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
     let skipped = 0;
     let errors = 0;
 
-    const batchSize = 50; // número de filas por insert
+    const batchSize = 50;
     let batch = [];
 
     for (const r of records) {
-      try {
-        if (!r.USERID || !r.CHECKTIME) {
-          skipped++;
-          continue;
-        }
+      if (!r.USERID || !r.CHECKTIME) {
+        skipped++;
+        continue;
+      }
 
-        const checktime = parseCheckTimeArgentina(r.CHECKTIME);
-        if (!checktime) {
-          skipped++;
-          continue;
-        }
+      const checktime = parseCheckTimeArgentina(r.CHECKTIME);
+      if (!checktime) {
+        skipped++;
+        continue;
+      }
 
-        batch.push([Number(r.USERID), checktime]);
+      batch.push([Number(r.USERID), checktime]);
 
-        // Cuando el batch alcanza el tamaño definido, insertamos
-        if (batch.length >= batchSize) {
+      if (batch.length >= batchSize) {
+        try {
           await db.query(
             `INSERT INTO Checkins (USERID, CHECKTIME) VALUES ?`,
             [batch]
           );
           inserted += batch.length;
           batch = [];
+        } catch (err) {
+          // Detectamos si es max_user_connections
+          if (err.code === 'ER_CON_COUNT_ERROR' || err.message.includes('max_user_connections')) {
+            console.error('Base de datos ocupada:', err.message);
+            return res.status(503).json({
+              error: 'La base de datos está ocupada. Intenta más tarde.'
+            });
+          } else {
+            console.error('ROW BATCH ERROR:', batch, err.message);
+            errors += batch.length;
+            batch = [];
+          }
         }
-
-      } catch (rowErr) {
-        console.error('ROW ERROR:', r, rowErr.message);
-        errors++;
       }
     }
 
     // Insertar lo que quede en el batch final
     if (batch.length > 0) {
-      await db.query(
-        `INSERT INTO Checkins (USERID, CHECKTIME) VALUES ?`,
-        [batch]
-      );
-      inserted += batch.length;
+      try {
+        await db.query(
+          `INSERT INTO Checkins (USERID, CHECKTIME) VALUES ?`,
+          [batch]
+        );
+        inserted += batch.length;
+      } catch (err) {
+        if (err.code === 'ER_CON_COUNT_ERROR' || err.message.includes('max_user_connections')) {
+          console.error('Base de datos ocupada al final del batch:', err.message);
+          return res.status(503).json({
+            error: 'La base de datos está ocupada. Intenta más tarde.'
+          });
+        } else {
+          console.error('FINAL BATCH ERROR:', batch, err.message);
+          errors += batch.length;
+        }
+      }
     }
 
     res.json({
