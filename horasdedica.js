@@ -348,12 +348,22 @@ app.get('/data', async (req, res) => {
 
     // 2️⃣ Fichajes automáticos
     const [checkins] = await db.query(
-      `SELECT USERID, CHECKTIME
-       FROM Checkins
-       WHERE DATE_FORMAT(CHECKTIME, '%Y-%m') = ?
-       ORDER BY USERID, CHECKTIME`,
-      [month]
-    );
+  `
+  SELECT 
+    USERID,
+    DATE(CHECKTIME) AS workDate,
+    MIN(CHECKTIME) AS entryTime,
+    MAX(CHECKTIME) AS exitTime,
+    TIMEDIFF(MAX(CHECKTIME), MIN(CHECKTIME)) AS duration
+  FROM Checkins
+  WHERE CHECKTIME >= CONCAT(?, '-01')
+    AND CHECKTIME <  DATE_ADD(CONCAT(?, '-01'), INTERVAL 1 MONTH)
+  GROUP BY USERID, DATE(CHECKTIME)
+  ORDER BY USERID, workDate
+  `,
+  [month, month]
+);
+
 
     // 3️⃣ Fichajes manuales
     const [manuals] = await db.query(
