@@ -161,10 +161,10 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
     const csv = req.file.buffer.toString('utf8');
 
     const records = parse(csv, {
-      columns: true,
-      delimiter: ';',
+      columns: true,       // Usamos la primera fila como nombres de columnas
+      delimiter: ';',      // Separador de campos en el CSV
       skip_empty_lines: true,
-      trim: true
+      trim: true           // Quita espacios al inicio y final
     });
 
     let inserted = 0;
@@ -184,13 +184,19 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
           continue;
         }
 
-        await db.query(
-          `INSERT INTO Checkins (USERID, CHECKTIME)
+        // INSERT IGNORE evita errores de duplicado
+        const [result] = await db.query(
+          `INSERT IGNORE INTO Checkins (USERID, CHECKTIME)
            VALUES (?, ?)`,
           [Number(r.USERID), checktime]
         );
 
-        inserted++;
+        if (result.affectedRows === 0) {
+          skipped++; // No se insertó porque ya existía
+        } else {
+          inserted++;
+        }
+
       } catch (rowErr) {
         console.error('ROW ERROR:', r, rowErr.message);
         errors++;
@@ -210,6 +216,7 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
     res.status(500).json({ error: 'Import checkins failed' });
   }
 });
+
 
 
 /* ===============================
