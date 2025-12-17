@@ -286,6 +286,20 @@ app.get('/', (req, res) => {
   res.send('Backend OK');
 });
 
+// DELETE ALL CHECKINS (¡cuidado, borra todo!)
+app.delete('/clear/checkins', async (req, res) => {
+  try {
+    const [result] = await db.query(`DELETE FROM Checkins`);
+    res.json({
+      ok: true,
+      message: `Se borraron ${result.affectedRows} fichajes`
+    });
+  } catch (err) {
+    console.error('CLEAR CHECKINS ERROR:', err);
+    res.status(500).json({ error: 'Error al borrar los fichajes' });
+  }
+});
+
 /* ===============================
    DATA PARA INFORME
 ================================ */
