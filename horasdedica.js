@@ -335,34 +335,118 @@ app.delete('/clear/checkins', async (req, res) => {
 app.get('/data', async (req, res) => {
   try {
     const { month } = req.query;
-
     if (!month) {
       return res.status(400).json({ error: 'month requerido (YYYY-MM)' });
     }
 
-    // 1️⃣ Usuarios
-    const [users] = await db.query(
-      `SELECT USERID, Badgenumber, Name
-       FROM Users`
-    );
+    const [users] = await db.query(`
+      SELECT USERID, Badgenumber, Name
+      FROM Users
+    `);
 
-    // 2️⃣ Fichajes automáticos
-    const [checkins] = await db.query(
-  `
-  SELECT 
-    USERID,
-    DATE(CHECKTIME) AS workDate,
-    MIN(CHECKTIME) AS entryTime,
-    MAX(CHECKTIME) AS exitTime,
-    TIMEDIFF(MAX(CHECKTIME), MIN(CHECKTIME)) AS duration
-  FROM Checkins
-  WHERE CHECKTIME >= CONCAT(?, '-01')
-    AND CHECKTIME <  DATE_ADD(CONCAT(?, '-01'), INTERVAL 1 MONTH)
-  GROUP BY USERID, DATE(CHECKTIME)
-  ORDER BY USERID, workDate
-  `,
-  [month, month]
-);
+    const [checkins] = await db.query(`
+      SELECT USERID, CHECKTIME
+      FROM Checkins
+      WHERE DATE_FORMAT(CHECKTIME, '%Y-%m') = ?
+      ORDER BY USERID, CHECKTIME
+    `, [month]);
+
+    // ======================
+    // UTILIDADES
+    // ======================
+    const MIN_1340 = 13 * 60 + 40;
+    const MAX_1415 = 14 * 60 + 15;
+
+    const minOfDay = d =>
+      d.getHours() * 60 + d.getMinutes();
+
+    const diffMinutes = (a, b) =>
+      (b - a) / 60000;
+
+    function limpiarNueves(arr) {
+      const out = [];
+      for (const f of arr) {
+        const prev = out[out.length - 1];
+        if (f.USERID == 9 && prev && prev.USERID == 9) continue;
+        out.push(f);
+      }
+      return out;
+    }
+
+    // ======================
+    // AGRUPAR POR USUARIO + DÍA
+    // ======================
+    const map = {};
+    for (const c of checkins) {
+      const d = new Date(c.CHECKTIME);
+      const key = `${c.USERID}_${d.toISOString().slice(0, 10)}`;
+      if (!map[key]) map[key] = [];
+      map[key].push({ ...c, d });
+    }
+
+    const horasExtra = [];
+
+    for (const key in map) {
+      let fichajes = map[key];
+      fichajes.sort((a, b) => a.d - b.d);
+      fichajes = limpiarNueves(fichajes);
+
+      let inicioHE = null;
+
+      // -------- Regla A: 9 → usuario
+      for (let i = 1; i < fichajes.length; i++) {
+        const prev = fichajes[i - 1];
+        const cur = fichajes[i];
+        if (
+          prev.USERID == 9 &&
+          cur.USERID != 9 &&
+          minOfDay(cur.d) >= MIN_1340
+        ) {
+          inicioHE = cur.d;
+          break;
+        }
+      }
+
+      // -------- Regla B: segundo fichaje 13:40–14:15
+      if (!inicioHE) {
+        const ventana = fichajes.filter(f => {
+          const m = minOfDay(f.d);
+          return f.USERID != 9 && m >= MIN_1340 && m <= MAX_1415;
+        });
+        if (ventana.length >= 2) {
+          inicioHE = ventana[1].d;
+        }
+      }
+
+      if (!inicioHE) continue;
+
+      const finHE = fichajes[fichajes.length - 1].d;
+      const dur = Math.max(0, diffMinutes(inicioHE, finHE));
+
+      const user = users.find(u => u.USERID == fichajes[0].USERID);
+
+      horasExtra.push({
+        Fecha: inicioHE.toISOString().slice(0, 10),
+        USERID: fichajes[0].USERID,
+        Badgenumber: user?.Badgenumber || '',
+        Nombre: user?.Name || '',
+        InicioHE: inicioHE.toTimeString().slice(0, 8),
+        FinHE: finHE.toTimeString().slice(0, 8),
+        Duracion: `${Math.floor(dur / 60)}:${String(Math.round(dur % 60)).padStart(2, '0')}`,
+        DuracionMinutos: Math.round(dur),
+        Manual: false,
+        Detalle: 'HE válida'
+      });
+    }
+
+    res.json({ horasExtra });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error backend' });
+  }
+});
+
 
 
     // 3️⃣ Fichajes manuales
