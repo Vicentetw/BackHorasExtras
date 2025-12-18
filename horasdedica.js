@@ -329,23 +329,6 @@ app.delete('/clear/checkins', async (req, res) => {
   }
 });
 
-//format date 
-function formatDateLocal(d) {
-  return (
-    d.getFullYear() + '-' +
-    String(d.getMonth() + 1).padStart(2, '0') + '-' +
-    String(d.getDate()).padStart(2, '0')
-  );
-}
-
-function formatTimeLocal(d) {
-  return String(d.getHours()).padStart(2, '0') + ':' +
-         String(d.getMinutes()).padStart(2, '0') + ':' +
-         String(d.getSeconds()).padStart(2, '0');
-}
-
-
-
 /* ===============================
    DATA PARA INFORME
 ================================ */
@@ -396,7 +379,7 @@ app.get('/data', async (req, res) => {
     const map = {};
     for (const c of checkins) {
       const d = new Date(c.CHECKTIME);
-      const key = `${c.USERID}_${formatDateLocal(d)}`;
+      const key = `${c.USERID}_${d.toISOString().slice(0, 10)}`;
       if (!map[key]) map[key] = [];
       map[key].push({ ...c, d });
     }
@@ -443,12 +426,12 @@ app.get('/data', async (req, res) => {
       const user = users.find(u => u.USERID == fichajes[0].USERID);
 
       horasExtra.push({
-        Fecha: formatDateLocal(inicioHE),
+        Fecha: inicioHE.toISOString().slice(0, 10),
         USERID: fichajes[0].USERID,
         Badgenumber: user?.Badgenumber || '',
         Nombre: user?.Name || '',
-        InicioHE: formatTimeLocal(inicioHE),
-        FinHE: formatTimeLocal(finHE),
+        InicioHE: inicioHE.toTimeString().slice(0, 8),
+        FinHE: finHE.toTimeString().slice(0, 8),
         Duracion: `${Math.floor(dur / 60)}:${String(Math.round(dur % 60)).padStart(2, '0')}`,
         DuracionMinutos: Math.round(dur),
         Manual: false,
@@ -466,6 +449,26 @@ app.get('/data', async (req, res) => {
 
 
 
+    // 3️⃣ Fichajes manuales
+    const [manuals] = await db.query(
+      `SELECT 
+         userId,
+         startDatetime,
+         endDatetime,
+         durationMinutes,
+         type,
+         note
+       FROM ManualEntries
+       WHERE DATE_FORMAT(startDatetime, '%Y-%m') = ?
+       ORDER BY userId, startDatetime`,
+      [month]
+    );
+
+    res.json({
+      users,
+      checkins,
+      manuals
+    });
 
   } catch (err) {
     console.error('DATA ERROR:', err);
