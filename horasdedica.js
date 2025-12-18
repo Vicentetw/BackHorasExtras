@@ -466,26 +466,27 @@ app.get('/data', async (req, res) => {
 
 
 
-    // 3️⃣ Fichajes manuales
-    const [manuals] = await db.query(
-      `SELECT 
-         userId,
-         startDatetime,
-         endDatetime,
-         durationMinutes,
-         type,
-         note
-       FROM ManualEntries
-       WHERE DATE_FORMAT(startDatetime, '%Y-%m') = ?
-       ORDER BY userId, startDatetime`,
-      [month]
-    );
+   // 3️⃣ Fichajes manuales
+const [manuals] = await db.query(
+  `SELECT 
+     userId,
+     startDatetime,
+     endDatetime,
+     durationMinutes,
+     type,
+     note
+   FROM ManualEntries
+   WHERE DATE_FORMAT(startDatetime, '%Y-%m') = ?
+   ORDER BY userId, startDatetime`,
+  [month]
+);
 
-    res.json({
-      users,
-      checkins,
-      manuals
-    });
+res.json({
+  users,
+  checkins,
+  manuals
+});
+
 
   } catch (err) {
     console.error('DATA ERROR:', err);
