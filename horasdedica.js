@@ -207,7 +207,7 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
       if (batch.length >= batchSize) {
         try {
           await db.query(
-            `INSERT INTO Checkins (USERID, CHECKTIME) VALUES ?`,
+            `INSERT IGNORE INTO Checkins (USERID, CHECKTIME) VALUES ?`,
             [batch]
           );
           inserted += batch.length;
