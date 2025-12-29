@@ -330,6 +330,25 @@ app.delete('/clear/checkins', async (req, res) => {
 });
 
 /* ===============================
+   USERS FOR AUTOCOMPLETE
+================================ */
+app.get('/users', async (req, res) => {
+  try {
+    const [users] = await db.query(`
+      SELECT USERID, Badgenumber, Name
+      FROM Users
+      ORDER BY Name
+    `);
+
+    res.json(users);
+
+  } catch (err) {
+    console.error('USERS ERROR:', err);
+    res.status(500).json({ error: 'Error cargando usuarios' });
+  }
+});
+
+/* ===============================
    DATA PARA INFORME (ONLINE)
 ================================ */
 app.get('/data', async (req, res) => {
