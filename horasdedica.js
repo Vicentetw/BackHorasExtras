@@ -397,7 +397,9 @@ app.get('/data', async (req, res) => {
     // ======================
     const [checkins] = await db.query(
       `
-      SELECT USERID, CHECKTIME
+      SELECT 
+        USERID,
+        DATE_FORMAT(CHECKTIME, '%Y-%m-%dT%H:%i:%s') AS CHECKTIME
       FROM Checkins
       WHERE USERID IN (?)
         AND DATE_FORMAT(CHECKTIME, '%Y-%m') = ?
