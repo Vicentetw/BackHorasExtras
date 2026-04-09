@@ -752,7 +752,7 @@ app.post('/import/users', upload.single('file'), async (req, res) => {
       if (!r.USERID || !r.Badgenumber || !r.Name) continue;
 
       await db.query(
-        `INSERT INTO Users (USERID, Badgenumber, Name)
+        `INSERT INTO users (USERID, Badgenumber, Name)
          VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE
            Badgenumber = VALUES(Badgenumber),
