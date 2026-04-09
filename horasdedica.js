@@ -827,7 +827,7 @@ app.get('/data', async (req, res) => {
     // ======================
     let usersSQL = `
       SELECT USERID, Badgenumber, Name
-      FROM Users
+      FROM users
       WHERE 1=1
     `;
     const usersParams = [];
