@@ -302,7 +302,7 @@ app.post('/import/users', upload.single('file'), async (req, res) => {
       if (!r.USERID || !r.Badgenumber || !r.Name) continue;
 
       await db.query(
-        `INSERT INTO Users (USERID, Badgenumber, Name)
+        `INSERT INTO users (USERID, Badgenumber, Name)
          VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE
            Badgenumber = VALUES(Badgenumber),
@@ -349,7 +349,7 @@ app.get('/users', async (req, res) => {
   try {
     const [users] = await db.query(`
       SELECT USERID, Badgenumber, Name
-      FROM Users
+      FROM users
       ORDER BY Name
     `);
 
@@ -377,7 +377,7 @@ app.get('/data', async (req, res) => {
     // ======================
     let usersSQL = `
       SELECT USERID, Badgenumber, Name
-      FROM Users
+      FROM users
       WHERE 1=1
     `;
     const usersParams = [];
