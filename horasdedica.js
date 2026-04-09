@@ -799,7 +799,7 @@ app.get('/users', async (req, res) => {
   try {
     const [users] = await db.query(`
       SELECT USERID, Badgenumber, Name
-      FROM Users
+      FROM users
       ORDER BY Name
     `);
 
