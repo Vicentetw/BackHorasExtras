@@ -257,12 +257,14 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
         continue;
       }
 
-      batch.push([Number(userIdClean), checktime]);
+      const machine_ip = r.MACHINE_IP ? r.MACHINE_IP.toString().trim() : null;
+      const machine_sn = r.MACHINE_SN ? r.MACHINE_SN.toString().trim() : null;
+      batch.push([Number(userIdClean), checktime, machine_ip, machine_sn]);
 
       if (batch.length >= batchSize) {
         try {
           await db.query(
-            `INSERT IGNORE INTO Checkins (USERID, CHECKTIME) VALUES ?`,
+            `INSERT IGNORE INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES ?`,
             [batch]
           );
           inserted += batch.length;
@@ -292,7 +294,7 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
     if (batch.length > 0) {
       try {
         await db.query(
-          `INSERT IGNORE INTO Checkins (USERID, CHECKTIME) VALUES ?`,
+          `INSERT IGNORE INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES ?`,
           [batch]
         );
         inserted += batch.length;
