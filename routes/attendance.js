@@ -22,7 +22,8 @@ module.exports = function (db) {
   // ==========================
   router.get('/:date', async (req, res) => {
     try {
-      const { date, month, scheduleTime, tolerance } = req.query;
+      const { date } = req.params;
+      const { month, scheduleTime, tolerance } = req.query;
 
       const queryDate =
         date ||
@@ -42,10 +43,33 @@ module.exports = function (db) {
         isWorkDay: true,
       };
 
+      const [holidayRows] = await db.query(
+        `SELECT * FROM holidays
+         WHERE date = ?
+            OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') = DATE_FORMAT(?, '%m-%d'))`,
+        [queryDate, queryDate]
+      );
+
+      if (holidayRows.length > 0) {
+        const holidayNotWork = holidayRows.some((h) => h.isWorkDay == 0);
+        if (holidayNotWork) {
+          config.isWorkDay = false;
+        }
+      }
+
       if (!config.isWorkDay) {
         return res.json({
           date: queryDate,
           message: 'No es día laboral',
+          schedule: config,
+          holidays: holidayRows,
+          summary: {
+            onTime: 0,
+            late: 0,
+            absent: 0,
+            excused: 0,
+            total: 0,
+          },
           attendance: [],
         });
       }

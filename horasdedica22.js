@@ -495,17 +495,10 @@ app.get('/diagnostic/:badge/:month', async (req, res) => {
     };
     
     // 1. ¿Existe el usuario en tabla users?
-    const [[user]] = await db.query(`
-      SELECT 
-        u.USERID, 
-        u.Badgenumber, 
-        COALESCE(e.nombre, u.Name) AS Name
-      FROM users u
-      LEFT JOIN user_employee_map um ON um.USERID = u.USERID
-      LEFT JOIN employees e ON e.id = um.employee_id
-      WHERE u.Badgenumber = ? 
-      LIMIT 1
-    `, [badge]);
+    const [[user]] = await db.query(
+      'SELECT USERID, Badgenumber, Name FROM users WHERE Badgenumber = ? LIMIT 1',
+      [badge]
+    );
     
     if (user) {
       result.checks.user_exists = {
@@ -569,12 +562,7 @@ app.get('/diagnostic/:badge/:month', async (req, res) => {
       
       // Sugerir legajos similares
       const [suggestions] = await db.query(
-        `SELECT u.Badgenumber, COALESCE(e.nombre, u.Name) AS Name 
-         FROM users u
-         LEFT JOIN user_employee_map um ON um.USERID = u.USERID
-         LEFT JOIN employees e ON e.id = um.employee_id
-         WHERE u.Badgenumber LIKE ? 
-         LIMIT 5`,
+        'SELECT Badgenumber, Name FROM users WHERE Badgenumber LIKE ? LIMIT 5',
         [`%${badge.slice(-2)}%`]
       );
       result.suggestions = suggestions;
@@ -875,14 +863,7 @@ app.post('/config/special-users', async (req, res) => {
     
     // Verificar que el usuario existe
     const [user] = await db.query(
-      `SELECT 
-        u.USERID, 
-        u.Badgenumber, 
-        COALESCE(e.nombre, u.Name) AS Name 
-       FROM users u
-       LEFT JOIN user_employee_map um ON um.USERID = u.USERID
-       LEFT JOIN employees e ON e.id = um.employee_id
-       WHERE u.USERID = ?`,
+      `SELECT USERID, Badgenumber, Name FROM users WHERE USERID = ?`,
       [userId]
     );
     
@@ -1300,11 +1281,7 @@ app.get('/config/excluded-users', async (req, res) => {
 
     // Get paginated results
     const [users] = await db.query(
-      `SELECT u.USERID, u.Badgenumber, COALESCE(e.nombre, u.Name) AS Name, u.isExcluded 
-       FROM users u
-       LEFT JOIN user_employee_map um ON um.USERID = u.USERID
-       LEFT JOIN employees e ON e.id = um.employee_id
-       ${whereClause} ORDER BY Name LIMIT ? OFFSET ?`,
+      `SELECT USERID, Badgenumber, Name, isExcluded FROM users ${whereClause} ORDER BY Name LIMIT ? OFFSET ?`,
       [...params, parseInt(limit), offset]
     );
 
@@ -1438,15 +1415,10 @@ app.get('/attendance/:date', async (req, res) => {
     let users = [];
     try {
       const [usersResult] = await db.query(`
-        SELECT 
-          u.USERID, 
-          u.Badgenumber, 
-          COALESCE(e.nombre, u.Name) AS Name
-        FROM \`users\` u
-        LEFT JOIN \`user_employee_map\` um ON um.USERID = u.USERID
-        LEFT JOIN \`employees\` e ON e.id = um.employee_id
-        WHERE u.USERID > 10
-          AND u.isExcluded = 0
+        SELECT USERID, Badgenumber, Name
+        FROM \`users\`
+        WHERE USERID > 10
+          AND isExcluded = 0
         ORDER BY Name
       `);
       users = usersResult || [];
@@ -1511,41 +1483,14 @@ app.get('/attendance/:date', async (req, res) => {
     } catch (e) {
       console.error(`⚠️ Error fetching schedule: ${e.message}`);
     }
-
-    // PASO 2B: Consultar holidays para el día, incluyendo recurrentes
-    let holidays = [];
-    try {
-      const [holidayRows] = await db.query(
-        `SELECT *
-         FROM \`holidays\`
-         WHERE date = ?
-           OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') = DATE_FORMAT(?, '%m-%d'))`,
-        [date, date]
-      );
-      holidays = holidayRows || [];
-      if (holidays.length > 0) {
-        const holidayNotWork = holidays.some(h => h.isWorkDay == 0);
-        if (holidayNotWork) {
-          schedule.isWorkDay = false;
-          console.log(`⚠️ Día marcado como no laborable por holidays`);
-        }
-      }
-    } catch (e) {
-      console.error(`⚠️ Error fetching holidays: ${e.message}`);
-    }
-
-    // IMPORTANTE: Incluso si no es un día laboral (feriado), procesamos los fichajes.
-    // Esto es para capturar a personas que trabajan en feriados (médicos, policías, etc.)
-    const isHolidayWorkDay = !schedule.isWorkDay && holidays.length > 0;
     
     const entranceTime = extractTime(schedule.timeEntrance) || scheduleTime;
     const entranceMinutes = timeToMinutes(entranceTime);
     const toleranceMinutes = parseInt(tolerance);
     
     console.log(`✓ Entrance: ${entranceTime}, Tolerance: ${toleranceMinutes}min`);
-    if (isHolidayWorkDay) {
-      console.log(`⚠️ HOLIDAY WORKDAY: ${holidays.map(h => h.name).join(', ')} - procesando fichas normalmente`);
-    }
+    
+    // PASO 3: Obtener TODOS los fichajes del día - MATCHED BY BADGENUMBER
     let checkins = [];
     try {
       // Join Checkins con users para obtener los fichajes con el Badgenumber correcto
@@ -1596,7 +1541,6 @@ app.get('/attendance/:date', async (req, res) => {
       let status = 'Absent';
       let firstCheckin = null;
       let lastCheckin = null;
-      let workedOnHoliday = false;
       
       if (userExclusion) {
         status = userExclusion.type === 'FULL_DAY' ? 'Excused' : 'Excused';
@@ -1613,14 +1557,6 @@ app.get('/attendance/:date', async (req, res) => {
         } else {
           status = 'Late';
         }
-        
-        // Marcar si trabajó en feriado
-        if (isHolidayWorkDay) {
-          workedOnHoliday = true;
-        }
-      } else if (isHolidayWorkDay) {
-        // En un feriado sin fichajes: mostrar como "Feriado" en lugar de "Ausente"
-        status = 'HolidayAbsent';
       }
       
       return {
@@ -1632,8 +1568,7 @@ app.get('/attendance/:date', async (req, res) => {
         lastCheckin: lastCheckin,
         totalCheckins: userCheckins.length,
         checkins: userCheckins,
-        exclusion: userExclusion || null,
-        workedOnHoliday: workedOnHoliday
+        exclusion: userExclusion || null
       };
     });
     
@@ -1656,8 +1591,6 @@ app.get('/attendance/:date', async (req, res) => {
         isWorkDay: schedule.isWorkDay,
         tolerance: toleranceMinutes
       },
-      holidays: holidays,
-      isHolidayWorkDay: isHolidayWorkDay,
       summary: summary,
       attendance: attendance
     });
