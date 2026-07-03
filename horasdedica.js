@@ -3,6 +3,7 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const path = require('path');
 const mysql = require('mysql2/promise');
 const { parse } = require('csv-parse/sync');
 const { securityMiddlewares, apiKeyWarning } = require('./security');
@@ -10,6 +11,7 @@ const importRoutes = require('./routes/import.routes');
 const matchingRoutes = require('./routes/matching.routes');
 const employeesRoutes = require('./routes/employees');
 const holidaysRoutes = require('./routes/holidays');
+const createMotorLaboralRoutes = require('./motor-laboral/index');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -21,6 +23,16 @@ app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
+// Servir archivos estáticos desde /public en la raíz del proyecto
+app.use('/static', express.static(path.join(__dirname, '..', 'public')));
+// Servir CSS estático desde la carpeta raíz /css
+app.use('/css', express.static(path.join(__dirname, '..', 'css')));
+// Servir el HTML de administración copiado en la raíz del repositorio
+app.get('/motor-laboral-admin.html', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'motor-laboral-admin.html'));
+});
+// Servir scripts estáticos desde /js en la raíz del repositorio
+app.use('/js', express.static(path.join(__dirname, '..', 'js')));
 //Importación de rutas de matching e importación de datos
 
 app.use('/api/import', importRoutes);
@@ -46,6 +58,7 @@ const db = mysql.createPool({
 
 // Registrar holidays después de db
 app.use('/api/holidays', holidaysRoutes(db));
+app.use('/api/labor-engine', createMotorLaboralRoutes(db));
 
 function parseCheckTime(value) {
   if (!value) return null;
@@ -2090,60 +2103,34 @@ app.delete('/api/employees/:id', async (req, res) => {
 // ENDPOINTS PARA AUTO-MATCHING
 // ========================================
 
-// POST /api/matching/auto - Auto-match usuarios con empleados
+// POST /api/matching/auto - Auto-match preview only (no changes saved)
 app.post('/api/matching/auto', async (req, res) => {
   try {
-    let matched = 0;
-    let conflicts = 0;
-
-    // Get all employees with employee_id
-    const [employees] = await db.query(
-      'SELECT id, employee_id FROM employees WHERE employee_id IS NOT NULL'
-    );
-
-    for (const emp of employees) {
-      // Find user with matching Badgenumber
-      const [users] = await db.query(
-        'SELECT USERID FROM users WHERE Badgenumber = ? AND USERID > 10',
-        [emp.employee_id.toString()]
-      );
-
-      if (users.length === 0) continue;
-
-      const userId = users[0].USERID;
-
-      // Check if already mapped
-      const [existing] = await db.query(
-        'SELECT USERID FROM user_employee_map WHERE USERID = ?',
-        [userId]
-      );
-
-      if (existing.length > 0) {
-        conflicts++;
-        continue;
-      }
-
-      // Create mapping
-      try {
-        await db.query(
-          'INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)',
-          [userId, emp.id, 'auto_employee_id']
-        );
-        matched++;
-      } catch (err) {
-        console.error(`Error mapping user ${userId}:`, err.message);
-        conflicts++;
-      }
-    }
+    const [predictions] = await db.query(`
+      SELECT 
+        u.USERID,
+        u.Badgenumber as user_badgenumber,
+        u.Name as user_name,
+        e.id as employee_id,
+        e.employee_id as emp_legajo,
+        e.nombre as employee_name,
+        'employee_id' as match_type
+      FROM users u
+      JOIN employees e 
+        ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
+      WHERE u.USERID > 10
+        AND e.activo = 1
+        AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
+    `);
 
     res.json({
       ok: true,
-      message: `Auto-matching completado: ${matched} relacionados, ${conflicts} conflictos`,
-      matched,
-      conflicts
+      message: 'Auto-matching preview only: no changes were saved.',
+      would_match: predictions.length,
+      predictions
     });
   } catch (err) {
-    console.error('ERROR auto-matching:', err);
+    console.error('ERROR auto-matching preview:', err);
     if (err.code === 'ECONNREFUSED') {
       return res.status(503).json({ 
         error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
@@ -2156,15 +2143,18 @@ app.post('/api/matching/auto', async (req, res) => {
 // POST /api/matching/manual - Relacionar usuario con empleado manualmente
 app.post('/api/matching/manual', async (req, res) => {
   try {
-    const { userId, employeeId } = req.body;
+    const payloadUserId = req.body.user_id ?? req.body.userId;
+    const payloadEmployeeId = req.body.employee_id ?? req.body.employeeId;
+    const userId = Number(payloadUserId);
+    const employeeId = Number(payloadEmployeeId);
 
-    if (!userId || !employeeId) {
-      return res.status(400).json({ error: 'userId y employeeId son requeridos' });
+    if (!Number.isFinite(userId) || !Number.isFinite(employeeId) || userId <= 0 || employeeId <= 0) {
+      return res.status(400).json({ error: 'user_id/employee_id o userId/employeeId son requeridos y deben ser números válidos' });
     }
 
     // Check both exist
-    const [user] = await db.query('SELECT USERID FROM users WHERE USERID = ?', [parseInt(userId)]);
-    const [employee] = await db.query('SELECT id FROM employees WHERE id = ?', [parseInt(employeeId)]);
+    const [user] = await db.query('SELECT USERID FROM users WHERE USERID = ?', [userId]);
+    const [employee] = await db.query('SELECT id FROM employees WHERE id = ?', [employeeId]);
 
     if (user.length === 0) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
@@ -2173,13 +2163,11 @@ app.post('/api/matching/manual', async (req, res) => {
       return res.status(404).json({ error: 'Empleado no encontrado' });
     }
 
-    // Remove old mapping for this user if exists
-    await db.query('DELETE FROM user_employee_map WHERE USERID = ?', [parseInt(userId)]);
+    await db.query('DELETE FROM user_employee_map WHERE USERID = ? OR employee_id = ?', [userId, employeeId]);
 
-    // Create new mapping
     await db.query(
       'INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)',
-      [parseInt(userId), parseInt(employeeId), 'manual']
+      [userId, employeeId, 'manual']
     );
 
     res.json({ ok: true, message: 'Usuario relacionado con empleado' });
