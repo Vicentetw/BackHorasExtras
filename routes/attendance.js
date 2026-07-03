@@ -93,7 +93,7 @@ module.exports = function (db) {
         FROM employees e
 
         LEFT JOIN user_employee_map ue 
-          ON ue.employee_id = e.employee_id
+          ON ue.employee_id = e.id
 
         LEFT JOIN users u 
           ON u.USERID = ue.USERID
@@ -232,7 +232,7 @@ module.exports = function (db) {
           ON ue.USERID = u.USERID
 
         LEFT JOIN employees e 
-          ON e.employee_id = ue.employee_id
+          ON e.id = ue.employee_id
 
         WHERE DATE(c.CHECKTIME) = ?
           AND (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)

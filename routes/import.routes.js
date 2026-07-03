@@ -201,11 +201,11 @@ router.post('/employees/confirm/:batchId', async (req, res) => {
 
       console.log('Insertando empleado...');
       
-      // Insertar en employees
+      // Insertar en employees (incluye tenant_id si viene en el CSV)
       await db.query(`
         INSERT INTO employees
-        (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, overtime_authorized, exclude_from_report, legajo_alt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, overtime_authorized, exclude_from_report, legajo_alt, tenant_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         row.employee_id,
         row.nombre,
@@ -219,7 +219,8 @@ router.post('/employees/confirm/:batchId', async (req, res) => {
         row.activo !== undefined ? row.activo : true,
         row.overtime_authorized !== undefined ? (row.overtime_authorized ? 1 : 0) : 1,
         row.exclude_from_report !== undefined ? (row.exclude_from_report ? 1 : 0) : 0,
-        row.legajo_alt
+        row.legajo_alt,
+        row.tenant_id || null
       ]);
 
       console.log('Empleado insertado correctamente');

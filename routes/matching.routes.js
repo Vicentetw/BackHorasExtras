@@ -3,77 +3,65 @@ const router = express.Router();
 const db = require('../db');
 const pool = db;
 
+const normalizeValue = (val) => String(val || '').trim().toLowerCase();
+
+const normalizeName = (name) => {
+  return String(name || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/,/g, '')
+    .trim()
+    .split(/\s+/)
+    .sort()
+    .join(' ');
+};
+
+const findMatchingUserForEmployee = (employee, users) => {
+  const candidateIds = [employee.employee_id, employee.legajo_alt]
+    .filter(Boolean)
+    .map(normalizeValue);
+
+  const directMatch = users.find(u => candidateIds.includes(normalizeValue(u.Badgenumber)));
+  if (directMatch) {
+    return { matchedUser: directMatch, confidence: 100, matchType: 'auto_legajo' };
+  }
+
+  const nameMatch = users.find(u => normalizeName(u.Name) === normalizeName(employee.nombre));
+  if (nameMatch) {
+    return { matchedUser: nameMatch, confidence: 70, matchType: 'auto_nombre' };
+  }
+
+  return null;
+};
+
 /**
  * 🤖 AUTO MATCH (documento / legajo / employee_id)
- * Prioridad: employee_id (legajo) > documento
+ * Prioridad: employee_id (legajo) > nombre
  */
 router.post('/auto', async (req, res) => {
   try {
-    const [employees] = await pool.query('SELECT * FROM employees');
-    const [users] = await pool.query('SELECT * FROM users');
-
-    let created = 0;
-
-    const normalize = (val) => String(val || '').trim();
-
-    const normalizeName = (name) => {
-      return String(name || '')
-        .toLowerCase()
-        .replace(/,/g, '')
-        .trim()
-        .split(/\s+/)
-        .sort()
-        .join(' ');
-    };
-
-    for (const e of employees) {
-      // 1. verificar si ya está matcheado
-      const [exists] = await pool.query(
-        'SELECT 1 FROM employee_user WHERE employee_id = ? LIMIT 1',
-        [e.id]
-      );
-
-      if (exists.length > 0) continue;
-
-      let matchedUser = null;
-      let confidence = 0;
-      let matchType = null;
-
-      // 🥇 MATCH POR LEGAJO
-      matchedUser = users.find(u =>
-        normalize(u.Badgenumber) === normalize(e.employee_id)
-      );
-
-      if (matchedUser) {
-        confidence = 100;
-        matchType = 'auto_legajo';
-      } else {
-        // 🥈 MATCH POR NOMBRE
-        matchedUser = users.find(u =>
-          normalizeName(u.Name) === normalizeName(e.nombre)
-        );
-
-        if (matchedUser) {
-          confidence = 70;
-          matchType = 'auto_nombre';
-        }
-      }
-
-      // guardar si encontró
-      if (matchedUser) {
-        await pool.query(
-          `INSERT INTO employee_user (employee_id, user_id, match_type, confidence)
-           VALUES (?, ?, ?, ?)`,
-          [e.id, matchedUser.USERID, matchType, confidence]
-        );
-
-        created++;
-      }
-    }
+    const [predictions] = await pool.query(`
+      SELECT 
+        u.USERID,
+        u.Badgenumber as user_badgenumber,
+        u.Name as user_name,
+        e.id as employee_id,
+        e.employee_id as emp_legajo,
+        e.nombre as employee_name,
+        'employee_id' as match_type
+      FROM users u
+      JOIN employees e 
+        ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
+      WHERE u.USERID > 10
+        AND e.activo = 1
+        AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
+    `);
 
     res.json({
       success: true,
-      created
+      would_match: predictions.length,
+      predictions
     });
 
   } catch (err) {
@@ -106,10 +94,11 @@ router.get('/', async (req, res) => {
  */
 router.get('/unmatched', async (req, res) => {
   const [rows] = await pool.query(`
-    SELECT e.*
-    FROM employees e
-    LEFT JOIN employee_user eu ON eu.employee_id = e.id
-    WHERE eu.user_id IS NULL
+    SELECT u.*
+    FROM users u
+    LEFT JOIN user_employee_map m ON u.USERID = m.USERID
+    WHERE m.USERID IS NULL
+      AND u.USERID > 10
   `);
 
   res.json(rows);
@@ -139,11 +128,11 @@ router.get('/suggestions', async (req, res) => {
       u.Name as user_name,
       e.id as employee_id,
       e.nombre as employee_name
-    FROM Users u
+    FROM users u
     JOIN employees e
       ON u.Name LIKE CONCAT('%', SUBSTRING_INDEX(e.nombre, ',', 1), '%')
     WHERE u.USERID NOT IN (
-      SELECT user_id FROM user_employee_map
+      SELECT USERID FROM user_employee_map
     )
     LIMIT 100
   `);
@@ -152,20 +141,60 @@ router.get('/suggestions', async (req, res) => {
 });
 
 /**
- * ✍️ MATCH MANUAL
+ * ✍️ MATCH MANUAL (un usuario con un empleado)
  */
 router.post('/manual', async (req, res) => {
   try {
-    const { employee_id, user_id } = req.body;
+    const payloadUserId = req.body.user_id ?? req.body.userId;
+    const payloadEmployeeId = req.body.employee_id ?? req.body.employeeId;
+    const employeeId = Number(payloadEmployeeId);
+    const userId = Number(payloadUserId);
+
+    if (!Number.isFinite(employeeId) || !Number.isFinite(userId) || employeeId <= 0 || userId <= 0) {
+      return res.status(400).json({ error: 'employee_id/user_id o employeeId/userId son requeridos y deben ser números válidos' });
+    }
 
     await pool.query(
-      `INSERT INTO employee_user (employee_id, user_id, match_type, confidence)
-       VALUES (?, ?, 'manual', 100)
-       ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)`
+      `DELETE FROM user_employee_map WHERE USERID = ? OR employee_id = ?`,
+      [userId, employeeId]
     );
 
-    res.json({ success: true });
+    await pool.query(
+      `INSERT INTO user_employee_map (USERID, employee_id, match_type)
+       VALUES (?, ?, 'manual')`,
+      [userId, employeeId]
+    );
 
+    res.json({ success: true, employeeId, userId });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 🧩 MATCH MANUAL POR PENDIENTES (legajo/employee_id)
+ */
+router.post('/manual-bulk', async (req, res) => {
+  try {
+    const [predictions] = await db.query(`
+      SELECT 
+        u.USERID,
+        u.Badgenumber as user_badgenumber,
+        u.Name as user_name,
+        e.id as employee_id,
+        e.employee_id as emp_legajo,
+        e.nombre as employee_name,
+        'employee_id' as match_type
+      FROM users u
+      JOIN employees e 
+        ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
+      WHERE u.USERID > 10
+        AND e.activo = 1
+        AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
+    `);
+
+    res.json({ success: true, created: 0, matches: predictions, would_match: predictions.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -178,7 +207,7 @@ router.delete('/:user_id', async (req, res) => {
   const { user_id } = req.params;
 
   await db.query(`
-    DELETE FROM user_employee_map WHERE user_id = ?
+    DELETE FROM user_employee_map WHERE USERID = ?
   `, [user_id]);
 
   res.json({ ok: true });

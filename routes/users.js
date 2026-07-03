@@ -25,7 +25,13 @@ module.exports = function(db, upload){
   });
 
   router.get('/', async (req,res)=>{
-    const [users] = await db.query(`SELECT USERID,Badgenumber,Name FROM Users ORDER BY Name`);
+    const [users] = await db.query(`
+      SELECT u.USERID, u.Badgenumber, COALESCE(e.nombre, u.Name) AS Name
+      FROM Users u
+      LEFT JOIN user_employee_map um ON um.USERID = u.USERID
+      LEFT JOIN employees e ON e.id = um.employee_id
+      ORDER BY Name
+    `);
     res.json(users);
   });
 

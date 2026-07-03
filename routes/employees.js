@@ -2,27 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-async function syncEmployeeToUser(employeeRowId, employeeBadge) {
-  if (!employeeBadge) return;
-  const [users] = await db.query(
-    `SELECT USERID FROM users WHERE TRIM(Badgenumber) = TRIM(?) AND USERID > 10 LIMIT 1`,
-    [String(employeeBadge)]
-  );
-  if (users.length === 0) return;
-
-  const userId = users[0].USERID;
-  await db.query(
-    `INSERT INTO user_employee_map (USERID, employee_id, match_type)
-     VALUES (?, ?, 'auto_employee_id')
-     ON DUPLICATE KEY UPDATE employee_id = VALUES(employee_id), match_type = VALUES(match_type)`,
-    [userId, employeeRowId]
-  );
-
-  await db.query(
-    `DELETE FROM user_employee_map WHERE employee_id = ? AND USERID != ?`,
-    [employeeRowId, userId]
-  );
-}
+// NOTE: Automatic employee->user sync has been disabled.
+// Matching now requires explicit approval via the matching dashboard.
 
 /**
  * 📋 LISTAR EMPLEADOS
@@ -135,11 +116,13 @@ router.post('/', async (req, res) => {
       tipo_documento,
       direccion,
       zona_id,  // Changed from zona to zona_id
+      tenant_id,
       zona_real_id,
       fecha_alta,
       fecha_baja,
       activo,
       overtime_authorized,
+      exclude_from_report,
       legajo_alt
     } = req.body;
 
@@ -179,8 +162,8 @@ router.post('/', async (req, res) => {
     // Insertar
     const [result] = await db.query(
       `INSERT INTO employees
-       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, overtime_authorized, exclude_from_report, legajo_alt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, overtime_authorized, exclude_from_report, legajo_alt, tenant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         employee_id,
         nombre,
@@ -194,12 +177,12 @@ router.post('/', async (req, res) => {
         activo !== undefined ? activo : true,
         overtime_authorized !== undefined ? (overtime_authorized ? 1 : 0) : 1,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
-        legajo_alt || null
+        legajo_alt || null,
+        tenant_id || null
       ]
     );
 
     const insertedId = result.insertId;
-    await syncEmployeeToUser(insertedId, employee_id);
 
     res.json({
       ok: true,
@@ -233,7 +216,8 @@ router.put('/:id', async (req, res) => {
       activo,
       overtime_authorized,
       exclude_from_report,
-      legajo_alt
+      legajo_alt,
+      tenant_id
     } = req.body;
 
     // Validaciones básicas
@@ -288,7 +272,7 @@ router.put('/:id', async (req, res) => {
       `UPDATE employees SET
        employee_id = ?, nombre = ?, documento = ?, tipo_documento = ?,
        direccion = ?, zona_id = ?, zona_real_id = ?, fecha_alta = ?,
-       fecha_baja = ?, activo = ?, overtime_authorized = ?, exclude_from_report = ?, legajo_alt = ?
+       fecha_baja = ?, activo = ?, overtime_authorized = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?
        WHERE id = ?`,
       [
         employee_id,
@@ -304,11 +288,10 @@ router.put('/:id', async (req, res) => {
         overtime_authorized !== undefined ? (overtime_authorized ? 1 : 0) : 1,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
+        tenant_id || null,
         id
       ]
     );
-
-    await syncEmployeeToUser(id, employee_id);
 
     res.json({
       ok: true,
