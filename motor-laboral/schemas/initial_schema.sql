@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS `work_schedule_templates` (
   `description` varchar(500) DEFAULT NULL,
   `type` enum('FIXED','FLEXIBLE','ROTATIVE','CUSTOM') NOT NULL DEFAULT 'FIXED',
   `active` tinyint(1) NOT NULL DEFAULT '1',
+  `is_default` tinyint(1) NOT NULL DEFAULT '0',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),

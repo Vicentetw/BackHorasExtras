@@ -1,3 +1,10 @@
+const { getLocalDayOfWeek } = require('../repositories/scheduleRepository');
+
+function isDefaultWorkday(dateString) {
+  const dayOfWeek = getLocalDayOfWeek(dateString);
+  return dayOfWeek !== 0 && dayOfWeek !== 6;
+}
+
 function normalizeDate(dateString) {
   if (!dateString) return null;
   const date = new Date(dateString);
@@ -11,7 +18,7 @@ function buildLegacySchedule({ date, tenantSchedule }) {
       date,
       timeEntrance: '07:00:00',
       timeExit: '13:40:00',
-      isWorkDay: true,
+      isWorkDay: isDefaultWorkday(date),
       source: 'legacy'
     };
   }
@@ -40,9 +47,12 @@ function buildMotorSchedule({ date, tenantSchedule }) {
   };
 }
 
-function getScheduleEntry(schedule, assignedScheduleMap, employeeId) {
+function getScheduleEntry(schedule, assignedScheduleMap, tenantScheduleMap, employeeId, employeeTenantId) {
   if (assignedScheduleMap && assignedScheduleMap[employeeId]) {
     return assignedScheduleMap[employeeId];
+  }
+  if (tenantScheduleMap && employeeTenantId != null && tenantScheduleMap[employeeTenantId]) {
+    return tenantScheduleMap[employeeTenantId];
   }
   return schedule;
 }
@@ -57,7 +67,7 @@ function getEntranceReference(schedule) {
   return schedule.timeEntrance;
 }
 
-function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, isHoliday) {
+function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents = []) {
   checkins.forEach(c => {
     const entry = usersMap.get(String(c.employeeId));
     if (entry) {
@@ -67,11 +77,12 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
 
   return Array.from(usersMap.values()).map(u => {
     const exclusion = exclusions.find(e => e.userId === u.userId);
+    const leaveEvent = leaveEvents.find(ev => String(ev.legajo) === String(u.employeeId));
     const checkinsSorted = u.checkins.slice().sort();
     const firstCheckin = checkinsSorted[0] || null;
     const lastCheckin = checkinsSorted[checkinsSorted.length - 1] || null;
 
-    const userSchedule = getScheduleEntry(schedule, assignedScheduleMap, u.employeeId);
+    const userSchedule = getScheduleEntry(schedule, assignedScheduleMap, tenantScheduleMap, u.employeeId, u.tenantId);
     const entranceRef = getEntranceReference(userSchedule);
     const entranceMinutes = Number(entranceRef.split(':')[0]) * 60 + Number(entranceRef.split(':')[1]);
     let toleranceMin = 10;
@@ -80,9 +91,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
     }
 
     let status = 'Absent';
-    if (exclusion) {
-      status = 'Excused';
-    } else if (checkinsSorted.length > 0) {
+    if (checkinsSorted.length > 0) {
       const firstTime = firstCheckin.split(' ')[1].substring(0, 5);
       const [h, m] = firstTime.split(':').map(Number);
       const firstMinutes = h * 60 + m;
@@ -90,17 +99,30 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       if (firstMinutes <= entranceMinutes + toleranceMin) {
         status = 'OnTime';
       } else {
-        status = 'Late';
+        // Igual criterio que /attendance-range: una tardanza se justifica si hay
+        // una exclusión ese día que cubre la demora (excTo) o sin horario cargado.
+        const excToMin = exclusion && exclusion.excTo
+          ? Number(exclusion.excTo.split(':')[0]) * 60 + Number(exclusion.excTo.split(':')[1])
+          : null;
+        const justified = !!exclusion && (excToMin === null || firstMinutes <= excToMin);
+        status = justified ? 'LateJustified' : 'Late';
       }
       if (isHoliday) {
         status = 'WorkedHoliday';
       }
+    } else if (exclusion || leaveEvent) {
+      status = 'Excused';
     }
 
     return {
       employeeId: u.employeeId,
       userId: u.userId,
       badgeNumber: u.badgeNumber,
+      leave: leaveEvent ? {
+        eventTypeCode: leaveEvent.eventTypeCode || null,
+        eventTypeDescripcion: leaveEvent.eventTypeDescripcion || null,
+        observaciones: leaveEvent.observaciones || null
+      } : null,
       name: u.name,
       status,
       firstCheckin,
@@ -108,8 +130,11 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       totalCheckins: checkinsSorted.length,
       checkins: checkinsSorted,
       exclusion: exclusion || null,
+      assigned: !!(assignedScheduleMap && assignedScheduleMap[u.employeeId]),
       schedule: {
         source: userSchedule.source,
+        templateId: userSchedule.templateId || null,
+        tenantId: userSchedule.tenantId || null,
         templateType: userSchedule.template_type || null,
         timeEntrance: userSchedule.timeEntrance,
         timeExit: userSchedule.timeExit,
@@ -124,19 +149,25 @@ function buildSummary(attendance) {
   return {
     onTime: attendance.filter(a => a.status === 'OnTime').length,
     late: attendance.filter(a => a.status === 'Late').length,
+    lateJustified: attendance.filter(a => a.status === 'LateJustified').length,
     absent: attendance.filter(a => a.status === 'Absent').length,
     excused: attendance.filter(a => a.status === 'Excused').length,
     total: attendance.length
   };
 }
 
-async function calculateDailyAttendance({ date, tenantId, repositories }) {
+async function calculateDailyAttendance({ date, tenantId, templateId, repositories }) {
   const normalizedDate = normalizeDate(date);
   if (!normalizedDate) {
     throw new Error('Fecha inválida');
   }
 
-  const tenantScheduleRows = await repositories.schedule.findByDate(normalizedDate, tenantId);
+  let tenantScheduleRows;
+  if (templateId !== undefined && templateId !== null && templateId !== '') {
+    tenantScheduleRows = await repositories.schedule.findByTemplateId(normalizedDate, Number(templateId));
+  } else {
+    tenantScheduleRows = await repositories.schedule.findByDate(normalizedDate, tenantId);
+  }
   const tenantSchedule = Array.isArray(tenantScheduleRows) ? tenantScheduleRows[0] : tenantScheduleRows;
 
   const schedule = tenantSchedule && (tenantSchedule.source === 'new' || tenantSchedule.source === 'motor')
@@ -153,22 +184,41 @@ async function calculateDailyAttendance({ date, tenantId, repositories }) {
   const rawUsers = await repositories.user.findAll({ tenantId });
   const checkins = await repositories.checkin.findByDate(normalizedDate, tenantId);
   const exclusions = await repositories.exclusion.findByDate(normalizedDate, tenantId);
+  const leaveEvents = await repositories.employeeEvent.findByDate(normalizedDate);
 
   const usersMap = new Map();
+  const tenantIds = new Set();
   rawUsers.forEach(u => {
     usersMap.set(String(u.employeeId), {
       employeeId: u.employeeId,
       userId: u.USERID || null,
       badgeNumber: u.Badgenumber || null,
       name: u.Name,
+      tenantId: u.tenantId != null ? u.tenantId : null,
       checkins: []
     });
+    if (u.tenantId != null) {
+      tenantIds.add(Number(u.tenantId));
+    }
   });
 
   const employeeIds = Array.from(usersMap.keys()).map(id => Number(id));
   const assignedScheduleMap = await repositories.schedule.findAssignedScheduleMapForDate(normalizedDate, employeeIds);
 
-  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, isHoliday);
+  const tenantScheduleMap = {};
+  if (!templateId) {
+    for (const tid of tenantIds) {
+      const rows = await repositories.schedule.findByDate(normalizedDate, tid);
+      const tenantSchedule = Array.isArray(rows) ? rows[0] : rows;
+      if (tenantSchedule) {
+        tenantScheduleMap[tid] = tenantSchedule.source === 'new' || tenantSchedule.source === 'motor'
+          ? buildMotorSchedule({ date: normalizedDate, tenantSchedule })
+          : buildLegacySchedule({ date: normalizedDate, tenantSchedule });
+      }
+    }
+  }
+
+  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents);
   const summary = buildSummary(attendance);
   const anyMotorSchedule = attendance.some(a => a.schedule.source === 'motor');
   const usedMotorSchedule = schedule.source === 'motor' || anyMotorSchedule;
@@ -208,7 +258,7 @@ async function calculateLegacyAttendance({ date, db }) {
   const config = dayConfig[0] || {
     timeEntrance: '07:00:00',
     timeExit: '13:40:00',
-    isWorkDay: true
+    isWorkDay: isDefaultWorkday(normalizedDate)
   };
 
   const [holidayRows] = await db.query(

@@ -217,7 +217,8 @@ router.put('/:id', async (req, res) => {
       overtime_authorized,
       exclude_from_report,
       legajo_alt,
-      tenant_id
+      tenant_id,
+      category_id
     } = req.body;
 
     // Validaciones básicas
@@ -272,7 +273,8 @@ router.put('/:id', async (req, res) => {
       `UPDATE employees SET
        employee_id = ?, nombre = ?, documento = ?, tipo_documento = ?,
        direccion = ?, zona_id = ?, zona_real_id = ?, fecha_alta = ?,
-       fecha_baja = ?, activo = ?, overtime_authorized = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?
+       fecha_baja = ?, activo = ?, overtime_authorized = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?,
+       category_id = ?
        WHERE id = ?`,
       [
         employee_id,
@@ -289,6 +291,7 @@ router.put('/:id', async (req, res) => {
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
         tenant_id || null,
+        category_id || null,
         id
       ]
     );

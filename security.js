@@ -3,7 +3,12 @@ const helmet = require('helmet');
 const API_KEY = process.env.API_KEY || null;
 const CORS_ORIGINS = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean)
-  : ['http://localhost:3000'];
+  : [
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'http://localhost:5500',
+      'http://127.0.0.1:5500'
+    ];
 
 function isLocalHostOrigin(origin) {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
@@ -14,11 +19,14 @@ function authMiddleware(req, res, next) {
     return next();
   }
 
+  // Se chequean por separado: una ruta puede traer además un Authorization Bearer
+  // de Firebase (identidad de usuario) que no tiene nada que ver con esta clave de
+  // aplicación, y no debe hacer que se ignore el x-api-key.
+  const apiKeyHeader = req.headers['x-api-key'];
   const authHeader = req.headers['authorization'];
-  const tokenFromHeader = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-  const token = tokenFromHeader || req.headers['x-api-key'];
+  const bearerMatchesApiKey = authHeader === `Bearer ${API_KEY}`;
 
-  if (!token || token !== API_KEY) {
+  if (apiKeyHeader !== API_KEY && !bearerMatchesApiKey) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

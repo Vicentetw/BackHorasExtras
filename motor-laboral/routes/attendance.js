@@ -57,8 +57,11 @@ function createMotorLaboralRoutes({ db, attendanceService }) {
       const tenantId = req.query.tenantId !== undefined && req.query.tenantId !== ''
         ? Number(req.query.tenantId)
         : null;
+      const templateId = req.query.templateId !== undefined && req.query.templateId !== ''
+        ? Number(req.query.templateId)
+        : null;
 
-      const result = await attendanceService.calculateDailyAttendance({ date, tenantId });
+      const result = await attendanceService.calculateDailyAttendance({ date, tenantId, templateId });
 
       res.json(result);
     } catch (err) {

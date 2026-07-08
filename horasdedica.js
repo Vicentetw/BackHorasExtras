@@ -1,4 +1,4 @@
-//require('dotenv').config();
+require('dotenv').config();
 // quitar require('dotenv') si no usas .env local, y configurar variables de entorno en tu hosting
 const express = require('express');
 const cors = require('cors');
@@ -11,7 +11,14 @@ const importRoutes = require('./routes/import.routes');
 const matchingRoutes = require('./routes/matching.routes');
 const employeesRoutes = require('./routes/employees');
 const holidaysRoutes = require('./routes/holidays');
+const eventTypesRoutes = require('./routes/eventTypes');
+const employeeEventsRoutes = require('./routes/employeeEvents');
+const leaveBalancesRoutes = require('./routes/leaveBalances');
+const employeeCategoriesRoutes = require('./routes/employeeCategories');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
+const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
+const userRepository = require('./motor-laboral/repositories/userRepository');
+const employeeEventRepository = require('./motor-laboral/repositories/employeeEventRepository');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -58,6 +65,10 @@ const db = mysql.createPool({
 
 // Registrar holidays después de db
 app.use('/api/holidays', holidaysRoutes(db));
+app.use('/api/event-types', eventTypesRoutes(db));
+app.use('/api/employee-events', employeeEventsRoutes(db));
+app.use('/api/leave-balances', leaveBalancesRoutes(db));
+app.use('/api/employee-categories', employeeCategoriesRoutes(db));
 app.use('/api/labor-engine', createMotorLaboralRoutes(db));
 
 function parseCheckTime(value) {
@@ -1072,7 +1083,7 @@ app.get('/config/user-exclusions', async (req, res) => {
     
     // Obtener datos paginados
     const [exclusions] = await db.query(`
-      SELECT 
+      SELECT
         ue.id,
         ue.userId,
         u.Badgenumber,
@@ -1080,12 +1091,16 @@ app.get('/config/user-exclusions', async (req, res) => {
         ue.excDate,
         ue.reason,
         ue.type,
+        ue.event_type_id,
+        et.code AS eventTypeCode,
+        et.descripcion AS eventTypeDescripcion,
         ue.excFrom,
         ue.excTo,
         ue.createdAt,
         (ue.excDate >= CURDATE()) as isActive
       FROM \`userexclusions\` ue
       JOIN \`users\` u ON ue.userId = u.USERID
+      LEFT JOIN \`event_types\` et ON et.id = ue.event_type_id
       ${where}
       ORDER BY ue.excDate DESC, ue.createdAt DESC
       LIMIT ? OFFSET ?
@@ -1114,27 +1129,27 @@ app.get('/config/user-exclusions', async (req, res) => {
 // POST /config/user-exclusions - Crear exclusión
 app.post('/config/user-exclusions', async (req, res) => {
   try {
-    const { userId, excDate, reason, type, excFrom, excTo } = req.body;
-    
+    const { userId, excDate, reason, type, eventTypeId, excFrom, excTo } = req.body;
+
     if (!userId || !excDate) {
       return res.status(400).json({ error: 'userId y excDate son requeridos' });
     }
-    
+
     // Verificar que el usuario existe
     const [[user]] = await db.query(
       `SELECT USERID FROM \`users\` WHERE USERID = ?`,
       [userId]
     );
-    
+
     if (!user) {
       return res.status(400).json({ error: 'Usuario no encontrado' });
     }
-    
+
     try {
       await db.query(`
-        INSERT INTO \`userexclusions\` (userId, excDate, reason, type, excFrom, excTo)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [userId, excDate, reason || null, type || 'FULL_DAY', excFrom || null, excTo || null]);
+        INSERT INTO \`userexclusions\` (userId, excDate, reason, type, event_type_id, excFrom, excTo)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [userId, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
       
       res.json({ ok: true, message: 'Exclusión creada' });
     } catch (err) {
@@ -1158,13 +1173,13 @@ app.post('/config/user-exclusions', async (req, res) => {
 app.put('/config/user-exclusions/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { reason, type, excFrom, excTo } = req.body;
-    
+    const { reason, type, eventTypeId, excFrom, excTo } = req.body;
+
     const [result] = await db.query(`
       UPDATE \`userexclusions\`
-      SET reason = ?, type = ?, excFrom = ?, excTo = ?
+      SET reason = ?, type = ?, event_type_id = ?, excFrom = ?, excTo = ?
       WHERE id = ?
-    `, [reason || null, type || 'FULL_DAY', excFrom || null, excTo || null, id]);
+    `, [reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null, id]);
     
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Exclusión no encontrada' });
@@ -1205,6 +1220,40 @@ app.delete('/config/user-exclusions/:id', async (req, res) => {
       });
     }
     res.status(500).json({ error: 'Error eliminando exclusión' });
+  }
+});
+
+// GET /config/personal-leave-limit - Límite mensual de salida particular (minutos)
+app.get('/config/personal-leave-limit', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT value FROM app_settings WHERE name = ?`,
+      ['personalLeaveMonthlyLimitMinutes']
+    );
+    res.json({ personalLeaveMonthlyLimitMinutes: rows[0] ? Number(rows[0].value) : 0 });
+  } catch (err) {
+    console.error('ERROR fetching personal leave limit:', err);
+    res.status(500).json({ error: 'Error fetching personal leave limit' });
+  }
+});
+
+// POST /config/personal-leave-limit
+app.post('/config/personal-leave-limit', async (req, res) => {
+  try {
+    const minutes = Number(req.body.personalLeaveMonthlyLimitMinutes);
+    if (!Number.isFinite(minutes) || minutes < 0) {
+      return res.status(400).json({ error: 'personalLeaveMonthlyLimitMinutes debe ser un número >= 0' });
+    }
+    await db.query(
+      `INSERT INTO app_settings (name, value)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
+      ['personalLeaveMonthlyLimitMinutes', String(minutes)]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving personal leave limit:', err);
+    res.status(500).json({ error: 'Error saving personal leave limit' });
   }
 });
 
@@ -1502,10 +1551,11 @@ app.get('/attendance/:date', async (req, res) => {
     }
     
     // PASO 2: Obtener horario configurado del día (si existe)
+    const defaultDayOfWeek = scheduleRepository.getLocalDayOfWeek(date);
     let schedule = {
       timeEntrance: scheduleTime + ':00',
       timeExit: '13:40:00',
-      isWorkDay: true
+      isWorkDay: defaultDayOfWeek !== 0 && defaultDayOfWeek !== 6
     };
     
     try {
@@ -1590,7 +1640,17 @@ app.get('/attendance/:date', async (req, res) => {
       console.error(`⚠️ Error fetching exclusions: ${e.message}`);
       exclusions = [];
     }
-    
+
+    // PASO 4B: Obtener licencias multi-día (vacaciones, enfermedad, etc.) vigentes ese día
+    let leaveEvents = [];
+    try {
+      leaveEvents = await employeeEventRepository.findByDate(date, db);
+      console.log(`✓ Licencias vigentes: ${leaveEvents.length}`);
+    } catch (e) {
+      console.error(`⚠️ Error fetching employee events: ${e.message}`);
+      leaveEvents = [];
+    }
+
     // PASO 5: Agrupar fichajes por usuario (ahora con USERID correcto del users table)
     const checkinsByUser = {};
     checkins.forEach(c => {
@@ -1605,14 +1665,15 @@ app.get('/attendance/:date', async (req, res) => {
     const attendance = users.map(u => {
       const userCheckins = checkinsByUser[u.USERID] || [];
       const userExclusion = exclusions.find(e => e.userId === u.USERID);
-      
+      const userLeave = leaveEvents.find(ev => String(ev.legajo) === String(u.Badgenumber));
+
       let status = 'Absent';
       let firstCheckin = null;
       let lastCheckin = null;
       let workedOnHoliday = false;
-      
-      if (userExclusion) {
-        status = userExclusion.type === 'FULL_DAY' ? 'Excused' : 'Excused';
+
+      if (userExclusion || userLeave) {
+        status = 'Excused';
       } else if (userCheckins.length > 0) {
         firstCheckin = userCheckins[0];
         lastCheckin = userCheckins[userCheckins.length - 1];
@@ -1696,82 +1757,311 @@ app.get('/attendance-range', async (req, res) => {
       return res.status(400).json({ error: 'from y to requeridos' });
     }
 
-    // 1. USERS
-    const [users] = await db.query(`
-      SELECT USERID, Badgenumber, Name
-      FROM users
-      WHERE USERID > 10 AND isExcluded = 0
-    `);
+    // IMPORTANTE: parsear "YYYY-MM-DD" con new Date(str) lo interpreta como UTC medianoche;
+    // en un servidor con huso horario negativo (Argentina UTC-3) eso corre el rango un día
+    // para atrás al volver a leer los componentes en hora local. Parseamos por componentes
+    // para anclar la fecha a medianoche local, igual que ya hace getLocalDayOfWeek.
+    const parseLocalDateOnly = (dateString) => {
+      const [year, month, day] = dateString.split('-').map(Number);
+      return new Date(year, month - 1, day);
+    };
+    const formatLocalDate = (date) => {
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    };
 
-    const userIds = users.map(u => u.USERID);
+    const startDate = parseLocalDateOnly(from);
+    const endDate = parseLocalDateOnly(to);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return res.status(400).json({ error: 'Fechas inválidas' });
+    }
 
-    // 2. CHECKINS EN RANGO
-    const [checkins] = await db.query(`
-      SELECT USERID, CHECKTIME
-      FROM Checkins
-      WHERE USERID IN (?)
-        AND DATE(CHECKTIME) BETWEEN ? AND ?
-      ORDER BY USERID, CHECKTIME
-    `, [userIds, from, to]);
+    const today = new Date();
+    const effectiveEndDate = endDate > today ? today : endDate;
+    const dateRange = [];
+    for (let d = new Date(startDate); d <= effectiveEndDate; d.setDate(d.getDate() + 1)) {
+      dateRange.push(formatLocalDate(d));
+    }
 
-    // 3. AGRUPAR POR USER + FECHA
-    const grouped = {};
+    if (dateRange.length === 0) {
+      return res.json({ from, to, data: [] });
+    }
 
-    checkins.forEach(c => {
-      const date = c.CHECKTIME.substring(0, 10);
-      const key = `${c.USERID}_${date}`;
+    const [[personalLeaveLimitRow]] = await db.query(
+      `SELECT value FROM app_settings WHERE name = ?`,
+      ['personalLeaveMonthlyLimitMinutes']
+    );
+    const personalLeaveMonthlyLimitMinutes = personalLeaveLimitRow ? Number(personalLeaveLimitRow.value) : 0;
+    const distinctMonthsInRange = new Set(dateRange.map(d => d.slice(0, 7))).size;
+    const personalLeaveLimitMinutesForRange = personalLeaveMonthlyLimitMinutes * distinctMonthsInRange;
 
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(c.CHECKTIME);
+    const detailEmployeeId = req.query.employeeId ? String(req.query.employeeId) : null;
+    let employees = await userRepository.findAll({ tenantId: null }, db);
+    if (detailEmployeeId) {
+      employees = employees.filter(e => String(e.employeeId) === detailEmployeeId);
+    }
+    const employeeIds = employees
+      .map(e => Number(e.employeeId))
+      .filter(id => !Number.isNaN(id));
+
+    const tenantIds = Array.from(new Set(
+      employees
+        .map(e => e.tenantId)
+        .filter(tid => tid !== undefined && tid !== null)
+    ));
+
+    const monthDays = Array.from(new Set(dateRange.map(d => d.slice(5))));
+    const [holidayRows] = await db.query(
+      `SELECT date, isWorkDay, recurring
+       FROM holidays
+       WHERE date BETWEEN ? AND ?
+         OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') IN (?))`,
+      [from, formatLocalDate(effectiveEndDate), monthDays]
+    );
+
+    const holidayByDate = new Map();
+    const recurringHolidayByMonthDay = new Map();
+    holidayRows.forEach(h => {
+      if (h.recurring) {
+        recurringHolidayByMonthDay.set(h.date.slice(5), h);
+      } else {
+        holidayByDate.set(h.date, h);
+      }
     });
 
-    // 4. RESULTADO FINAL
+    const scheduleByDate = {};
+    for (const date of dateRange) {
+      const assignedScheduleMap = await scheduleRepository.findAssignedScheduleMapForDate(date, employeeIds, db);
+      const tenantScheduleMap = {};
+      for (const tenantId of tenantIds) {
+        const rows = await scheduleRepository.findByDate(date, tenantId, db);
+        if (rows && rows.length > 0) {
+          tenantScheduleMap[tenantId] = rows[0];
+        }
+      }
+      const defaultRows = await scheduleRepository.findByDate(date, null, db);
+      scheduleByDate[date] = {
+        assignedScheduleMap,
+        tenantScheduleMap,
+        defaultSchedule: Array.isArray(defaultRows) && defaultRows.length > 0 ? defaultRows[0] : null
+      };
+    }
+
+    const [checkins] = await db.query(`
+      SELECT DATE(c.CHECKTIME) AS date,
+             c.CHECKTIME,
+             e.employee_id AS employeeId,
+             u.USERID AS userId
+      FROM Checkins c
+      LEFT JOIN users u
+        ON u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR)
+      LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID
+      LEFT JOIN employees e ON e.id = uem.employee_id
+      WHERE DATE(c.CHECKTIME) BETWEEN ? AND ?
+      ORDER BY employeeId, c.CHECKTIME
+    `, [from, formatLocalDate(effectiveEndDate)]);
+
+    const checkinsByEmployee = {};
+    checkins.forEach(c => {
+      if (!c.employeeId) return;
+      const employeeId = String(c.employeeId);
+      const date = c.date;
+      if (!checkinsByEmployee[employeeId]) checkinsByEmployee[employeeId] = {};
+      if (!checkinsByEmployee[employeeId][date]) checkinsByEmployee[employeeId][date] = [];
+      checkinsByEmployee[employeeId][date].push(c.CHECKTIME);
+    });
+
+    const [exclusions] = await db.query(`
+      SELECT ue.userId, ue.excDate, ue.type, ue.reason, ue.excFrom, ue.excTo, et.code AS eventTypeCode, et.descripcion AS eventTypeDescripcion
+      FROM userexclusions ue
+      LEFT JOIN event_types et ON et.id = ue.event_type_id
+      WHERE ue.excDate BETWEEN ? AND ?
+    `, [from, formatLocalDate(effectiveEndDate)]);
+    const exclusionsMap = new Map(exclusions.map(e => [`${e.userId}_${e.excDate}`, e]));
+
+    // Licencias multi-día (vacaciones, enfermedad, etc.) cargadas en employee_events:
+    // se expanden día por día para que cualquier fecha dentro del rango de la licencia
+    // cuente como excusada en vez de ausente, igual que una exclusión puntual.
+    const employeeEventRows = await employeeEventRepository.findByRange(from, formatLocalDate(effectiveEndDate), db);
+    const leaveEventMap = new Map();
+    employeeEventRows.forEach(ev => {
+      const evStart = ev.fecha_desde > from ? ev.fecha_desde : from;
+      const evEnd = ev.fecha_hasta < formatLocalDate(effectiveEndDate) ? ev.fecha_hasta : formatLocalDate(effectiveEndDate);
+      for (let d = parseLocalDateOnly(evStart); formatLocalDate(d) <= evEnd; d.setDate(d.getDate() + 1)) {
+        leaveEventMap.set(`${ev.legajo}_${formatLocalDate(d)}`, ev);
+      }
+    });
+
+    const getScheduleEntry = (date, assignedScheduleMap, tenantScheduleMap, employeeId, tenantId) => {
+      if (assignedScheduleMap && assignedScheduleMap[employeeId]) {
+        return assignedScheduleMap[employeeId];
+      }
+      if (tenantScheduleMap && tenantId != null && tenantScheduleMap[tenantId]) {
+        return tenantScheduleMap[tenantId];
+      }
+      if (scheduleByDate[date].defaultSchedule) {
+        return scheduleByDate[date].defaultSchedule;
+      }
+      const dayOfWeek = scheduleRepository.getLocalDayOfWeek(date);
+      return {
+        date,
+        timeEntrance: '07:00:00',
+        timeExit: '13:40:00',
+        isWorkDay: dayOfWeek !== 0 && dayOfWeek !== 6 ? 1 : 0,
+        source: 'legacy'
+      };
+    };
+
+    const getHolidayOverride = (date) => {
+      const holiday = holidayByDate.get(date);
+      if (holiday) {
+        return holiday.isWorkDay == 1 ? true : false;
+      }
+      const recurringHoliday = recurringHolidayByMonthDay.get(date.slice(5));
+      if (recurringHoliday) {
+        return recurringHoliday.isWorkDay == 1 ? true : false;
+      }
+      return null;
+    };
+
+    const extractTime = (datetimeStr) => {
+      if (!datetimeStr) return '00:00';
+      const parts = datetimeStr.split(' ');
+      return parts.length < 2 ? datetimeStr : parts[1].substring(0, 5);
+    };
+
+    const getEntranceReference = (schedule) => {
+      if (schedule.source === 'motor' && schedule.blocks && schedule.blocks.length > 0) {
+        const workBlocks = schedule.blocks.filter(b => b.block_type === 'WORK');
+        if (workBlocks.length > 0) {
+          return workBlocks[0].start_time;
+        }
+      }
+      return schedule.timeEntrance;
+    };
+
     const result = [];
 
-    users.forEach(u => {
-      const userDays = Object.keys(grouped)
-        .filter(k => k.startsWith(u.USERID + '_'));
-
-      let totalDays = 0;
+    employees.forEach(u => {
+      const employeeId = String(u.employeeId);
+      const checksByDate = checkinsByEmployee[employeeId] || {};
+      let daysWorked = 0;
+      let absent = 0;
       let late = 0;
-      let onTime = 0;
+      let lateJustified = 0;
+      let excused = 0;
       let overtimeMinutes = 0;
+      let personalLeaveMinutes = 0;
+      const days = detailEmployeeId ? [] : null;
 
-      userDays.forEach(k => {
-        const checks = grouped[k];
+      dateRange.forEach(date => {
+        const dateSchedules = scheduleByDate[date];
+        const schedule = getScheduleEntry(date, dateSchedules.assignedScheduleMap, dateSchedules.tenantScheduleMap, employeeId, u.tenantId);
+        const holidayOverride = getHolidayOverride(date);
+        const isWorkDay = holidayOverride !== null ? holidayOverride : schedule.isWorkDay == 1;
 
-        totalDays++;
+        if (!isWorkDay) {
+          if (days) {
+            days.push({ date, status: 'NonWorkDay' });
+          }
+          return;
+        }
 
-        const first = checks[0];
-        const last = checks[checks.length - 1];
+        const checks = checksByDate[date] || [];
+        const exclusion = u.USERID ? exclusionsMap.get(`${u.USERID}_${date}`) : null;
+        const leaveEvent = leaveEventMap.get(`${employeeId}_${date}`);
 
-        const firstMin = timeToMinutes(extractTime(first));
-        const lastMin = timeToMinutes(extractTime(last));
+        if (checks.length > 0) {
+          daysWorked++;
+          const first = checks[0];
+          const last = checks[checks.length - 1];
+          const firstMin = timeToMinutes(extractTime(first));
+          const lastMin = timeToMinutes(extractTime(last));
+          const entranceRef = getEntranceReference(schedule);
+          const entranceMin = timeToMinutes(entranceRef);
+          const tolerance = schedule.source === 'motor' && schedule.template_type === 'FLEXIBLE' ? 60 : 10;
+          const cutoff = timeToMinutes('13:40');
+          const isLate = firstMin > entranceMin + tolerance;
+          const dayOvertimeMinutes = lastMin > cutoff ? (lastMin - cutoff) : 0;
 
-        // config (podés mejorar después con schedule dinámico)
-        const entrance = timeToMinutes('07:00');
-        const tolerance = 10;
-        const cutoff = timeToMinutes('13:40');
+          // Una tardanza se considera justificada si hay una exclusión cargada ese día
+          // que cubre la demora: si tiene excTo, la llegada debe caer dentro de esa
+          // ventana autorizada; si no tiene horario cargado, la sola presencia de la
+          // exclusión ya justifica (igual criterio que un día completo excusado).
+          let lateJustifiedThisDay = false;
+          let lateMinutes = 0;
+          if (isLate) {
+            lateMinutes = firstMin - entranceMin;
+            if (exclusion) {
+              const excToMin = exclusion.excTo ? timeToMinutes(exclusion.excTo) : null;
+              lateJustifiedThisDay = excToMin === null || firstMin <= excToMin;
+            }
+          }
 
-        // estado
-        if (firstMin <= entrance + tolerance) onTime++;
-        else late++;
+          if (isLate && lateJustifiedThisDay) {
+            lateJustified++;
+            personalLeaveMinutes += lateMinutes;
+          } else if (isLate) {
+            late++;
+          }
+          if (dayOvertimeMinutes > 0) overtimeMinutes += dayOvertimeMinutes;
 
-        // extras
-        if (lastMin > cutoff) {
-          overtimeMinutes += (lastMin - cutoff);
+          if (days) {
+            let status = 'OnTime';
+            if (isLate) status = lateJustifiedThisDay ? 'LateJustified' : 'Late';
+            days.push({
+              date,
+              status,
+              firstCheckin: extractTime(first),
+              lastCheckin: extractTime(last),
+              totalCheckins: checks.length,
+              overtimeMinutes: dayOvertimeMinutes,
+              lateMinutes: isLate ? lateMinutes : 0,
+              reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
+              eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,
+              eventTypeDescripcion: isLate && lateJustifiedThisDay ? (exclusion.eventTypeDescripcion || null) : undefined
+            });
+          }
+        } else if (exclusion || leaveEvent) {
+          excused++;
+          if (days) {
+            days.push({
+              date,
+              status: 'Excused',
+              reason: leaveEvent ? (leaveEvent.observaciones || null) : (exclusion.reason || null),
+              eventTypeCode: leaveEvent ? (leaveEvent.eventTypeCode || null) : (exclusion.eventTypeCode || null),
+              eventTypeDescripcion: leaveEvent ? (leaveEvent.eventTypeDescripcion || null) : (exclusion.eventTypeDescripcion || null)
+            });
+          }
+        } else {
+          absent++;
+          if (days) {
+            days.push({ date, status: 'Absent' });
+          }
         }
       });
 
-      result.push({
+      const row = {
         userId: u.USERID,
+        employeeId: u.employeeId,
         name: u.Name,
         badge: u.Badgenumber,
-        daysWorked: totalDays,
-        onTime,
+        daysWorked,
+        absent,
         late,
-        overtimeHours: (overtimeMinutes / 60).toFixed(2)
-      });
+        lateJustified,
+        excused,
+        overtimeHours: (overtimeMinutes / 60).toFixed(2),
+        personalLeaveHours: (personalLeaveMinutes / 60).toFixed(2),
+        personalLeaveLimitHours: (personalLeaveLimitMinutesForRange / 60).toFixed(2),
+        overLimitHours: (Math.max(0, personalLeaveMinutes - personalLeaveLimitMinutesForRange) / 60).toFixed(2)
+      };
+      if (days) {
+        row.days = days;
+      }
+      result.push(row);
     });
 
     res.json({

@@ -14,19 +14,12 @@ function initFirebaseAdmin() {
       ? JSON.parse(serviceAccountJson)
       : require(path.resolve(serviceAccountPath));
 
-    const envProjectId = process.env.FIREBASE_PROJECT_ID;
-    const credentialConfig = {
+    admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
-    };
-    if (envProjectId) {
-      credentialConfig.projectId = envProjectId;
-    }
-
-    admin.initializeApp(credentialConfig);
+    });
     initialized = true;
     console.log('✅ Firebase Admin initialized for auth validation', {
-      serviceAccountProjectId: serviceAccount.project_id,
-      envProjectId
+      projectId: serviceAccount.project_id
     });
   } catch (err) {
     console.error('Firebase Admin initialization error:', err);

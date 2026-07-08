@@ -35,21 +35,22 @@ async function findAssignedScheduleMapForDate(date, employeeIds, db) {
   if (!employeeIds || !employeeIds.length) return {};
 
   const [rows] = await db.query(
-    `SELECT c.employee_id, t.*
+    `SELECT e.employee_id AS employeeId, t.*
      FROM employee_work_calendars c
+     JOIN employees e ON e.id = c.employee_id
      JOIN work_schedule_templates t ON t.id = c.template_id
-     WHERE c.employee_id IN (?)
+     WHERE e.employee_id IN (?)
        AND c.valid_from <= ?
        AND (c.valid_to IS NULL OR c.valid_to >= ?)
        AND t.active = 1
-     ORDER BY c.employee_id ASC, c.valid_from DESC`,
+     ORDER BY e.employee_id ASC, c.valid_from DESC`,
     [employeeIds, date, date]
   );
 
   const map = {};
   for (const row of rows) {
-    if (!map[row.employee_id]) {
-      map[row.employee_id] = await buildTemplateSchedule(row, date, db);
+    if (!map[row.employeeId]) {
+      map[row.employeeId] = await buildTemplateSchedule(row, date, db);
     }
   }
   return map;
@@ -57,9 +58,13 @@ async function findAssignedScheduleMapForDate(date, employeeIds, db) {
 
 async function findTenantTemplate(date, tenantId, db) {
   const hasTenantId = tenantId !== undefined && tenantId !== null;
+  // Prefer tenant-specific default templates when present, then tenant-specific active templates,
+  // then global defaults, then global active templates.
   const templateQuery = hasTenantId
-    ? `SELECT * FROM work_schedule_templates WHERE tenant_id = ? AND active = 1 ORDER BY id LIMIT 1`
-    : `SELECT * FROM work_schedule_templates WHERE active = 1 ORDER BY tenant_id ASC, id ASC LIMIT 1`;
+    ? `SELECT * FROM work_schedule_templates
+         WHERE (tenant_id = ? OR tenant_id = 0) AND active = 1
+         ORDER BY tenant_id DESC, is_default DESC, id DESC LIMIT 1`
+    : `SELECT * FROM work_schedule_templates WHERE tenant_id = 0 AND active = 1 ORDER BY is_default DESC, id DESC LIMIT 1`;
   const templateParams = hasTenantId ? [tenantId] : [];
 
   const [templates] = await db.query(templateQuery, templateParams);
@@ -78,5 +83,18 @@ async function findByDate(date, tenantId, db) {
 
 module.exports = {
   findByDate,
-  findAssignedScheduleMapForDate
+  findAssignedScheduleMapForDate,
+  getLocalDayOfWeek
 };
+
+async function findByTemplateId(date, templateId, db) {
+  if (!templateId) return [];
+  const [rows] = await db.query('SELECT * FROM work_schedule_templates WHERE id = ? AND active = 1', [templateId]);
+  const template = rows[0];
+  if (!template) return [];
+  const schedule = await buildTemplateSchedule(template, date, db);
+  return [schedule];
+}
+
+// attach as named export
+module.exports.findByTemplateId = findByTemplateId;

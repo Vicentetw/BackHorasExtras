@@ -6,6 +6,7 @@ const holidayRepository = require('./repositories/holidayRepository');
 const userRepository = require('./repositories/userRepository');
 const checkinRepository = require('./repositories/checkinRepository');
 const exclusionRepository = require('./repositories/exclusionRepository');
+const employeeEventRepository = require('./repositories/employeeEventRepository');
 const attendanceService = require('./services/attendanceService');
 const { firebaseAuthMiddleware } = require('../firebaseAuth');
 
@@ -13,7 +14,8 @@ function createLaborEngineRoutes(db) {
   const repositories = {
     schedule: {
       findByDate: (date, tenantId) => scheduleRepository.findByDate(date, tenantId, db),
-      findAssignedScheduleMapForDate: (date, employeeIds) => scheduleRepository.findAssignedScheduleMapForDate(date, employeeIds, db)
+      findAssignedScheduleMapForDate: (date, employeeIds) => scheduleRepository.findAssignedScheduleMapForDate(date, employeeIds, db),
+      findByTemplateId: (date, templateId) => scheduleRepository.findByTemplateId(date, templateId, db)
     },
     holiday: {
       findByDate: (date, tenantId) => holidayRepository.findByDate(date, tenantId, db)
@@ -26,6 +28,9 @@ function createLaborEngineRoutes(db) {
     },
     exclusion: {
       findByDate: (date, tenantId) => exclusionRepository.findByDate(date, tenantId, db)
+    },
+    employeeEvent: {
+      findByDate: (date) => employeeEventRepository.findByDate(date, db)
     }
   };
 
