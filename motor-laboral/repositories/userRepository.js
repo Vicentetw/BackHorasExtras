@@ -4,7 +4,7 @@ async function findAll({ tenantId }, db) {
        e.employee_id AS employeeId,
        COALESCE(u.USERID, NULL) AS USERID,
        COALESCE(u.Badgenumber, e.employee_id) AS Badgenumber,
-       COALESCE(u.Name, e.nombre) AS Name,
+       COALESCE(e.nombre, u.Name) AS Name,
        e.tenant_id AS tenantId
      FROM employees e
      LEFT JOIN user_employee_map ue ON ue.employee_id = e.id
