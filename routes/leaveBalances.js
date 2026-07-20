@@ -5,11 +5,25 @@ module.exports = function (db) {
 
   // ==========================
   // 1. SALDO DE UN EMPLEADO PARA UN AÑO
-  // GET /api/leave-balances/:employeeId/:year
+  // GET /api/leave-balances/:legajo/:year
+  // El parámetro es el LEGAJO (employees.employee_id), no el id interno —
+  // porque así es como attendance.html identifica empleados en todos lados
+  // (viene de /attendance-range, que expone legajo, no el id interno de la
+  // tabla employees). Se resuelve acá adentro para no filtrar por la columna
+  // equivocada y devolver siempre 0.
   // ==========================
-  router.get('/:employeeId/:year', async (req, res) => {
+  router.get('/:legajo/:year', async (req, res) => {
     try {
-      const { employeeId, year } = req.params;
+      const { legajo, year } = req.params;
+
+      const [[employee]] = await db.query(
+        `SELECT id FROM employees WHERE employee_id = ?`,
+        [legajo]
+      );
+      if (!employee) {
+        return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
+      }
+      const employeeId = employee.id;
 
       const [[balanceRow]] = await db.query(
         `SELECT allotted_days, notes FROM employee_leave_balances WHERE employee_id = ? AND year = ?`,
@@ -30,7 +44,7 @@ module.exports = function (db) {
 
       res.json({
         success: true,
-        employeeId: Number(employeeId),
+        employeeId: Number(legajo),
         year: Number(year),
         allotted,
         taken,
