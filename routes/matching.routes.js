@@ -236,12 +236,17 @@ router.get('/diagnosis/report', async (req, res) => {
     `);
 
     // 2. Usuarios SIN match
+    // checkinCount es la clave para priorizar: el reloj suele acumular
+    // usuarios "basura" cargados mal y nunca usados (0 fichajes). Sin este
+    // dato, un usuario real sin vincular (con fichajes reales perdidos del
+    // presentismo) queda escondido entre docenas de duplicados irrelevantes.
     const [unmatchedUsers] = await db.query(`
-      SELECT 
+      SELECT
         u.USERID,
         u.Badgenumber,
         u.Name,
-        CASE 
+        (SELECT COUNT(*) FROM Checkins c WHERE c.USERID = u.USERID) as checkinCount,
+        CASE
           WHEN EXISTS (SELECT 1 FROM employees WHERE CAST(employee_id AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci AND activo = 1)
             THEN 'Existe employee_id coincidente pero sin vincular'
           WHEN EXISTS (SELECT 1 FROM employees WHERE CAST(employee_id AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci)
@@ -252,7 +257,7 @@ router.get('/diagnosis/report', async (req, res) => {
       LEFT JOIN user_employee_map m ON u.USERID = m.USERID
       WHERE m.USERID IS NULL
         AND u.USERID > 10
-      ORDER BY CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci
+      ORDER BY checkinCount DESC, CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci
     `);
 
     // 3. Empleados SIN match

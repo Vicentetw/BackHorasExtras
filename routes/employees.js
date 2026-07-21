@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { resolveTenantId } = require('../appUserMiddleware');
 
 // NOTE: Automatic employee->user sync has been disabled.
 // Matching now requires explicit approval via the matching dashboard.
@@ -53,6 +54,12 @@ router.get('/', async (req, res) => {
     if (excluded !== undefined) {
       const excludeValue = excluded === '1' || excluded === 'true';
       whereClauses.push(excludeValue ? 'exclude_from_report = 1' : 'exclude_from_report = 0');
+    }
+
+    const effectiveTenantId = resolveTenantId(req);
+    if (effectiveTenantId !== null) {
+      whereClauses.push('tenant_id = ?');
+      params.push(effectiveTenantId);
     }
 
     const where = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -133,6 +140,13 @@ router.post('/', async (req, res) => {
       });
     }
 
+    // El tenant_id nunca lo decide el cliente: un usuario normal solo puede
+    // crear empleados para su propia empresa. Solo el superadmin puede
+    // mandar un tenant_id explicito (para altas de soporte puntuales).
+    const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
+      ? req.appUser.tenantId
+      : (tenant_id || null);
+
     const normalizedDocumento = documento ? String(documento).trim() : null;
 
     // Verificar si ya existe employee_id
@@ -178,7 +192,7 @@ router.post('/', async (req, res) => {
         overtime_authorized !== undefined ? (overtime_authorized ? 1 : 0) : 1,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
-        tenant_id || null
+        effectiveTenantId
       ]
     );
 
@@ -228,19 +242,30 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    // Verificar que existe
+    // Verificar que existe (y que pertenece a la empresa del que pide el
+    // cambio -- un empleado de otra empresa se trata igual que si no
+    // existiera, para no filtrar ni siquiera que existe)
     const [existing] = await db.query(
-      'SELECT id, employee_id FROM employees WHERE id = ?',
+      'SELECT id, employee_id, tenant_id FROM employees WHERE id = ?',
       [id]
     );
 
-    if (existing.length === 0) {
+    const belongsToTenant = existing.length > 0 && (
+      !req.appUser || req.appUser.isSuperadmin || existing[0].tenant_id === req.appUser.tenantId
+    );
+
+    if (!belongsToTenant) {
       return res.status(404).json({
         error: 'Empleado no encontrado'
       });
     }
 
     const previousBadge = existing[0].employee_id;
+    // Un usuario normal no puede mover un empleado a otra empresa; solo el
+    // superadmin puede reasignar tenant_id explicitamente.
+    const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
+      ? existing[0].tenant_id
+      : (tenant_id || null);
 
     // Verificar que no haya conflicto de legajo
     const normalizedDocumento = documento ? String(documento).trim() : null;
@@ -290,7 +315,7 @@ router.put('/:id', async (req, res) => {
         overtime_authorized !== undefined ? (overtime_authorized ? 1 : 0) : 1,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
-        tenant_id || null,
+        effectiveTenantId,
         category_id || null,
         id
       ]
@@ -315,13 +340,17 @@ router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Verificar que existe
+    // Verificar que existe y pertenece a la empresa del que pide borrarlo
     const [existing] = await db.query(
-      'SELECT id FROM employees WHERE id = ?',
+      'SELECT id, tenant_id FROM employees WHERE id = ?',
       [id]
     );
 
-    if (existing.length === 0) {
+    const belongsToTenant = existing.length > 0 && (
+      !req.appUser || req.appUser.isSuperadmin || existing[0].tenant_id === req.appUser.tenantId
+    );
+
+    if (!belongsToTenant) {
       return res.status(404).json({
         error: 'Empleado no encontrado'
       });
@@ -359,6 +388,10 @@ router.delete('/:id', async (req, res) => {
  */
 router.get('/stats', async (req, res) => {
   try {
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantWhere = effectiveTenantId !== null ? 'WHERE tenant_id = ?' : '';
+    const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
+
     const [stats] = await db.query(`
       SELECT
         COUNT(*) as total,
@@ -368,12 +401,15 @@ router.get('/stats', async (req, res) => {
         SUM(CASE WHEN overtime_authorized = 0 THEN 1 ELSE 0 END) as unauthorized,
         SUM(CASE WHEN exclude_from_report = 1 THEN 1 ELSE 0 END) as excluded
       FROM employees
-    `);
+      ${tenantWhere}
+    `, tenantParams);
 
     const [matches] = await db.query(`
-      SELECT COUNT(DISTINCT employee_id) as matched
-      FROM user_employee_map
-    `);
+      SELECT COUNT(DISTINCT m.employee_id) as matched
+      FROM user_employee_map m
+      JOIN employees e ON e.id = m.employee_id
+      ${tenantWhere.replace('tenant_id', 'e.tenant_id')}
+    `, tenantParams);
 
     res.json({
       total: stats[0].total,

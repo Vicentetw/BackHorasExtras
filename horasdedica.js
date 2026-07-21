@@ -7,6 +7,7 @@ const path = require('path');
 const mysql = require('mysql2/promise');
 const { parse } = require('csv-parse/sync');
 const { securityMiddlewares, apiKeyWarning } = require('./security');
+const { resolveTenantId, requirePermission } = require('./appUserMiddleware');
 const importRoutes = require('./routes/import.routes');
 const matchingRoutes = require('./routes/matching.routes');
 const employeesRoutes = require('./routes/employees');
@@ -1061,10 +1062,10 @@ app.get('/config/user-exclusions', async (req, res) => {
     let params = [];
     
     if (search) {
-      where = `WHERE (u.Name LIKE ? OR u.Badgenumber LIKE ? OR ue.reason LIKE ?)`;
-      params = [`%${search}%`, `%${search}%`, `%${search}%`];
+      where = `WHERE (u.Name LIKE ? OR e.nombre LIKE ? OR u.Badgenumber LIKE ? OR ue.reason LIKE ?)`;
+      params = [`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`];
     }
-    
+
     if (status === 'active') {
       where += params.length > 0 ? ' AND' : 'WHERE';
       where += ` ue.excDate >= CURDATE()`;
@@ -1072,22 +1073,27 @@ app.get('/config/user-exclusions', async (req, res) => {
       where += params.length > 0 ? ' AND' : 'WHERE';
       where += ` ue.excDate < CURDATE()`;
     }
-    
+
     // Obtener total
     const [[{ total }]] = await db.query(`
       SELECT COUNT(*) as total
       FROM \`userexclusions\` ue
       JOIN \`users\` u ON ue.userId = u.USERID
+      LEFT JOIN \`user_employee_map\` uem ON uem.USERID = u.USERID
+      LEFT JOIN \`employees\` e ON e.id = uem.employee_id
       ${where}
     `, params);
-    
+
     // Obtener datos paginados
+    // Nombre: se prioriza employees.nombre (fuente de verdad, matcheado via
+    // user_employee_map) por sobre users.Name (viene crudo del reloj y puede
+    // ser ambiguo, ej: dos empleados de apellido "PERROTTA").
     const [exclusions] = await db.query(`
       SELECT
         ue.id,
         ue.userId,
         u.Badgenumber,
-        u.Name,
+        COALESCE(e.nombre, u.Name) AS Name,
         ue.excDate,
         ue.reason,
         ue.type,
@@ -1100,6 +1106,8 @@ app.get('/config/user-exclusions', async (req, res) => {
         (ue.excDate >= CURDATE()) as isActive
       FROM \`userexclusions\` ue
       JOIN \`users\` u ON ue.userId = u.USERID
+      LEFT JOIN \`user_employee_map\` uem ON uem.USERID = u.USERID
+      LEFT JOIN \`employees\` e ON e.id = uem.employee_id
       LEFT JOIN \`event_types\` et ON et.id = ue.event_type_id
       ${where}
       ORDER BY ue.excDate DESC, ue.createdAt DESC
@@ -1478,6 +1486,15 @@ function timeToMinutes(timeStr) {
   return h * 60 + m;
 }
 
+// Dia siguiente (string YYYY-MM-DD) -- para armar rangos sargables
+// (c.CHECKTIME >= ... AND < ...) en vez de DATE(c.CHECKTIME) = ?, que
+// invalida cualquier indice sobre CHECKTIME y fuerza un full table scan.
+function nextDayStr(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const next = new Date(y, m - 1, d + 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+}
+
 // Función auxiliar: extraer hora de YYYY-MM-DD HH:mm:ss
 function extractTime(datetimeStr) {
   if (!datetimeStr) return '00:00';
@@ -1616,9 +1633,9 @@ app.get('/attendance/:date', async (req, res) => {
         SELECT u.USERID, c.CHECKTIME
         FROM \`Checkins\` c
         LEFT JOIN \`users\` u ON CAST(c.USERID AS CHAR) = CAST(u.Badgenumber AS CHAR)
-        WHERE DATE(c.CHECKTIME) = ?
+        WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
         ORDER BY u.USERID, c.CHECKTIME
-      `, [date]);
+      `, [date, nextDayStr(date)]);
       checkins = checkinsResult || [];
       console.log(`✓ Fichajes (matched by Badgenumber): ${checkins.length}`);
     } catch (e) {
@@ -1798,7 +1815,7 @@ app.get('/attendance-range', async (req, res) => {
     const personalLeaveLimitMinutesForRange = personalLeaveMonthlyLimitMinutes * distinctMonthsInRange;
 
     const detailEmployeeId = req.query.employeeId ? String(req.query.employeeId) : null;
-    let employees = await userRepository.findAll({ tenantId: null }, db);
+    let employees = await userRepository.findAll({ tenantId: resolveTenantId(req) }, db);
     if (detailEmployeeId) {
       employees = employees.filter(e => String(e.employeeId) === detailEmployeeId);
     }
@@ -1902,6 +1919,15 @@ app.get('/attendance-range', async (req, res) => {
       scheduleByDate[date] = { assignedScheduleMap, tenantScheduleMap, defaultSchedule };
     }
 
+    // Rango sargable (c.CHECKTIME >= ... AND < ...) en vez de DATE(c.CHECKTIME)
+    // BETWEEN ...: envolver la columna en DATE() invalida cualquier indice y
+    // fuerza un full table scan -- confirmado con EXPLAIN contra produccion
+    // (129043 filas escaneadas para traer un solo mes). El limite superior es
+    // exclusivo: el dia siguiente al ultimo del rango, a medianoche.
+    const exclusiveEndDate = new Date(effectiveEndDate);
+    exclusiveEndDate.setDate(exclusiveEndDate.getDate() + 1);
+    const exclusiveEndDateStr = formatLocalDate(exclusiveEndDate);
+
     const [checkins] = await db.query(`
       SELECT DATE(c.CHECKTIME) AS date,
              c.CHECKTIME,
@@ -1912,9 +1938,9 @@ app.get('/attendance-range', async (req, res) => {
         ON u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR)
       LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID
       LEFT JOIN employees e ON e.id = uem.employee_id
-      WHERE DATE(c.CHECKTIME) BETWEEN ? AND ?
+      WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
       ORDER BY employeeId, c.CHECKTIME
-    `, [from, formatLocalDate(effectiveEndDate)]);
+    `, [from, exclusiveEndDateStr]);
 
     const checkinsByEmployee = {};
     checkins.forEach(c => {
@@ -2158,9 +2184,9 @@ app.get('/movements/:date', async (req, res) => {
       SELECT c.USERID, c.CHECKTIME, u.Name, u.Badgenumber
       FROM Checkins c
       JOIN users u ON c.USERID = u.USERID
-      WHERE DATE(c.CHECKTIME) = ?
+      WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
       ORDER BY c.CHECKTIME
-    `, [date]);
+    `, [date, nextDayStr(date)]);
     
     // Procesar movimientos
     const movements = [];

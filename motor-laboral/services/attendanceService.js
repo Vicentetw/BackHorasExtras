@@ -12,6 +12,12 @@ function normalizeDate(dateString) {
   return date.toISOString().slice(0, 10);
 }
 
+function nextDayStr(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const next = new Date(y, m - 1, d + 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+}
+
 function buildLegacySchedule({ date, tenantSchedule }) {
   if (!tenantSchedule) {
     return {
@@ -315,15 +321,15 @@ async function calculateLegacyAttendance({ date, db }) {
       LEFT JOIN users u 
         ON u.USERID = ue.USERID
 
-      LEFT JOIN Checkins c 
+      LEFT JOIN Checkins c
         ON c.USERID = u.USERID
-        AND DATE(c.CHECKTIME) = ?
+        AND c.CHECKTIME >= ? AND c.CHECKTIME < ?
 
       WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)
 
       ORDER BY e.nombre, c.CHECKTIME
     `,
-    [normalizedDate]
+    [normalizedDate, nextDayStr(normalizedDate)]
   );
 
   const map = {};

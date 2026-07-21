@@ -17,6 +17,12 @@ module.exports = function (db) {
     return h * 60 + m;
   }
 
+  function nextDayStr(dateStr) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const next = new Date(y, m - 1, d + 1);
+    return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+  }
+
   // ==========================
   // 4. LISTA DE ASISTENCIA
   // ==========================
@@ -98,15 +104,15 @@ module.exports = function (db) {
         LEFT JOIN users u 
           ON u.USERID = ue.USERID
 
-        LEFT JOIN Checkins c 
+        LEFT JOIN Checkins c
           ON c.USERID = u.USERID
-          AND DATE(c.CHECKTIME) = ?
+          AND c.CHECKTIME >= ? AND c.CHECKTIME < ?
 
         WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)
 
         ORDER BY e.nombre, c.CHECKTIME
       `,
-        [queryDate]
+        [queryDate, nextDayStr(queryDate)]
       );
 
       // AGRUPAR CHECKINS
@@ -234,12 +240,12 @@ module.exports = function (db) {
         LEFT JOIN employees e 
           ON e.id = ue.employee_id
 
-        WHERE DATE(c.CHECKTIME) = ?
+        WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
           AND (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)
 
         ORDER BY c.CHECKTIME
       `,
-        [date]
+        [date, nextDayStr(date)]
       );
 
       const movements = [];

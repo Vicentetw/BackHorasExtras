@@ -1,4 +1,5 @@
 const express = require('express');
+const { resolveTenantId } = require('../../appUserMiddleware');
 
 function extractTime(datetimeStr) {
   if (!datetimeStr) return null;
@@ -31,9 +32,7 @@ function createMotorLaboralRoutes({ db, attendanceService }) {
   router.get('/attendance/:date/compare', async (req, res) => {
     try {
       const { date } = req.params;
-      const tenantId = req.query.tenantId !== undefined && req.query.tenantId !== ''
-        ? Number(req.query.tenantId)
-        : null;
+      const tenantId = resolveTenantId(req);
 
       const motorResult = await attendanceService.calculateDailyAttendance({ date, tenantId });
       const legacyResult = await attendanceService.calculateLegacyAttendance({ date, db });
@@ -54,9 +53,7 @@ function createMotorLaboralRoutes({ db, attendanceService }) {
   router.get('/attendance/:date', async (req, res) => {
     try {
       const { date } = req.params;
-      const tenantId = req.query.tenantId !== undefined && req.query.tenantId !== ''
-        ? Number(req.query.tenantId)
-        : null;
+      const tenantId = resolveTenantId(req);
       const templateId = req.query.templateId !== undefined && req.query.templateId !== ''
         ? Number(req.query.templateId)
         : null;

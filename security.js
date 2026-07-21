@@ -1,4 +1,6 @@
 const helmet = require('helmet');
+const { firebaseAuthMiddleware } = require('./firebaseAuth');
+const { appUserMiddleware } = require('./appUserMiddleware');
 
 const API_KEY = process.env.API_KEY || null;
 const CORS_ORIGINS = process.env.CORS_ORIGINS
@@ -55,6 +57,16 @@ function securityMiddlewares(app, cors) {
   app.use(helmet());
   app.use(cors({ origin: corsOptionsDelegate, optionsSuccessStatus: 200 }));
   app.use(authMiddleware);
+  // El API_KEY de arriba solo filtra bots/escaneos; no identifica usuarios.
+  // Esto exige ademas un login real de Firebase en TODAS las rutas (antes
+  // solo se exigia en /admin), para que los datos no queden accesibles con
+  // solo copiar el API_KEY del codigo fuente del front.
+  app.use(firebaseAuthMiddleware);
+  // Un login de Firebase valido identifica a la persona, pero no dice a que
+  // empresa pertenece ni que puede hacer -- eso vive en app_users/
+  // user_permissions (paso 2 del plan multi-tenant), resuelto aca y colgado
+  // en req.appUser para que cada ruta filtre por tenant y chequee permisos.
+  app.use(appUserMiddleware);
 }
 
 function apiKeyWarning() {
