@@ -1,9 +1,10 @@
 const express = require('express');
+const { resolveTenantId, requireSuperadmin } = require('../../appUserMiddleware');
 
 function createMotorLaboralAdminRoutes(db) {
   const router = express.Router();
 
-  router.get('/tenants', async (req, res) => {
+  router.get('/tenants', requireSuperadmin, async (req, res) => {
     try {
       const { code, name } = req.query;
       if (code) {
@@ -29,7 +30,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.post('/tenants', async (req, res) => {
+  router.post('/tenants', requireSuperadmin, async (req, res) => {
     try {
       const rawName = req.body.name;
       const rawCode = req.body.code;
@@ -118,7 +119,10 @@ function createMotorLaboralAdminRoutes(db) {
 
   router.get('/templates', async (req, res) => {
     try {
-      const [rows] = await db.query(`SELECT * FROM work_schedule_templates ORDER BY tenant_id ASC, id ASC`);
+      const effectiveTenantId = resolveTenantId(req);
+      const [rows] = effectiveTenantId !== null
+        ? await db.query(`SELECT * FROM work_schedule_templates WHERE tenant_id = ? ORDER BY id ASC`, [effectiveTenantId])
+        : await db.query(`SELECT * FROM work_schedule_templates ORDER BY tenant_id ASC, id ASC`);
       res.json(rows);
     } catch (err) {
       console.error('Motor Laboral admin templates error:', err);
@@ -128,7 +132,12 @@ function createMotorLaboralAdminRoutes(db) {
 
   router.post('/templates', async (req, res) => {
     try {
-      const tenantId = req.body.tenant_id ?? req.body.tenantId;
+      const bodyTenantId = req.body.tenant_id ?? req.body.tenantId;
+      // Un usuario normal solo puede crear plantillas para su propia
+      // empresa; solo el superadmin puede elegir el tenant_id a mano.
+      const tenantId = req.appUser && !req.appUser.isSuperadmin
+        ? req.appUser.tenantId
+        : bodyTenantId;
       const { name, description, type, active, is_default } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });
@@ -155,7 +164,17 @@ function createMotorLaboralAdminRoutes(db) {
   router.put('/templates/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const tenantId = req.body.tenant_id ?? req.body.tenantId;
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[existing]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [id]);
+        if (!existing || existing.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ error: 'Plantilla no encontrada' });
+        }
+      }
+      const bodyTenantId = req.body.tenant_id ?? req.body.tenantId;
+      const tenantId = req.appUser && !req.appUser.isSuperadmin
+        ? req.appUser.tenantId
+        : bodyTenantId;
       const { name, description, type, active, is_default } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });
@@ -182,6 +201,13 @@ function createMotorLaboralAdminRoutes(db) {
   router.delete('/templates/:id', async (req, res) => {
     try {
       const { id } = req.params;
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[existing]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [id]);
+        if (!existing || existing.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ error: 'Plantilla no encontrada' });
+        }
+      }
       const [result] = await db.query(`DELETE FROM work_schedule_templates WHERE id = ?`, [id]);
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {

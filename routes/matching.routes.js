@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const pool = db;
+const { resolveTenantId } = require('../appUserMiddleware');
 
 const normalizeValue = (val) => String(val || '').trim().toLowerCase();
 
@@ -154,6 +155,14 @@ router.post('/manual', async (req, res) => {
       return res.status(400).json({ error: 'employee_id/user_id o employeeId/userId son requeridos y deben ser números válidos' });
     }
 
+    const effectiveTenantId = resolveTenantId(req);
+    if (effectiveTenantId !== null) {
+      const [[employee]] = await pool.query('SELECT tenant_id FROM employees WHERE id = ?', [employeeId]);
+      if (!employee || employee.tenant_id !== effectiveTenantId) {
+        return res.status(404).json({ error: 'Empleado no encontrado' });
+      }
+    }
+
     await pool.query(
       `DELETE FROM user_employee_map WHERE USERID = ? OR employee_id = ?`,
       [userId, employeeId]
@@ -219,9 +228,13 @@ router.delete('/:user_id', async (req, res) => {
  */
 router.get('/diagnosis/report', async (req, res) => {
   try {
-    // 1. Usuarios con match
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ?' : '';
+    const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
+
+    // 1. Usuarios con match (solo de empleados de mi empresa)
     const [matched] = await db.query(`
-      SELECT 
+      SELECT
         u.USERID,
         u.Badgenumber,
         u.Name as user_name,
@@ -232,8 +245,9 @@ router.get('/diagnosis/report', async (req, res) => {
       JOIN users u ON m.USERID = u.USERID
       JOIN employees e ON m.employee_id = e.id
       WHERE u.USERID > 10
+      ${tenantClause}
       ORDER BY CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci
-    `);
+    `, tenantParams);
 
     // 2. Usuarios SIN match
     // checkinCount es la clave para priorizar: el reloj suele acumular
@@ -277,16 +291,18 @@ router.get('/diagnosis/report', async (req, res) => {
       LEFT JOIN user_employee_map m ON e.id = m.employee_id
       WHERE m.employee_id IS NULL
         AND e.activo = 1
+        ${tenantClause}
       ORDER BY CAST(e.employee_id AS CHAR) COLLATE utf8mb4_unicode_ci
-    `);
+    `, tenantParams);
 
     // 4. Estadísticas
+    const activeEmployeesTenantClause = effectiveTenantId !== null ? 'AND tenant_id = ?' : '';
     const [stats] = await db.query(`
-      SELECT 
+      SELECT
         (SELECT COUNT(DISTINCT USERID) FROM users WHERE USERID > 10) as total_users,
         (SELECT COUNT(DISTINCT employee_id) FROM user_employee_map) as matched_count,
-        (SELECT COUNT(id) FROM employees WHERE activo = 1) as total_active_employees
-    `);
+        (SELECT COUNT(id) FROM employees WHERE activo = 1 ${activeEmployeesTenantClause}) as total_active_employees
+    `, tenantParams);
 
     res.json({
       ok: true,

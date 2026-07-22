@@ -16,6 +16,7 @@ const eventTypesRoutes = require('./routes/eventTypes');
 const employeeEventsRoutes = require('./routes/employeeEvents');
 const leaveBalancesRoutes = require('./routes/leaveBalances');
 const employeeCategoriesRoutes = require('./routes/employeeCategories');
+const appUsersRoutes = require('./routes/appUsers');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
 const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
 const userRepository = require('./motor-laboral/repositories/userRepository');
@@ -70,6 +71,7 @@ app.use('/api/event-types', eventTypesRoutes(db));
 app.use('/api/employee-events', employeeEventsRoutes(db));
 app.use('/api/leave-balances', leaveBalancesRoutes(db));
 app.use('/api/employee-categories', employeeCategoriesRoutes(db));
+app.use('/api/app-users', appUsersRoutes(db));
 app.use('/api/labor-engine', createMotorLaboralRoutes(db));
 
 function parseCheckTime(value) {
@@ -1072,6 +1074,12 @@ app.get('/config/user-exclusions', async (req, res) => {
     } else if (status === 'expired') {
       where += params.length > 0 ? ' AND' : 'WHERE';
       where += ` ue.excDate < CURDATE()`;
+    }
+
+    const effectiveTenantId = resolveTenantId(req);
+    if (effectiveTenantId !== null) {
+      where += (where ? ' AND' : 'WHERE') + ' e.tenant_id = ?';
+      params.push(effectiveTenantId);
     }
 
     // Obtener total

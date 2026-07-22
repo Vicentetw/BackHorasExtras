@@ -1,4 +1,5 @@
 const express = require('express');
+const { resolveTenantId } = require('../appUserMiddleware');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -36,6 +37,11 @@ module.exports = function (db) {
         sql += ' AND (YEAR(ee.fecha_desde) = ? OR YEAR(ee.fecha_hasta) = ?)';
         params.push(year, year);
       }
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        sql += ' AND e.tenant_id = ?';
+        params.push(effectiveTenantId);
+      }
 
       sql += ' ORDER BY ee.fecha_desde DESC';
 
@@ -56,6 +62,14 @@ module.exports = function (db) {
 
       if (!employeeId || !eventTypeId || !fechaDesde || !fechaHasta) {
         return res.status(400).json({ success: false, error: 'employeeId, eventTypeId, fechaDesde y fechaHasta son requeridos' });
+      }
+
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[employee]] = await db.query('SELECT tenant_id FROM employees WHERE id = ?', [employeeId]);
+        if (!employee || employee.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
+        }
       }
 
       const computedDias = dias !== undefined && dias !== null && dias !== ''
@@ -87,6 +101,17 @@ module.exports = function (db) {
         return res.status(400).json({ success: false, error: 'eventTypeId, fechaDesde y fechaHasta son requeridos' });
       }
 
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[event]] = await db.query(
+          `SELECT e.tenant_id FROM employee_events ee JOIN employees e ON e.id = ee.employee_id WHERE ee.id = ?`,
+          [id]
+        );
+        if (!event || event.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Evento no encontrado' });
+        }
+      }
+
       const computedDias = dias !== undefined && dias !== null && dias !== ''
         ? Number(dias)
         : diffDaysInclusive(fechaDesde, fechaHasta);
@@ -115,6 +140,18 @@ module.exports = function (db) {
   router.delete('/:id', async (req, res) => {
     try {
       const { id } = req.params;
+
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[event]] = await db.query(
+          `SELECT e.tenant_id FROM employee_events ee JOIN employees e ON e.id = ee.employee_id WHERE ee.id = ?`,
+          [id]
+        );
+        if (!event || event.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Evento no encontrado' });
+        }
+      }
+
       const [result] = await db.query('DELETE FROM employee_events WHERE id = ?', [id]);
 
       if (result.affectedRows === 0) {

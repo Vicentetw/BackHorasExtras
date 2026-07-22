@@ -1,4 +1,5 @@
 const express = require('express');
+const { resolveTenantId } = require('../appUserMiddleware');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -17,10 +18,11 @@ module.exports = function (db) {
       const { legajo, year } = req.params;
 
       const [[employee]] = await db.query(
-        `SELECT id FROM employees WHERE employee_id = ?`,
+        `SELECT id, tenant_id FROM employees WHERE employee_id = ?`,
         [legajo]
       );
-      if (!employee) {
+      const effectiveTenantId = resolveTenantId(req);
+      if (!employee || (effectiveTenantId !== null && employee.tenant_id !== effectiveTenantId)) {
         return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
       }
       const employeeId = employee.id;
@@ -64,6 +66,9 @@ module.exports = function (db) {
   router.get('/', async (req, res) => {
     try {
       const year = req.query.year || new Date().getFullYear();
+      const effectiveTenantId = resolveTenantId(req);
+      const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ?' : '';
+      const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
 
       const [rows] = await db.query(
         `SELECT e.id AS employeeId, e.employee_id AS legajo, e.nombre AS employeeName,
@@ -78,8 +83,9 @@ module.exports = function (db) {
          FROM employees e
          LEFT JOIN employee_leave_balances b ON b.employee_id = e.id AND b.year = ?
          WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)
+           ${tenantClause}
          ORDER BY e.nombre ASC`,
-        [year, year, year]
+        [year, year, year, ...tenantParams]
       );
 
       const balances = rows.map(r => ({
@@ -106,6 +112,14 @@ module.exports = function (db) {
 
       if (!employeeId || !year || allottedDays === undefined) {
         return res.status(400).json({ success: false, error: 'employeeId, year y allottedDays son requeridos' });
+      }
+
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[employee]] = await db.query('SELECT tenant_id FROM employees WHERE id = ?', [employeeId]);
+        if (!employee || employee.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
+        }
       }
 
       await db.query(

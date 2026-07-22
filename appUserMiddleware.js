@@ -33,6 +33,18 @@ async function appUserMiddleware(req, res, next) {
   }
 }
 
+// Exige superadmin (crear/listar empresas, ver todos los tenants -- un
+// usuario normal ya tiene su tenant fijo, no necesita esto).
+function requireSuperadmin(req, res, next) {
+  if (!req.appUser) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!req.appUser.isSuperadmin) {
+    return res.status(403).json({ error: 'Requiere superadmin' });
+  }
+  return next();
+}
+
 // Exige un permiso puntual ("employees:read", "leaves:approve", etc.).
 // El superadmin salta cualquier chequeo de permiso.
 function requirePermission(moduleName, action) {
@@ -79,6 +91,7 @@ function resolveTenantId(req) {
 module.exports = {
   appUserMiddleware,
   requirePermission,
+  requireSuperadmin,
   tenantFilter,
   resolveTenantId
 };
