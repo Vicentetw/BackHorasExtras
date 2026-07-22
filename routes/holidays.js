@@ -1,4 +1,5 @@
 const express = require('express');
+const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -14,12 +15,18 @@ module.exports = function (db) {
   // ==========================
   // 1. LISTAR FERIADOS (con filtros)
   // ==========================
-  router.get('/', async (req, res) => {
+  router.get('/', requirePermission('holidays', 'read'), async (req, res) => {
     try {
       const { year, month, type } = req.query;
 
       let sql = 'SELECT * FROM holidays WHERE 1=1';
       const params = [];
+
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        sql += ' AND (tenant_id = ? OR tenant_id IS NULL)';
+        params.push(effectiveTenantId);
+      }
 
       if (year) {
         sql += ' AND year = ?';
@@ -57,13 +64,18 @@ module.exports = function (db) {
   // ==========================
   // 2. OBTENER UN FERIADO
   // ==========================
-  router.get('/:id', async (req, res) => {
+  router.get('/:id', requirePermission('holidays', 'read'), async (req, res) => {
     try {
       const { id } = req.params;
 
       const [rows] = await db.query('SELECT * FROM holidays WHERE id = ?', [id]);
 
-      if (rows.length === 0) {
+      const effectiveTenantId = resolveTenantId(req);
+      const belongsToTenant = rows.length > 0 && (
+        effectiveTenantId === null || rows[0].tenant_id === null || rows[0].tenant_id === effectiveTenantId
+      );
+
+      if (!belongsToTenant) {
         return res.status(404).json({ success: false, error: 'Holiday not found' });
       }
 
@@ -80,7 +92,7 @@ module.exports = function (db) {
   // ==========================
   // 3. CREAR FERIADO
   // ==========================
-  router.post('/', async (req, res) => {
+  router.post('/', requirePermission('holidays', 'create'), async (req, res) => {
     try {
       const { date, name, description, type, reason, isWorkDay, recurring } = req.body;
 
@@ -89,11 +101,18 @@ module.exports = function (db) {
       }
 
       const year = new Date(date).getFullYear();
+      // Un usuario normal crea siempre para su propia empresa; solo el
+      // superadmin puede crear un feriado global (tenant_id NULL, visible
+      // para todas las empresas) o para una empresa puntual.
+      const tenantId = req.appUser && !req.appUser.isSuperadmin
+        ? req.appUser.tenantId
+        : (req.body.tenant_id ?? req.body.tenantId ?? null);
 
       const [result] = await db.query(
-        `INSERT INTO holidays (date, year, name, description, type, reason, isWorkDay, recurring)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO holidays (tenant_id, date, year, name, description, type, reason, isWorkDay, recurring)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
+          tenantId,
           date,
           year,
           name,
@@ -122,7 +141,7 @@ module.exports = function (db) {
   // ==========================
   // 4. ACTUALIZAR FERIADO
   // ==========================
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', requirePermission('holidays', 'update'), async (req, res) => {
     try {
       const { id } = req.params;
       const { date, name, description, type, reason, isWorkDay, recurring } = req.body;
@@ -131,10 +150,21 @@ module.exports = function (db) {
         return res.status(400).json({ success: false, error: 'Date and name are required' });
       }
 
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        // Un usuario normal solo edita SUS propios feriados -- los globales
+        // (tenant_id NULL, ej. feriados nacionales) son de solo lectura para
+        // el, edicion reservada al superadmin.
+        const [[existing]] = await db.query('SELECT tenant_id FROM holidays WHERE id = ?', [id]);
+        if (!existing || existing.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Holiday not found' });
+        }
+      }
+
       const year = new Date(date).getFullYear();
 
       await db.query(
-        `UPDATE holidays SET 
+        `UPDATE holidays SET
           date = ?, year = ?, name = ?, description = ?, type = ?, 
           reason = ?, isWorkDay = ?, recurring = ?
          WHERE id = ?`,
@@ -164,9 +194,17 @@ module.exports = function (db) {
   // ==========================
   // 5. ELIMINAR FERIADO
   // ==========================
-  router.delete('/:id', async (req, res) => {
+  router.delete('/:id', requirePermission('holidays', 'delete'), async (req, res) => {
     try {
       const { id } = req.params;
+
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[existing]] = await db.query('SELECT tenant_id FROM holidays WHERE id = ?', [id]);
+        if (!existing || existing.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Holiday not found' });
+        }
+      }
 
       await db.query('DELETE FROM holidays WHERE id = ?', [id]);
 
@@ -183,7 +221,7 @@ module.exports = function (db) {
   // ==========================
   // 6. IMPORTAR DESDE CSV
   // ==========================
-  router.post('/import', async (req, res) => {
+  router.post('/import', requirePermission('holidays', 'create'), async (req, res) => {
     try {
       const { holidays } = req.body;
 
@@ -193,6 +231,9 @@ module.exports = function (db) {
 
       let imported = 0;
       let skipped = 0;
+      const tenantId = req.appUser && !req.appUser.isSuperadmin
+        ? req.appUser.tenantId
+        : (req.body.tenant_id ?? req.body.tenantId ?? null);
 
       for (const h of holidays) {
         if (!h.date || !h.name) {
@@ -202,18 +243,19 @@ module.exports = function (db) {
 
         const year = new Date(h.date).getFullYear();
 
-        // Upsert: actualizar si existe, insertar si no
-        const [existing] = await db.query(
-          'SELECT id FROM holidays WHERE date = ?',
-          [h.date]
-        );
+        // Upsert: actualizar si existe, insertar si no -- acotado al
+        // propio tenant (o a filas globales), para no pisar por error el
+        // feriado de otra empresa que caiga en la misma fecha.
+        const [existing] = tenantId !== null
+          ? await db.query('SELECT id FROM holidays WHERE date = ? AND (tenant_id = ? OR tenant_id IS NULL)', [h.date, tenantId])
+          : await db.query('SELECT id FROM holidays WHERE date = ? AND tenant_id IS NULL', [h.date]);
 
         if (existing.length > 0) {
           await db.query(
-            `UPDATE holidays SET 
-              name = ?, description = ?, type = ?, reason = ?, 
+            `UPDATE holidays SET
+              name = ?, description = ?, type = ?, reason = ?,
               isWorkDay = ?, recurring = ?, year = ?
-             WHERE date = ?`,
+             WHERE id = ?`,
             [
               h.name,
               h.description || null,
@@ -222,14 +264,15 @@ module.exports = function (db) {
               h.isWorkDay ? 1 : 0,
               h.recurring ? 1 : 0,
               year,
-              h.date
+              existing[0].id
             ]
           );
         } else {
           await db.query(
-            `INSERT INTO holidays (date, year, name, description, type, reason, isWorkDay, recurring)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO holidays (tenant_id, date, year, name, description, type, reason, isWorkDay, recurring)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
+              tenantId,
               h.date,
               year,
               h.name,

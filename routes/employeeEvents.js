@@ -1,5 +1,5 @@
 const express = require('express');
-const { resolveTenantId } = require('../appUserMiddleware');
+const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -16,7 +16,7 @@ module.exports = function (db) {
   // ==========================
   // 1. LISTAR EVENTOS (licencias multi-día)
   // ==========================
-  router.get('/', async (req, res) => {
+  router.get('/', requirePermission('leaves', 'read'), async (req, res) => {
     try {
       const { employeeId, year } = req.query;
       let sql = `
@@ -56,7 +56,7 @@ module.exports = function (db) {
   // ==========================
   // 2. CREAR EVENTO
   // ==========================
-  router.post('/', async (req, res) => {
+  router.post('/', requirePermission('leaves', 'create'), async (req, res) => {
     try {
       const { employeeId, eventTypeId, fechaDesde, fechaHasta, dias, observaciones } = req.body;
 
@@ -92,7 +92,7 @@ module.exports = function (db) {
   // ==========================
   // 3. ACTUALIZAR EVENTO
   // ==========================
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', requirePermission('leaves', 'update'), async (req, res) => {
     try {
       const { id } = req.params;
       const { eventTypeId, fechaDesde, fechaHasta, dias, observaciones } = req.body;
@@ -137,7 +137,7 @@ module.exports = function (db) {
   // ==========================
   // 4. ELIMINAR EVENTO
   // ==========================
-  router.delete('/:id', async (req, res) => {
+  router.delete('/:id', requirePermission('leaves', 'delete'), async (req, res) => {
     try {
       const { id } = req.params;
 

@@ -1050,7 +1050,7 @@ app.post('/config/theme', async (req, res) => {
 // 3. EXCLUSIONES DE USUARIOS - CRUD COMPLETO CON PAGINACIÓN
 
 // GET /config/user-exclusions?page=1&limit=20&search=...&status=...
-app.get('/config/user-exclusions', async (req, res) => {
+app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
@@ -1143,7 +1143,7 @@ app.get('/config/user-exclusions', async (req, res) => {
 });
 
 // POST /config/user-exclusions - Crear exclusión
-app.post('/config/user-exclusions', async (req, res) => {
+app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), async (req, res) => {
   try {
     const { userId, excDate, reason, type, eventTypeId, excFrom, excTo } = req.body;
 
@@ -1186,7 +1186,7 @@ app.post('/config/user-exclusions', async (req, res) => {
 });
 
 // PUT /config/user-exclusions/:id - Actualizar exclusión
-app.put('/config/user-exclusions/:id', async (req, res) => {
+app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update'), async (req, res) => {
   try {
     const { id } = req.params;
     const { reason, type, eventTypeId, excFrom, excTo } = req.body;
@@ -1214,7 +1214,7 @@ app.put('/config/user-exclusions/:id', async (req, res) => {
 });
 
 // DELETE /config/user-exclusions/:id - Eliminar exclusión
-app.delete('/config/user-exclusions/:id', async (req, res) => {
+app.delete('/config/user-exclusions/:id', requirePermission('exclusions', 'delete'), async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -1274,7 +1274,7 @@ app.post('/config/personal-leave-limit', async (req, res) => {
 });
 
 // GET /config/users-with-exclusions - Listar usuarios con estado de exclusión
-app.get('/config/users-with-exclusions', async (req, res) => {
+app.get('/config/users-with-exclusions', requirePermission('exclusions', 'read'), async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().split('T')[0];
     
@@ -1308,7 +1308,7 @@ app.get('/config/users-with-exclusions', async (req, res) => {
 });
 
 // POST /config/toggle-user-exclusion - Incluir/Excluir usuario para una fecha
-app.post('/config/toggle-user-exclusion', async (req, res) => {
+app.post('/config/toggle-user-exclusion', requirePermission('exclusions', 'update'), async (req, res) => {
   try {
     const { userId, excDate, reason, type, exclude } = req.body;
     
@@ -1356,7 +1356,7 @@ app.post('/config/toggle-user-exclusion', async (req, res) => {
 // ========================================
 
 // GET /config/excluded-users - Obtener todos los usuarios con estado de exclusión
-app.get('/config/excluded-users', async (req, res) => {
+app.get('/config/excluded-users', requirePermission('exclusions', 'read'), async (req, res) => {
   try {
     const { page = 1, limit = 50, search = '' } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -1409,7 +1409,7 @@ app.get('/config/excluded-users', async (req, res) => {
 });
 
 // PUT /config/toggle-user-exclusion-permanent - Toggle exclusión permanente
-app.put('/config/toggle-user-exclusion-permanent/:userId', async (req, res) => {
+app.put('/config/toggle-user-exclusion-permanent/:userId', requirePermission('exclusions', 'update'), async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const { exclude } = req.body;
@@ -1451,7 +1451,7 @@ app.put('/config/toggle-user-exclusion-permanent/:userId', async (req, res) => {
 });
 
 // DELETE /config/user-exclusion/:userId - Eliminar exclusión permanente
-app.delete('/config/user-exclusion/:userId', async (req, res) => {
+app.delete('/config/user-exclusion/:userId', requirePermission('exclusions', 'delete'), async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
 
@@ -1512,7 +1512,7 @@ function extractTime(datetimeStr) {
 }
 
 // 4. LISTA DE ASISTENCIA DIARIA - MEJORADO CON TOLERANCIA
-app.get('/attendance/:date', async (req, res) => {
+app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req, res) => {
   try {
     const { date } = req.params; // YYYY-MM-DD
     const tolerance = req.query.tolerance || 10; // minutos
@@ -1774,7 +1774,7 @@ app.get('/attendance/:date', async (req, res) => {
 });
 
 //get para rango de fechas
-app.get('/attendance-range', async (req, res) => {
+app.get('/attendance-range', requirePermission('attendance', 'read'), async (req, res) => {
   try {
     const { from, to } = req.query;
 

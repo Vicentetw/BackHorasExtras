@@ -1,5 +1,5 @@
 const express = require('express');
-const { resolveTenantId, requireSuperadmin } = require('../../appUserMiddleware');
+const { resolveTenantId, requireSuperadmin, requirePermission } = require('../../appUserMiddleware');
 
 function createMotorLaboralAdminRoutes(db) {
   const router = express.Router();
@@ -69,7 +69,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.put('/tenants/:id', async (req, res) => {
+  router.put('/tenants/:id', requireSuperadmin, async (req, res) => {
     try {
       const { id } = req.params;
       const rawName = req.body.name;
@@ -106,7 +106,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.delete('/tenants/:id', async (req, res) => {
+  router.delete('/tenants/:id', requireSuperadmin, async (req, res) => {
     try {
       const { id } = req.params;
       const [result] = await db.query(`DELETE FROM tenants WHERE id = ?`, [id]);
@@ -117,7 +117,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.get('/templates', async (req, res) => {
+  router.get('/templates', requirePermission('schedules', 'read'), async (req, res) => {
     try {
       const effectiveTenantId = resolveTenantId(req);
       const [rows] = effectiveTenantId !== null
@@ -130,7 +130,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.post('/templates', async (req, res) => {
+  router.post('/templates', requirePermission('schedules', 'create'), async (req, res) => {
     try {
       const bodyTenantId = req.body.tenant_id ?? req.body.tenantId;
       // Un usuario normal solo puede crear plantillas para su propia
@@ -161,7 +161,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.put('/templates/:id', async (req, res) => {
+  router.put('/templates/:id', requirePermission('schedules', 'update'), async (req, res) => {
     try {
       const { id } = req.params;
       const effectiveTenantId = resolveTenantId(req);
@@ -198,7 +198,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.delete('/templates/:id', async (req, res) => {
+  router.delete('/templates/:id', requirePermission('schedules', 'delete'), async (req, res) => {
     try {
       const { id } = req.params;
       const effectiveTenantId = resolveTenantId(req);
@@ -216,7 +216,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.get('/templates/:id/blocks', async (req, res) => {
+  router.get('/templates/:id/blocks', requirePermission('schedules', 'read'), async (req, res) => {
     try {
       const { id } = req.params;
       const [rows] = await db.query(
@@ -230,7 +230,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.post('/templates/:id/blocks', async (req, res) => {
+  router.post('/templates/:id/blocks', requirePermission('schedules', 'create'), async (req, res) => {
     try {
       const { id } = req.params;
       const {
@@ -259,7 +259,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.put('/blocks/:id', async (req, res) => {
+  router.put('/blocks/:id', requirePermission('schedules', 'update'), async (req, res) => {
     try {
       const { id } = req.params;
       const {
@@ -287,7 +287,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.delete('/blocks/:id', async (req, res) => {
+  router.delete('/blocks/:id', requirePermission('schedules', 'delete'), async (req, res) => {
     try {
       const { id } = req.params;
       const [result] = await db.query(`DELETE FROM shift_blocks WHERE id = ?`, [id]);
@@ -298,7 +298,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.get('/employees', async (req, res) => {
+  router.get('/employees', requirePermission('employees', 'read'), async (req, res) => {
     try {
       const { categoryId } = req.query;
       const params = [];
@@ -336,7 +336,7 @@ function createMotorLaboralAdminRoutes(db) {
    * Setea la categoría de puesto (catálogo employee_categories) a varios
    * empleados de una, para después poder filtrarlos y asignarles horario en bloque.
    */
-  router.post('/employees/bulk-set-categoria', async (req, res) => {
+  router.post('/employees/bulk-set-categoria', requirePermission('employees', 'update'), async (req, res) => {
     try {
       const { employeeIds, categoryId } = req.body;
 
@@ -364,7 +364,7 @@ function createMotorLaboralAdminRoutes(db) {
    * asignación previa abierta de cada uno (misma lógica que el alta individual,
    * pero para N empleados en un solo request).
    */
-  router.post('/employees/bulk-assign-calendar', async (req, res) => {
+  router.post('/employees/bulk-assign-calendar', requirePermission('schedules', 'update'), async (req, res) => {
     try {
       const { employeeIds, template_id, valid_from, valid_to } = req.body;
 
@@ -422,7 +422,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.get('/employees/:employeeId/calendar', async (req, res) => {
+  router.get('/employees/:employeeId/calendar', requirePermission('schedules', 'read'), async (req, res) => {
     try {
       const { employeeId } = req.params;
       const [calendars] = await db.query(`
@@ -438,7 +438,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.post('/employees/:employeeId/calendar', async (req, res) => {
+  router.post('/employees/:employeeId/calendar', requirePermission('schedules', 'update'), async (req, res) => {
     try {
       const { employeeId } = req.params;
       const { template_id, valid_from, valid_to, tenant_id } = req.body;
@@ -484,7 +484,7 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.delete('/employees/:employeeId/calendar/:calendarId', async (req, res) => {
+  router.delete('/employees/:employeeId/calendar/:calendarId', requirePermission('schedules', 'delete'), async (req, res) => {
     try {
       const { employeeId, calendarId } = req.params;
       const [result] = await db.query(

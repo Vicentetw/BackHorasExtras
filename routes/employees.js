@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { resolveTenantId } = require('../appUserMiddleware');
+const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
 
 // NOTE: Automatic employee->user sync has been disabled.
 // Matching now requires explicit approval via the matching dashboard.
@@ -11,7 +11,7 @@ const { resolveTenantId } = require('../appUserMiddleware');
  * GET /api/employees
  * Query params: page, limit, search, status, sortBy
  */
-router.get('/', async (req, res) => {
+router.get('/', requirePermission('employees', 'read'), async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const rawLimit = req.query.limit;
@@ -114,7 +114,7 @@ router.get('/', async (req, res) => {
  * ➕ CREAR EMPLEADO
  * POST /api/employees
  */
-router.post('/', async (req, res) => {
+router.post('/', requirePermission('employees', 'create'), async (req, res) => {
   try {
     const {
       employee_id,
@@ -214,7 +214,7 @@ router.post('/', async (req, res) => {
  * ✏️ ACTUALIZAR EMPLEADO
  * PUT /api/employees/:id
  */
-router.put('/:id', async (req, res) => {
+router.put('/:id', requirePermission('employees', 'update'), async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -336,7 +336,7 @@ router.put('/:id', async (req, res) => {
  * 🗑️ ELIMINAR EMPLEADO
  * DELETE /api/employees/:id
  */
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requirePermission('employees', 'delete'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -386,7 +386,7 @@ router.delete('/:id', async (req, res) => {
  * 📊 OBTENER ESTADÍSTICAS
  * GET /api/employees/stats
  */
-router.get('/stats', async (req, res) => {
+router.get('/stats', requirePermission('employees', 'read'), async (req, res) => {
   try {
     const effectiveTenantId = resolveTenantId(req);
     const tenantWhere = effectiveTenantId !== null ? 'WHERE tenant_id = ?' : '';

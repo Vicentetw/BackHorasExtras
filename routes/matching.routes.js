@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const pool = db;
-const { resolveTenantId } = require('../appUserMiddleware');
+const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
 
 const normalizeValue = (val) => String(val || '').trim().toLowerCase();
 
@@ -40,7 +40,7 @@ const findMatchingUserForEmployee = (employee, users) => {
  * 🤖 AUTO MATCH (documento / legajo / employee_id)
  * Prioridad: employee_id (legajo) > nombre
  */
-router.post('/auto', async (req, res) => {
+router.post('/auto', requirePermission('matching', 'read'), async (req, res) => {
   try {
     const [predictions] = await pool.query(`
       SELECT 
@@ -74,7 +74,7 @@ router.post('/auto', async (req, res) => {
 /**
  * 📋 LISTAR MATCHING ACTUAL
  */
-router.get('/', async (req, res) => {
+router.get('/', requirePermission('matching', 'read'), async (req, res) => {
   const [rows] = await db.query(`
     SELECT 
       u.USERID,
@@ -93,7 +93,7 @@ router.get('/', async (req, res) => {
 /**
  * 🔍 USUARIOS SIN MATCH
  */
-router.get('/unmatched', async (req, res) => {
+router.get('/unmatched', requirePermission('matching', 'read'), async (req, res) => {
   const [rows] = await pool.query(`
     SELECT u.*
     FROM users u
@@ -108,7 +108,7 @@ router.get('/unmatched', async (req, res) => {
 /**
  * 🔍 EMPLEADOS SIN MATCH
  */
-router.get('/unmatched-employees', async (req, res) => {
+router.get('/unmatched-employees', requirePermission('matching', 'read'), async (req, res) => {
   const [rows] = await db.query(`
     SELECT e.*
     FROM employees e
@@ -122,7 +122,7 @@ router.get('/unmatched-employees', async (req, res) => {
 /**
  * 💡 SUGERENCIAS POR NOMBRE
  */
-router.get('/suggestions', async (req, res) => {
+router.get('/suggestions', requirePermission('matching', 'read'), async (req, res) => {
   const [rows] = await db.query(`
     SELECT 
       u.USERID,
@@ -144,7 +144,7 @@ router.get('/suggestions', async (req, res) => {
 /**
  * ✍️ MATCH MANUAL (un usuario con un empleado)
  */
-router.post('/manual', async (req, res) => {
+router.post('/manual', requirePermission('matching', 'create'), async (req, res) => {
   try {
     const payloadUserId = req.body.user_id ?? req.body.userId;
     const payloadEmployeeId = req.body.employee_id ?? req.body.employeeId;
@@ -184,7 +184,7 @@ router.post('/manual', async (req, res) => {
 /**
  * 🧩 MATCH MANUAL POR PENDIENTES (legajo/employee_id)
  */
-router.post('/manual-bulk', async (req, res) => {
+router.post('/manual-bulk', requirePermission('matching', 'read'), async (req, res) => {
   try {
     const [predictions] = await db.query(`
       SELECT 
@@ -212,7 +212,7 @@ router.post('/manual-bulk', async (req, res) => {
 /**
  * ❌ ELIMINAR MATCH
  */
-router.delete('/:user_id', async (req, res) => {
+router.delete('/:user_id', requirePermission('matching', 'delete'), async (req, res) => {
   const { user_id } = req.params;
 
   await db.query(`
@@ -226,7 +226,7 @@ router.delete('/:user_id', async (req, res) => {
  * 📊 DIAGNÓSTICO COMPLETO DE MATCHING
  * GET /api/matching/diagnosis
  */
-router.get('/diagnosis/report', async (req, res) => {
+router.get('/diagnosis/report', requirePermission('matching', 'read'), async (req, res) => {
   try {
     const effectiveTenantId = resolveTenantId(req);
     const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ?' : '';
@@ -331,7 +331,7 @@ router.get('/diagnosis/report', async (req, res) => {
  * 🔧 PREDICAR MATCHING (sin ejecutar)
  * POST /api/matching/predict
  */
-router.post('/predict', async (req, res) => {
+router.post('/predict', requirePermission('matching', 'read'), async (req, res) => {
   try {
     // Obtener qué se matchearía sin guardar
     const [predictions] = await db.query(`

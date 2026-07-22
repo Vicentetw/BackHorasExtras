@@ -1,5 +1,5 @@
 const express = require('express');
-const { resolveTenantId } = require('../../appUserMiddleware');
+const { resolveTenantId, requirePermission } = require('../../appUserMiddleware');
 
 function extractTime(datetimeStr) {
   if (!datetimeStr) return null;
@@ -29,7 +29,7 @@ function createMotorLaboralRoutes({ db, attendanceService }) {
     res.json({ ok: true, service: 'Motor Laboral', version: '0.1.0' });
   });
 
-  router.get('/attendance/:date/compare', async (req, res) => {
+  router.get('/attendance/:date/compare', requirePermission('attendance', 'read'), async (req, res) => {
     try {
       const { date } = req.params;
       const tenantId = resolveTenantId(req);
@@ -50,7 +50,7 @@ function createMotorLaboralRoutes({ db, attendanceService }) {
     }
   });
 
-  router.get('/attendance/:date', async (req, res) => {
+  router.get('/attendance/:date', requirePermission('attendance', 'read'), async (req, res) => {
     try {
       const { date } = req.params;
       const tenantId = resolveTenantId(req);

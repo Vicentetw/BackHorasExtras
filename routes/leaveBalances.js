@@ -1,5 +1,5 @@
 const express = require('express');
-const { resolveTenantId } = require('../appUserMiddleware');
+const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -13,7 +13,7 @@ module.exports = function (db) {
   // tabla employees). Se resuelve acá adentro para no filtrar por la columna
   // equivocada y devolver siempre 0.
   // ==========================
-  router.get('/:legajo/:year', async (req, res) => {
+  router.get('/:legajo/:year', requirePermission('leaves', 'read'), async (req, res) => {
     try {
       const { legajo, year } = req.params;
 
@@ -63,7 +63,7 @@ module.exports = function (db) {
   // 2. LISTAR TODOS LOS SALDOS DE UN AÑO (para el panel de administración)
   // GET /api/leave-balances?year=2026
   // ==========================
-  router.get('/', async (req, res) => {
+  router.get('/', requirePermission('leaves', 'read'), async (req, res) => {
     try {
       const year = req.query.year || new Date().getFullYear();
       const effectiveTenantId = resolveTenantId(req);
@@ -106,7 +106,7 @@ module.exports = function (db) {
   // 3. ASIGNAR / ACTUALIZAR SALDO
   // POST /api/leave-balances
   // ==========================
-  router.post('/', async (req, res) => {
+  router.post('/', requirePermission('leaves', 'update'), async (req, res) => {
     try {
       const { employeeId, year, allottedDays, notes } = req.body;
 
