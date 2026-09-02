@@ -4,8 +4,10 @@ const appUserRepository = require('./motor-laboral/repositories/appUserRepositor
 // Modulos y acciones disponibles (documentacion, no una lista cerrada en
 // codigo -- un permiso es simplemente el string "modulo:accion"):
 //   modulos: employees, attendance, schedules, leaves, exclusions,
-//            holidays, matching, settings
+//            holidays, matching, settings, users
 //   acciones: read, create, update, delete
+// ('users' ya se usaba de verdad en routes/appUsers.js -- faltaba en esta
+// lista, corregido al armar routes/roles.js).
 
 // Corre DESPUES de firebaseAuthMiddleware (necesita req.user ya resuelto).
 // Un login de Firebase valido NO alcanza por si solo: ademas hace falta un

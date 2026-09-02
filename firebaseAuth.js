@@ -50,5 +50,6 @@ async function firebaseAuthMiddleware(req, res, next) {
 }
 
 module.exports = {
-  firebaseAuthMiddleware
+  firebaseAuthMiddleware,
+  initFirebaseAdmin
 };

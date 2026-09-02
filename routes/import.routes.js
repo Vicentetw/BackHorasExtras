@@ -6,7 +6,8 @@ const db = require('../db');
 
 console.log('🚀 Cargando import.routes.js v2.0 - con staging_employees');
 
-const upload = multer({ storage: multer.memoryStorage() });
+// Mismo limite que horasdedica2.js -- ver ese comentario.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 /**
  * 📥 SUBIR CSV → staging_employees (LEGACY - para RRHH)

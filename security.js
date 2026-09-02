@@ -1,6 +1,19 @@
 const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { firebaseAuthMiddleware } = require('./firebaseAuth');
 const { appUserMiddleware } = require('./appUserMiddleware');
+
+// Generoso a proposito -- esto es una app interna (asistencia/RRHH), no una
+// API publica de alto trafico. El objetivo es frenar un scaneo/ataque de
+// fuerza bruta, no molestar el uso normal (un dashboard puede disparar
+// varias decenas de requests en paralelo al cargar). 300/min por IP.
+const apiRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes, intenta de nuevo en un momento.' }
+});
 
 const API_KEY = process.env.API_KEY || null;
 const CORS_ORIGINS = process.env.CORS_ORIGINS
@@ -55,6 +68,7 @@ function corsOptionsDelegate(req, callback) {
 function securityMiddlewares(app, cors) {
   app.disable('x-powered-by');
   app.use(helmet());
+  app.use(apiRateLimiter);
   app.use(cors({ origin: corsOptionsDelegate, optionsSuccessStatus: 200 }));
   app.use(authMiddleware);
   // El API_KEY de arriba solo filtra bots/escaneos; no identifica usuarios.

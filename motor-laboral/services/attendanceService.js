@@ -1,4 +1,9 @@
 const { getLocalDayOfWeek } = require('../repositories/scheduleRepository');
+const {
+  getEntranceReference,
+  resolveToleranceMinutes,
+  resolveLateJustification
+} = require('./attendanceCalculations');
 
 function isDefaultWorkday(dateString) {
   const dayOfWeek = getLocalDayOfWeek(dateString);
@@ -63,16 +68,6 @@ function getScheduleEntry(schedule, assignedScheduleMap, tenantScheduleMap, empl
   return schedule;
 }
 
-function getEntranceReference(schedule) {
-  if (schedule.source === 'motor' && schedule.blocks && schedule.blocks.length > 0) {
-    const workBlocks = schedule.blocks.filter(b => b.block_type === 'WORK');
-    if (workBlocks.length > 0) {
-      return workBlocks[0].start_time;
-    }
-  }
-  return schedule.timeEntrance;
-}
-
 function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents = []) {
   checkins.forEach(c => {
     const entry = usersMap.get(String(c.employeeId));
@@ -91,10 +86,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
     const userSchedule = getScheduleEntry(schedule, assignedScheduleMap, tenantScheduleMap, u.employeeId, u.tenantId);
     const entranceRef = getEntranceReference(userSchedule);
     const entranceMinutes = Number(entranceRef.split(':')[0]) * 60 + Number(entranceRef.split(':')[1]);
-    let toleranceMin = 10;
-    if (userSchedule.source === 'motor' && userSchedule.template_type === 'FLEXIBLE') {
-      toleranceMin = 60;
-    }
+    const toleranceMin = resolveToleranceMinutes(userSchedule);
 
     let status = 'Absent';
     if (checkinsSorted.length > 0) {
@@ -102,17 +94,13 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       const [h, m] = firstTime.split(':').map(Number);
       const firstMinutes = h * 60 + m;
 
-      if (firstMinutes <= entranceMinutes + toleranceMin) {
-        status = 'OnTime';
-      } else {
-        // Igual criterio que /attendance-range: una tardanza se justifica si hay
-        // una exclusión ese día que cubre la demora (excTo) o sin horario cargado.
-        const excToMin = exclusion && exclusion.excTo
-          ? Number(exclusion.excTo.split(':')[0]) * 60 + Number(exclusion.excTo.split(':')[1])
-          : null;
-        const justified = !!exclusion && (excToMin === null || firstMinutes <= excToMin);
-        status = justified ? 'LateJustified' : 'Late';
-      }
+      const { isLate, justified } = resolveLateJustification({
+        firstMinutes,
+        entranceMinutes,
+        toleranceMinutes: toleranceMin,
+        exclusion
+      });
+      status = !isLate ? 'OnTime' : (justified ? 'LateJustified' : 'Late');
       if (isHoliday) {
         status = 'WorkedHoliday';
       }

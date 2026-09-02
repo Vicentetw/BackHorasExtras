@@ -22,9 +22,14 @@ module.exports = function (db) {
       let sql = 'SELECT * FROM holidays WHERE 1=1';
       const params = [];
 
+      // Ya no hace fallback a tenant_id IS NULL -- la migracion de la Fase A
+      // (feriados globales -> por tenant) esta completa, no deberia quedar
+      // ninguna fila sin tenant. Si alguna vez aparece una (import/bug), que
+      // quede invisible para todos en vez de visible para todos: mas seguro
+      // por default.
       const effectiveTenantId = resolveTenantId(req);
       if (effectiveTenantId !== null) {
-        sql += ' AND (tenant_id = ? OR tenant_id IS NULL)';
+        sql += ' AND tenant_id = ?';
         params.push(effectiveTenantId);
       }
 
@@ -72,7 +77,7 @@ module.exports = function (db) {
 
       const effectiveTenantId = resolveTenantId(req);
       const belongsToTenant = rows.length > 0 && (
-        effectiveTenantId === null || rows[0].tenant_id === null || rows[0].tenant_id === effectiveTenantId
+        effectiveTenantId === null || rows[0].tenant_id === effectiveTenantId
       );
 
       if (!belongsToTenant) {

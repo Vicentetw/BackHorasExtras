@@ -1,4 +1,4 @@
-//require('dotenv').config();
+require('dotenv').config();
 // quitar require('dotenv') si no usas .env local, y configurar variables de entorno en tu hosting
 const express = require('express');
 const cors = require('cors');
@@ -17,10 +17,14 @@ const employeeEventsRoutes = require('./routes/employeeEvents');
 const leaveBalancesRoutes = require('./routes/leaveBalances');
 const employeeCategoriesRoutes = require('./routes/employeeCategories');
 const appUsersRoutes = require('./routes/appUsers');
+const rolesRoutes = require('./routes/roles');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
 const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
 const userRepository = require('./motor-laboral/repositories/userRepository');
 const employeeEventRepository = require('./motor-laboral/repositories/employeeEventRepository');
+const attendanceCalc = require('./motor-laboral/services/attendanceCalculations');
+const movementsCalc = require('./motor-laboral/services/movementsCalculations');
+const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -48,7 +52,12 @@ app.use('/api/import', importRoutes);
 app.use('/api/matching', matchingRoutes);
 app.use('/api/employees', employeesRoutes);
 
-const upload = multer({ storage: multer.memoryStorage() });
+// Limite de tamano para subida de archivos (CSV/Excel de fichajes) -- sin
+// esto, multer aceptaba cualquier tamano en memoria (memoryStorage), un
+// vector facil de agotamiento de memoria con un solo archivo gigante.
+// 20MB es generoso para un CSV/XLSX de fichajes de un mes, sin dejarlo sin
+// limite.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 /* ===============================
    MySQL – Clever Cloud
@@ -72,6 +81,7 @@ app.use('/api/employee-events', employeeEventsRoutes(db));
 app.use('/api/leave-balances', leaveBalancesRoutes(db));
 app.use('/api/employee-categories', employeeCategoriesRoutes(db));
 app.use('/api/app-users', appUsersRoutes(db));
+app.use('/api/roles', rolesRoutes(db));
 app.use('/api/labor-engine', createMotorLaboralRoutes(db));
 
 function parseCheckTime(value) {
@@ -489,13 +499,25 @@ app.get('/debug/status', async (req, res) => {
 /* ===============================
    USERS FOR AUTOCOMPLETE
 ================================ */
-app.get('/users', async (req, res) => {
+app.get('/users', requirePermission('exclusions', 'read'), async (req, res) => {
   try {
+    // `users` es la tabla cruda del reloj (sin tenant_id propio) -- se filtra
+    // por tenant a traves de employees (via user_employee_map), igual que
+    // /data. Un USERID sin matchear (aun no vinculado a un empleado) no tiene
+    // tenant asignado todavia, asi que se deja visible para no romper el
+    // flujo de matching -- lo que se bloquea es ver empleados YA matcheados
+    // de OTRA empresa.
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantClause = effectiveTenantId !== null ? 'WHERE (e.tenant_id = ? OR e.id IS NULL)' : '';
+    const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
     const [users] = await db.query(`
-      SELECT USERID, Badgenumber, Name
-      FROM users
-      ORDER BY Name
-    `);
+      SELECT u.USERID, u.Badgenumber, u.Name
+      FROM users u
+      LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID
+      LEFT JOIN employees e ON e.id = uem.employee_id
+      ${tenantClause}
+      ORDER BY u.Name
+    `, tenantParams);
 
     res.json(users);
 
@@ -707,7 +729,7 @@ function classifyCheckins(checkinsByUserDay) {
 /* ===============================
    DATA PARA INFORME (ONLINE)
 ================================ */
-app.get('/data', async (req, res) => {
+app.get('/data', requirePermission('attendance', 'read'), async (req, res) => {
   try {
     const { month, badge, name, authorized } = req.query;
 
@@ -721,9 +743,9 @@ app.get('/data', async (req, res) => {
     // USERS FILTRADOS CON INFO DE EMPLEADOS
     // ======================
     let usersSQL = `
-      SELECT 
-        u.USERID, 
-        u.Badgenumber, 
+      SELECT
+        u.USERID,
+        u.Badgenumber,
         u.Name,
         u.isExcluded,
         e.id as employee_id,
@@ -744,6 +766,16 @@ app.get('/data', async (req, res) => {
       WHERE 1=1
     `;
     const usersParams = [];
+
+    // `users`/Checkins no tienen tenant_id propio -- se filtra a traves de
+    // employees, igual que /users. Un USERID sin matchear queda visible (no
+    // tiene tenant asignado todavia); lo que se bloquea es ver el informe de
+    // horas de un empleado YA matcheado de OTRA empresa.
+    const effectiveTenantId = resolveTenantId(req);
+    if (effectiveTenantId !== null) {
+      usersSQL += ' AND (e.tenant_id = ? OR e.id IS NULL)';
+      usersParams.push(effectiveTenantId);
+    }
 
     if (badge) {
       usersSQL += ' AND (u.Badgenumber = ? OR uem.employee_id = ?)';
@@ -874,8 +906,31 @@ app.get('/data', async (req, res) => {
 // ENDPOINTS PARA DASHBOARD
 // ========================================
 
+// Candidatos a "usuario ficticio" (marcador): en este reloj, un badge
+// marcador tiene Badgenumber puramente numérico y de 1-2 dígitos, con Name
+// igual al badge (ej. badge '6', name '6') -- muy distinto de un legajo real
+// (siempre 4 dígitos en esta base). Sirve para poblar el selector de
+// marcadores.html sin depender de que el admin escriba el número a mano.
+app.get('/config/special-users/candidates', requirePermission('settings', 'update'), async (req, res) => {
+  try {
+    const [rows] = await db.query(`
+      SELECT u.USERID, u.Badgenumber, u.Name,
+             su.category, su.direction, su.\`function\`, su.isActive
+      FROM users u
+      LEFT JOIN specialusers su ON su.userId = u.USERID
+      WHERE u.Badgenumber REGEXP '^[0-9]{1,2}$' AND u.Name = u.Badgenumber
+        AND u.Badgenumber NOT IN ('1', '2') -- suelen ser el admin del reloj, no un marcador
+      ORDER BY CAST(u.Badgenumber AS UNSIGNED)
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('ERROR fetching special user candidates:', err);
+    res.status(500).json({ error: 'Error fetching special user candidates' });
+  }
+});
+
 // 1. OBTENER/CREAR CONFIGURACIÓN DE USUARIOS ESPECIALES
-app.get('/config/special-users', async (req, res) => {
+app.get('/config/special-users', requirePermission('settings', 'read'), async (req, res) => {
   try {
     const [specialUsers] = await db.query(`
       SELECT su.*, u.Name as userName
@@ -896,45 +951,64 @@ app.get('/config/special-users', async (req, res) => {
   }
 });
 
-app.post('/config/special-users', async (req, res) => {
+app.post('/config/special-users', requirePermission('settings', 'update'), async (req, res) => {
   try {
-    const { userId, category, function: func } = req.body;
-    
+    const { userId, category, direction, function: func } = req.body;
+
     // Verificar que el usuario existe
     const [user] = await db.query(
-      `SELECT 
-        u.USERID, 
-        u.Badgenumber, 
-        COALESCE(e.nombre, u.Name) AS Name 
+      `SELECT
+        u.USERID,
+        u.Badgenumber,
+        COALESCE(e.nombre, u.Name) AS Name
        FROM users u
        LEFT JOIN user_employee_map um ON um.USERID = u.USERID
        LEFT JOIN employees e ON e.id = um.employee_id
        WHERE u.USERID = ?`,
       [userId]
     );
-    
+
     if (user.length === 0) {
       return res.status(400).json({ error: 'Usuario no encontrado' });
     }
-    
+
+    if (direction !== undefined && direction !== null && direction !== '' && !['SALIDA', 'REGRESO'].includes(direction)) {
+      return res.status(400).json({ error: "direction debe ser 'SALIDA' o 'REGRESO'" });
+    }
+
     await db.query(`
-      INSERT INTO specialusers (userId, badgeNumber, name, category, function, isActive)
-      VALUES (?, ?, ?, ?, ?, TRUE)
+      INSERT INTO specialusers (userId, badgeNumber, name, category, direction, \`function\`, isActive)
+      VALUES (?, ?, ?, ?, ?, ?, TRUE)
       ON DUPLICATE KEY UPDATE
         category = VALUES(category),
-        function = VALUES(function),
+        direction = VALUES(direction),
+        \`function\` = VALUES(\`function\`),
         isActive = TRUE
-    `, [userId, user[0].Badgenumber, user[0].Name, category, func]);
-    
+    `, [userId, user[0].Badgenumber, user[0].Name, category, direction || null, func]);
+
     res.json({ ok: true, message: 'Usuario especial configurado' });
   } catch (err) {
     console.error('ERROR setting special user:', err);
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
+      return res.status(503).json({
+        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
       });
     }
     res.status(500).json({ error: 'Error configurando usuario especial' });
+  }
+});
+
+app.delete('/config/special-users/:userId', requirePermission('settings', 'delete'), async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const [result] = await db.query('DELETE FROM specialusers WHERE userId = ?', [userId]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Usuario especial no encontrado' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR deleting special user:', err);
+    res.status(500).json({ error: 'Error eliminando usuario especial' });
   }
 });
 
@@ -963,7 +1037,10 @@ app.get('/config/schedule/:date', async (req, res) => {
   }
 });
 
-app.post('/config/schedule', async (req, res) => {
+// Fase 4.4 del plan de migracion a Angular: esta ruta no tenia ningun
+// requirePermission -- cualquier app_user logueado, sin importar su rol o
+// permisos, podia cambiar el horario por defecto de TODA la empresa.
+app.post('/config/schedule', requirePermission('schedules', 'update'), async (req, res) => {
   try {
     const { scheduleDate, timeEntrance, timeExit, isWorkDay, description } = req.body;
     
@@ -1050,22 +1127,42 @@ app.post('/config/theme', async (req, res) => {
 // 3. EXCLUSIONES DE USUARIOS - CRUD COMPLETO CON PAGINACIÓN
 
 // GET /config/user-exclusions?page=1&limit=20&search=...&status=...
+// Fase 4.6 del plan de migracion a Angular: se suma userId+excDate como
+// filtro exacto opcional -- el frontend (Presentismo/Justificaciones) lo
+// usa para el "¿ya existe una exclusion para este usuario+fecha?" antes
+// de abrir el formulario en modo editar. Antes de esto, ese chequeo se
+// hacia con ?search= + limit=50 y filtrando en el cliente -- si un
+// empleado tenia mas de 50 exclusiones historicas, el chequeo podia no
+// encontrar la existente (mismo tipo de bug ya corregido para
+// employees?employee_id=).
 app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
     const search = req.query.search || '';
     const status = req.query.status || ''; // 'active', 'expired', 'all'
-    
+    const { userId, excDate, dateFrom, dateTo } = req.query;
+
     const offset = (page - 1) * limit;
-    
+
     // Construir WHERE
     let where = '';
     let params = [];
-    
+
     if (search) {
       where = `WHERE (u.Name LIKE ? OR e.nombre LIKE ? OR u.Badgenumber LIKE ? OR ue.reason LIKE ?)`;
       params = [`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`];
+    }
+
+    if (userId && excDate) {
+      where += (where ? ' AND' : 'WHERE') + ' ue.userId = ? AND ue.excDate = ?';
+      params.push(userId, excDate);
+    } else if (userId && dateFrom && dateTo) {
+      // Rango en vez de fecha exacta -- lo usa Licencias (Fase 4.7) para
+      // avisar si una licencia multi-dia se superpone con justificaciones
+      // puntuales ya cargadas para el mismo empleado.
+      where += (where ? ' AND' : 'WHERE') + ' ue.userId = ? AND ue.excDate BETWEEN ? AND ?';
+      params.push(userId, dateFrom, dateTo);
     }
 
     if (status === 'active') {
@@ -1185,6 +1282,64 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
   }
 });
 
+// POST /config/user-exclusions/range - Crear una exclusion por cada dia de
+// un rango (Fase 4.6). Reemplaza el patron del dashboard.html original,
+// que expandia el rango en el CLIENTE y mandaba un POST por dia en un loop
+// sin manejo de fallo parcial: si el dia 3 de 10 fallaba (ej. ya existia),
+// el loop seguia igual pero el alert final decia "listo" como si los 10
+// se hubieran creado. Aca es un solo request, y la respuesta es honesta:
+// dice exactamente cuantos dias se crearon y cuantos se saltearon (y por
+// que) -- no es una transaccion todo-o-nada a proposito, porque que un dia
+// ya tuviera una exclusion cargada no deberia impedir crear el resto.
+app.post('/config/user-exclusions/range', requirePermission('exclusions', 'create'), async (req, res) => {
+  try {
+    const { userId, dateFrom, dateTo, reason, type, eventTypeId, excFrom, excTo } = req.body;
+
+    if (!userId || !dateFrom || !dateTo) {
+      return res.status(400).json({ error: 'userId, dateFrom y dateTo son requeridos' });
+    }
+    if (dateFrom > dateTo) {
+      return res.status(400).json({ error: 'dateFrom no puede ser posterior a dateTo' });
+    }
+
+    const [[user]] = await db.query(`SELECT USERID FROM \`users\` WHERE USERID = ?`, [userId]);
+    if (!user) {
+      return res.status(400).json({ error: 'Usuario no encontrado' });
+    }
+
+    const dates = [];
+    for (let d = new Date(`${dateFrom}T00:00:00`); d <= new Date(`${dateTo}T00:00:00`); d.setDate(d.getDate() + 1)) {
+      dates.push(d.toISOString().slice(0, 10));
+    }
+    if (dates.length > 366) {
+      return res.status(400).json({ error: 'El rango no puede superar un año' });
+    }
+
+    let created = 0;
+    const skipped = [];
+    for (const excDate of dates) {
+      try {
+        await db.query(`
+          INSERT INTO \`userexclusions\` (userId, excDate, reason, type, event_type_id, excFrom, excTo)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [userId, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
+        created++;
+      } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') {
+          skipped.push({ excDate, reason: 'Ya existía una exclusión para esa fecha' });
+        } else {
+          skipped.push({ excDate, reason: 'Error al crear' });
+        }
+      }
+    }
+
+    res.json({ ok: true, totalDays: dates.length, created, skipped });
+  } catch (err) {
+    console.error('ERROR creating exclusion range:', err);
+    res.status(500).json({ error: 'Error creando el rango de exclusiones' });
+  }
+});
+
 // PUT /config/user-exclusions/:id - Actualizar exclusión
 app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update'), async (req, res) => {
   try {
@@ -1254,7 +1409,10 @@ app.get('/config/personal-leave-limit', async (req, res) => {
 });
 
 // POST /config/personal-leave-limit
-app.post('/config/personal-leave-limit', async (req, res) => {
+// Mismo hallazgo que /config/schedule: sin esto, cualquier app_user
+// logueado podia cambiar el limite mensual de licencia personal de toda
+// la empresa.
+app.post('/config/personal-leave-limit', requirePermission('schedules', 'update'), async (req, res) => {
   try {
     const minutes = Number(req.body.personalLeaveMonthlyLimitMinutes);
     if (!Number.isFinite(minutes) || minutes < 0) {
@@ -1503,6 +1661,15 @@ function nextDayStr(dateStr) {
   return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
 }
 
+// Formatea un Date (hora local del servidor) como YYYY-MM-DD, para armar keys
+// de fecha consistentes con el resto de los helpers de este archivo.
+function formatLocalDate(date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 // Función auxiliar: extraer hora de YYYY-MM-DD HH:mm:ss
 function extractTime(datetimeStr) {
   if (!datetimeStr) return '00:00';
@@ -1655,7 +1822,7 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     let exclusions = [];
     try {
       const [exclusionsResult] = await db.query(`
-        SELECT userId, reason, type
+        SELECT userId, reason, type, excFrom, excTo
         FROM \`userexclusions\`
         WHERE excDate = ?
       `, [date]);
@@ -1697,26 +1864,31 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
       let lastCheckin = null;
       let workedOnHoliday = false;
 
-      if (userExclusion || userLeave) {
-        status = 'Excused';
-      } else if (userCheckins.length > 0) {
+      if (userCheckins.length > 0) {
         firstCheckin = userCheckins[0];
         lastCheckin = userCheckins[userCheckins.length - 1];
-        
-        // Calcular si llegó a tiempo o tarde
+
+        // Mismo criterio que /attendance-range y el motor nuevo (no
+        // reimplementado acá): una exclusión con excTo justifica la
+        // tardanza en vez de excusar el día entero -- antes esta ruta
+        // marcaba "Excused" apenas existía CUALQUIER exclusión, sin mirar
+        // si la persona igual había fichado todo el día.
         const firstTimeStr = extractTime(firstCheckin);
         const firstTimeMin = timeToMinutes(firstTimeStr);
-        
-        if (firstTimeMin <= entranceMinutes + toleranceMinutes) {
-          status = 'OnTime';
-        } else {
-          status = 'Late';
-        }
-        
+        const { isLate, justified } = attendanceCalc.resolveLateJustification({
+          firstMinutes: firstTimeMin,
+          entranceMinutes,
+          toleranceMinutes,
+          exclusion: userExclusion
+        });
+        status = !isLate ? 'OnTime' : (justified ? 'LateJustified' : 'Late');
+
         // Marcar si trabajó en feriado
         if (isHolidayWorkDay) {
           workedOnHoliday = true;
         }
+      } else if (userExclusion || userLeave) {
+        status = 'Excused';
       } else if (isHolidayWorkDay) {
         // En un feriado sin fichajes: mostrar como "Feriado" en lugar de "Ausente"
         status = 'HolidayAbsent';
@@ -1740,6 +1912,7 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     const summary = {
       onTime: attendance.filter(a => a.status === 'OnTime').length,
       late: attendance.filter(a => a.status === 'Late').length,
+      lateJustified: attendance.filter(a => a.status === 'LateJustified').length,
       absent: attendance.filter(a => a.status === 'Absent').length,
       excused: attendance.filter(a => a.status === 'Excused').length,
       total: attendance.length
@@ -2019,17 +2192,73 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       return parts.length < 2 ? datetimeStr : parts[1].substring(0, 5);
     };
 
-    const getEntranceReference = (schedule) => {
-      if (schedule.source === 'motor' && schedule.blocks && schedule.blocks.length > 0) {
-        const workBlocks = schedule.blocks.filter(b => b.block_type === 'WORK');
-        if (workBlocks.length > 0) {
-          return workBlocks[0].start_time;
+    // "Posible entrada particular": un marcador PARTICULAR/REGRESO (badge 5)
+    // puede preceder al primer fichaje del día sin que haya una salida
+    // abierta -- pasa cuando alguien avisó el día anterior que iba a entrar
+    // tarde (autorización firmada) y nunca ficha una "salida" ese día. Se
+    // detecta solo en modo detalle (un empleado puntual, que es como lo
+    // consume el modal de attendance.html) para no pagar este costo en el
+    // resumen de toda la empresa. Reusa exactamente las mismas filas crudas
+    // de `checkins` (ya incluyen los fichajes de los marcadores, hoy
+    // descartados más abajo por no tener employeeId) -- no se hace una
+    // consulta nueva.
+    // Fichajes crudos agrupados por dia, con Date reales -- insumo comun
+    // para detectMovements (marcadores de PARTICULAR y de HE), armado una
+    // sola vez y reusado para ambos, sin consultas nuevas.
+    const checkinsByDateForDetection = new Map();
+    checkins.forEach(c => {
+      if (!checkinsByDateForDetection.has(c.date)) checkinsByDateForDetection.set(c.date, []);
+      checkinsByDateForDetection.get(c.date).push({
+        checktime: new Date(c.CHECKTIME.replace(' ', 'T')),
+        userId: c.userId,
+        employeeId: c.employeeId !== null ? String(c.employeeId) : null
+      });
+    });
+
+    const possibleJustificationByEmployeeDate = new Map();
+    if (detailEmployeeId) {
+      const particularMarkerMap = await fetchMarkerMap('PARTICULAR');
+      const maxMarkerGapMs = await fetchMarkerMaxGapMs();
+      for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
+        const { orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs });
+        orphanReturns
+          .filter(r => r.employeeId === detailEmployeeId)
+          .forEach(r => {
+            const hh = String(r.timeIn.getHours()).padStart(2, '0');
+            const mm = String(r.timeIn.getMinutes()).padStart(2, '0');
+            possibleJustificationByEmployeeDate.set(`${date}|${hh}:${mm}`, { markerTime: `${hh}:${mm}`, category: r.category });
+          });
+      }
+    }
+
+    // Horas extra "reales" (marcadas con badges dedicados 9/10, categoria
+    // HE en specialusers) -- PRIORIDAD 1 sobre el heuristico "clasico"
+    // (computeDailyOvertime, 2do fichaje post-corte), igual jerarquia que
+    // ya usaba js/app.js/index.html. Corre para TODO el rango (no solo en
+    // modo detalle) porque afecta el resumen mensual de toda la empresa,
+    // no solo el detalle de un empleado puntual. Reusa detectMovements
+    // (mismo motor probado que Particular/Oficial/Campaña, con el mismo
+    // resguardo de rebote y vencimiento de marcador) en vez de reimplementar
+    // la deteccion aparte.
+    const heIntervalsByEmployeeDate = new Map(); // `${employeeId}|${date}` -> {timeOut, timeIn}
+    {
+      const heMarkerMap = await fetchMarkerMap('HE');
+      if (Object.keys(heMarkerMap).length > 0) {
+        const maxMarkerGapMs = await fetchMarkerMaxGapMs();
+        for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
+          const { closedEvents } = movementsCalc.detectMovements(dayCheckins, heMarkerMap, { maxMarkerGapMs });
+          closedEvents
+            .filter(ev => ev.category === 'HE')
+            .forEach(ev => {
+              heIntervalsByEmployeeDate.set(`${ev.employeeId}|${date}`, { timeOut: ev.timeOut, timeIn: ev.timeIn });
+            });
         }
       }
-      return schedule.timeEntrance;
-    };
+    }
 
     const result = [];
+
+    const overtimeSettings = await fetchOvertimeSettings();
 
     employees.forEach(u => {
       const employeeId = String(u.employeeId);
@@ -2066,26 +2295,31 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const last = checks[checks.length - 1];
           const firstMin = timeToMinutes(extractTime(first));
           const lastMin = timeToMinutes(extractTime(last));
-          const entranceRef = getEntranceReference(schedule);
+          const entranceRef = attendanceCalc.getEntranceReference(schedule);
           const entranceMin = timeToMinutes(entranceRef);
-          const tolerance = schedule.source === 'motor' && schedule.template_type === 'FLEXIBLE' ? 60 : 10;
-          const cutoff = timeToMinutes('13:40');
-          const isLate = firstMin > entranceMin + tolerance;
-          const dayOvertimeMinutes = lastMin > cutoff ? (lastMin - cutoff) : 0;
+          const tolerance = attendanceCalc.resolveToleranceMinutes(schedule);
+          // Misma jerarquia que index.html/js/app.js: PRIORIDAD 1, badge
+          // 9/10 real (heIntervalsByEmployeeDate, ya detectado arriba con
+          // detectMovements) -- si ese dia no tiene marca real, PRIORIDAD 2,
+          // el heuristico "clasico" (2do fichaje post-corte, unificado
+          // 2026-08-07). Jerarquia extraida a overtimeCalculations.js
+          // (resolveDailyOvertime) para poder testearla sin DB.
+          const heInterval = heIntervalsByEmployeeDate.get(`${employeeId}|${date}`);
+          const overtimeChecks = checks.map(c => new Date(String(c).replace(' ', 'T')));
+          const overtimeResult = overtimeCalc.resolveDailyOvertime(heInterval, overtimeChecks, {
+            cutoffMinutes: overtimeSettings.cutoffMinutes,
+            capMinutes: overtimeSettings.capMinutes
+          });
+          const dayOvertimeMinutes = overtimeResult ? overtimeResult.cappedMinutes : 0;
+          const dayOvertimeNeedsVerification = !!(overtimeResult && overtimeResult.needsVerification);
+          const dayOvertimeSource = overtimeResult ? overtimeResult.source : null;
 
-          // Una tardanza se considera justificada si hay una exclusión cargada ese día
-          // que cubre la demora: si tiene excTo, la llegada debe caer dentro de esa
-          // ventana autorizada; si no tiene horario cargado, la sola presencia de la
-          // exclusión ya justifica (igual criterio que un día completo excusado).
-          let lateJustifiedThisDay = false;
-          let lateMinutes = 0;
-          if (isLate) {
-            lateMinutes = firstMin - entranceMin;
-            if (exclusion) {
-              const excToMin = exclusion.excTo ? timeToMinutes(exclusion.excTo) : null;
-              lateJustifiedThisDay = excToMin === null || firstMin <= excToMin;
-            }
-          }
+          const { isLate, lateMinutes, justified: lateJustifiedThisDay } = attendanceCalc.resolveLateJustification({
+            firstMinutes: firstMin,
+            entranceMinutes: entranceMin,
+            toleranceMinutes: tolerance,
+            exclusion
+          });
 
           if (isLate && lateJustifiedThisDay) {
             lateJustified++;
@@ -2098,6 +2332,9 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           if (days) {
             let status = 'OnTime';
             if (isLate) status = lateJustifiedThisDay ? 'LateJustified' : 'Late';
+            const possibleJustification = isLate && !lateJustifiedThisDay
+              ? possibleJustificationByEmployeeDate.get(`${date}|${extractTime(first)}`) || null
+              : null;
             days.push({
               date,
               status,
@@ -2105,10 +2342,13 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               lastCheckin: extractTime(last),
               totalCheckins: checks.length,
               overtimeMinutes: dayOvertimeMinutes,
+              overtimeNeedsVerification: dayOvertimeNeedsVerification,
+              overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
               lateMinutes: isLate ? lateMinutes : 0,
               reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
               eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,
-              eventTypeDescripcion: isLate && lateJustifiedThisDay ? (exclusion.eventTypeDescripcion || null) : undefined
+              eventTypeDescripcion: isLate && lateJustifiedThisDay ? (exclusion.eventTypeDescripcion || null) : undefined,
+              possibleJustification
             });
           }
         } else if (exclusion || leaveEvent) {
@@ -2171,68 +2411,392 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
 //fin get rango de fechas
 
 
-// 5. REPORTE DE MOVIMIENTOS (Salidas Particulares, Oficiales, Campaña)
-app.get('/movements/:date', async (req, res) => {
+// 5. REPORTE DE SALIDAS (Particular / Oficial / Campaña), detectadas a partir
+// de los usuarios ficticios (specialusers). Reemplaza al viejo /movements/:date
+// -- ese filtraba por category SALIDA/RETORNO, valores que nunca se cargan
+// (las categorías reales son PARTICULAR/OFICIAL/CAMPANA con su propia columna
+// `direction`), y emparejaba el regreso con la fila siguiente en TODO el
+// listado de la empresa en vez del próximo fichaje de ese mismo empleado.
+// La lógica de detección vive en motor-laboral/services/movementsCalculations.js
+// (compartida entre este endpoint y /campana-range) para no duplicarla.
+
+async function fetchMovementCheckins(fromDate, toDateExclusive) {
+  // El join por badge (ademas de por USERID) es necesario porque no todos
+  // los relojes graban Checkins.USERID igual: algunos graban el USERID
+  // interno, otros graban directamente el numero de legajo/badge -- mismo
+  // fallback que ya usa /attendance-range. Sin esto, los fichajes de
+  // cualquier empleado cuyo reloj haga esto quedan invisibles para el motor
+  // de salidas (se tratan como ruido) aunque sí se calculen bien las horas
+  // normales -- caso real: PERROTTA Valentina, legajo 1011, 07/07/2026.
+  const [rows] = await db.query(`
+    SELECT c.CHECKTIME AS checktime, c.USERID AS rawUserId, e.employee_id AS employeeId
+    FROM Checkins c
+    LEFT JOIN users u
+      ON u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR)
+    LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID
+    LEFT JOIN employees e ON e.id = uem.employee_id
+    WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
+    ORDER BY c.CHECKTIME
+  `, [fromDate, toDateExclusive]);
+  return rows.map(r => ({
+    // db.js usa dateStrings:true -- CHECKTIME llega como 'YYYY-MM-DD HH:MM:SS',
+    // no como Date. El motor de detección compara/formatea fechas, así que se
+    // parsea acá, en el único lugar que toca la fila cruda de la DB.
+    checktime: new Date(r.checktime.replace(' ', 'T')),
+    userId: r.rawUserId,
+    employeeId: r.employeeId !== null ? String(r.employeeId) : null
+  }));
+}
+
+async function fetchMarkerMap(category) {
+  const params = [];
+  let query = `SELECT userId, category, direction FROM specialusers WHERE isActive = TRUE AND direction IS NOT NULL`;
+  if (category) {
+    query += ` AND category = ?`;
+    params.push(category);
+  }
+  const [rows] = await db.query(query, params);
+  const markerMap = {};
+  rows.forEach(m => { markerMap[m.userId] = { category: m.category, direction: m.direction }; });
+  return markerMap;
+}
+
+// GET /movements-range?from=&to=&category=PARTICULAR|OFICIAL&employeeId=&groupBy=day|month|year
+app.get('/movements-range', requirePermission('attendance', 'read'), async (req, res) => {
   try {
-    const { date } = req.params;
-    
-    // Obtener usuarios especiales y sus funciones
-    const [specialUsers] = await db.query(`
-      SELECT * FROM specialusers WHERE isActive = TRUE
-    `);
-    
-    // Mapear usuarios especiales
-    const markerMap = {};
-    specialUsers.forEach(su => {
-      markerMap[su.userId] = { category: su.category, function: su.function };
+    const { from, to } = req.query;
+    const category = req.query.category;
+    if (!from || !to) {
+      return res.status(400).json({ error: 'from y to requeridos' });
+    }
+    if (!['PARTICULAR', 'OFICIAL'].includes(category)) {
+      return res.status(400).json({ error: "category debe ser 'PARTICULAR' u 'OFICIAL'" });
+    }
+    const groupBy = ['day', 'month', 'year'].includes(req.query.groupBy) ? req.query.groupBy : 'day';
+    const employeeIdFilter = req.query.employeeId ? String(req.query.employeeId) : null;
+
+    const tenantId = resolveTenantId(req);
+    let employees = await userRepository.findAll({ tenantId }, db);
+    if (employeeIdFilter) {
+      employees = employees.filter(e => String(e.employeeId) === employeeIdFilter);
+    }
+    const employeeById = new Map(employees.map(e => [String(e.employeeId), e]));
+
+    const markerMap = await fetchMarkerMap(category);
+    const exclusiveEnd = nextDayStr(to);
+    const checkins = await fetchMovementCheckins(from, exclusiveEnd);
+
+    // Particular/Oficial son "del día": una salida sin regreso se cierra al
+    // fin de ESE horario, nunca con un fichaje de un día distinto. Por eso la
+    // detección corre por día (no sobre todo el rango de una), agrupando los
+    // fichajes por fecha local -- si esto corriera sobre el rango entero, una
+    // salida sin regreso el 3 quedaba "abierta" hasta el próximo fichaje
+    // cualquiera de ese empleado, aunque fuera del día 6 (bug real, visto con
+    // datos de julio 2026: daba 65hs de "salida particular").
+    const maxMarkerGapMs = await fetchMarkerMaxGapMs();
+    const checkinsByDate = new Map();
+    checkins.forEach(c => {
+      const dateStr = formatLocalDate(c.checktime);
+      if (!checkinsByDate.has(dateStr)) checkinsByDate.set(dateStr, []);
+      checkinsByDate.get(dateStr).push(c);
     });
-    
-    // Obtener fichajes del día (incluyendo ficticios)
-    const [checkins] = await db.query(`
-      SELECT c.USERID, c.CHECKTIME, u.Name, u.Badgenumber
-      FROM Checkins c
-      JOIN users u ON c.USERID = u.USERID
-      WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
-      ORDER BY c.CHECKTIME
-    `, [date, nextDayStr(date)]);
-    
-    // Procesar movimientos
-    const movements = [];
-    for (let i = 0; i < checkins.length - 1; i++) {
-      const current = checkins[i];
-      const marker = markerMap[current.USERID];
-      
-      if (!marker) continue; // No es usuario especial
-      
-      // Buscar siguiente fichaje de empleado real
-      if (marker.category === 'SALIDA' || marker.category === 'RETORNO') {
-        const next = checkins[i + 1];
-        if (!markerMap[next.USERID]) {
-          // next es empleado real
-          movements.push({
-            type: marker.category,
-            function: marker.function,
-            employee: next.Name,
-            employeeBadge: next.Badgenumber,
-            timeOut: current.CHECKTIME,
-            timeIn: i + 2 < checkins.length ? checkins[i + 2].CHECKTIME : null
-          });
+
+    const allEvents = [];
+    for (const [dateStr, dayCheckins] of checkinsByDate.entries()) {
+      const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, markerMap, { maxMarkerGapMs });
+      allEvents.push(...closedEvents.map(e => ({ ...e, hasReturn: true })));
+
+      if (openEvents.size > 0) {
+        const exitTimeByEmployeeId = new Map();
+        for (const [employeeId, ev] of openEvents.entries()) {
+          const emp = employeeById.get(employeeId);
+          const schedRows = await scheduleRepository.findByDate(dateStr, emp ? emp.tenantId : tenantId, db);
+          const sched = Array.isArray(schedRows) ? schedRows[0] : schedRows;
+          const exitTimeStr = (sched && sched.timeExit) || '13:40:00';
+          const [h, m] = exitTimeStr.split(':').map(Number);
+          exitTimeByEmployeeId.set(employeeId, new Date(ev.timeOut.getFullYear(), ev.timeOut.getMonth(), ev.timeOut.getDate(), h, m, 0));
         }
+        allEvents.push(...movementsCalc.closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId));
+      }
+
+      // "Entrada particular": un regreso huérfano (marcador REGRESO antes del
+      // primer fichaje del día, sin salida abierta ese día -- ver
+      // orphanReturns) también es una salida particular, solo que nunca se
+      // ficho su "salida" porque se autorizó el día anterior. Se sintetiza
+      // el horario de entrada programado como punto de partida (mismo
+      // criterio que ya usa /attendance-range para sugerir la justificación).
+      const relevantOrphans = orphanReturns.filter(r => r.category === category);
+      if (relevantOrphans.length > 0) {
+        const entranceTimeByEmployeeId = new Map();
+        for (const r of relevantOrphans) {
+          if (entranceTimeByEmployeeId.has(r.employeeId)) continue;
+          const emp = employeeById.get(r.employeeId);
+          const schedRows = await scheduleRepository.findByDate(dateStr, emp ? emp.tenantId : tenantId, db);
+          const sched = Array.isArray(schedRows) ? schedRows[0] : schedRows;
+          const entranceTimeStr = (sched && attendanceCalc.getEntranceReference(sched)) || '07:00:00';
+          const [h, m] = entranceTimeStr.split(':').map(Number);
+          entranceTimeByEmployeeId.set(r.employeeId, new Date(r.timeIn.getFullYear(), r.timeIn.getMonth(), r.timeIn.getDate(), h, m, 0));
+        }
+        allEvents.push(...movementsCalc.openOrphanReturnsAtScheduleEntrance(relevantOrphans, entranceTimeByEmployeeId));
       }
     }
-    
-    res.json({
-      date,
-      movements
+
+    const filteredEvents = allEvents.filter(e => e.category === category && employeeById.has(e.employeeId));
+
+    const periodKey = (dateStr) => {
+      if (groupBy === 'year') return dateStr.slice(0, 4);
+      if (groupBy === 'month') return dateStr.slice(0, 7);
+      return dateStr;
+    };
+
+    const rows = [];
+    const summaryMap = new Map();
+    filteredEvents.forEach(e => {
+      const emp = employeeById.get(e.employeeId);
+      const dateStr = formatLocalDate(e.timeOut);
+      const durationMinutes = e.timeIn ? Math.round((e.timeIn - e.timeOut) / 60000) : null;
+
+      rows.push({
+        date: dateStr,
+        employeeId: e.employeeId,
+        employeeName: emp.Name,
+        badge: emp.Badgenumber,
+        category: e.category,
+        timeOut: e.timeOut,
+        timeIn: e.timeIn,
+        hasReturn: e.hasReturn,
+        durationMinutes
+      });
+
+      const key = `${e.employeeId}|${periodKey(dateStr)}`;
+      if (!summaryMap.has(key)) {
+        summaryMap.set(key, {
+          employeeId: e.employeeId,
+          employeeName: emp.Name,
+          badge: emp.Badgenumber,
+          period: periodKey(dateStr),
+          count: 0,
+          totalMinutes: 0,
+          openCount: 0
+        });
+      }
+      const s = summaryMap.get(key);
+      s.count += 1;
+      if (durationMinutes !== null) s.totalMinutes += durationMinutes;
+      if (!e.hasReturn) s.openCount += 1;
     });
+
+    res.json({ from, to, category, groupBy, rows, summary: Array.from(summaryMap.values()) });
   } catch (err) {
-    console.error('ERROR fetching movements:', err);
+    console.error('ERROR fetching movements-range:', err);
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
+      return res.status(503).json({
+        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
       });
     }
-    res.status(500).json({ error: 'Error fetching movements' });
+    res.status(500).json({ error: 'Error en movements-range' });
+  }
+});
+
+// GET /campana-range?from=&to=&employeeId= -- a diferencia de Particular/Oficial,
+// una salida a Campaña puede durar varios días: no se cierra al fin del día,
+// y la "cantidad de días" se calcula con un horario de corte configurable.
+app.get('/campana-range', requirePermission('attendance', 'read'), async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    if (!from || !to) {
+      return res.status(400).json({ error: 'from y to requeridos' });
+    }
+    const employeeIdFilter = req.query.employeeId ? String(req.query.employeeId) : null;
+
+    const tenantId = resolveTenantId(req);
+    let employees = await userRepository.findAll({ tenantId }, db);
+    if (employeeIdFilter) {
+      employees = employees.filter(e => String(e.employeeId) === employeeIdFilter);
+    }
+    const employeeById = new Map(employees.map(e => [String(e.employeeId), e]));
+
+    const markerMap = await fetchMarkerMap('CAMPANA');
+
+    // Una salida a campaña puede haber arrancado antes del "from" pedido --
+    // se busca hasta CAMPANA_LOOKBACK_DAYS atrás para no perder el
+    // emparejamiento con su regreso, que sí puede caer dentro del rango.
+    const CAMPANA_LOOKBACK_DAYS = 90;
+    const [fy, fm, fd] = from.split('-').map(Number);
+    const lookbackFromDate = new Date(fy, fm - 1, fd - CAMPANA_LOOKBACK_DAYS);
+    const lookbackFromStr = formatLocalDate(lookbackFromDate);
+    const exclusiveEnd = nextDayStr(to);
+
+    const checkins = await fetchMovementCheckins(lookbackFromStr, exclusiveEnd);
+    const maxMarkerGapMs = await fetchMarkerMaxGapMs();
+    const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs });
+
+    const [[cutoffRow]] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['campanaArrivalCutoffTime']);
+    const cutoffTime = cutoffRow ? cutoffRow.value : '09:00';
+    const fromDate = new Date(fy, fm - 1, fd);
+
+    const events = [
+      ...closedEvents.filter(e => e.timeIn >= fromDate).map(e => ({ ...e, hasReturn: true })),
+      ...Array.from(openEvents.entries()).map(([employeeId, ev]) => ({
+        employeeId, category: ev.category, timeOut: ev.timeOut, timeIn: null, hasReturn: false
+      }))
+    ].filter(e => e.category === 'CAMPANA' && employeeById.has(e.employeeId));
+
+    const rows = events.map(e => {
+      const emp = employeeById.get(e.employeeId);
+      return {
+        employeeId: e.employeeId,
+        employeeName: emp.Name,
+        badge: emp.Badgenumber,
+        timeOut: e.timeOut,
+        timeIn: e.timeIn,
+        hasReturn: e.hasReturn,
+        dias: movementsCalc.computeCampanaDias(e.timeOut, e.timeIn, cutoffTime)
+      };
+    });
+
+    res.json({ from, to, cutoffTime, rows });
+  } catch (err) {
+    console.error('ERROR fetching campana-range:', err);
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(503).json({
+        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
+      });
+    }
+    res.status(500).json({ error: 'Error en campana-range' });
+  }
+});
+
+// GET/POST /config/campana-cutoff -- horario de corte para computar "cantidad
+// de días" de una salida a Campaña (mismo patrón que /config/personal-leave-limit).
+app.get('/config/campana-cutoff', async (req, res) => {
+  try {
+    const [rows] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['campanaArrivalCutoffTime']);
+    res.json({ campanaArrivalCutoffTime: rows[0] ? rows[0].value : '09:00' });
+  } catch (err) {
+    console.error('ERROR fetching campana cutoff:', err);
+    res.status(500).json({ error: 'Error fetching campana cutoff' });
+  }
+});
+
+app.post('/config/campana-cutoff', async (req, res) => {
+  try {
+    const value = String(req.body.campanaArrivalCutoffTime || '');
+    if (!/^\d{2}:\d{2}(:\d{2})?$/.test(value)) {
+      return res.status(400).json({ error: 'campanaArrivalCutoffTime debe tener formato HH:MM' });
+    }
+    await db.query(
+      `INSERT INTO app_settings (name, value)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
+      ['campanaArrivalCutoffTime', value]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving campana cutoff:', err);
+    res.status(500).json({ error: 'Error saving campana cutoff' });
+  }
+});
+
+// GET/POST /config/marker-max-gap-seconds -- cuánto tiempo, como máximo,
+// queda "vivo" un marcador (badge 3-8) esperando el fichaje real que lo
+// consume. Sin esto, un marcador que nadie consumió enseguida (para otro
+// empleado, o porque lo dejó fichado sin volver) podía terminar
+// atribuyéndosele a cualquiera que fichara minutos después por un motivo
+// no relacionado -- caso real: Perrotta 02/07/2026.
+async function fetchMarkerMaxGapMs() {
+  const [rows] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['markerMaxGapSeconds']);
+  const seconds = rows[0] ? Number(rows[0].value) : 30;
+  return (Number.isFinite(seconds) && seconds > 0 ? seconds : 30) * 1000;
+}
+
+app.get('/config/marker-max-gap-seconds', async (req, res) => {
+  try {
+    const [rows] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['markerMaxGapSeconds']);
+    res.json({ markerMaxGapSeconds: rows[0] ? Number(rows[0].value) : 30 });
+  } catch (err) {
+    console.error('ERROR fetching marker max gap:', err);
+    res.status(500).json({ error: 'Error fetching marker max gap' });
+  }
+});
+
+app.post('/config/marker-max-gap-seconds', async (req, res) => {
+  try {
+    const seconds = Number(req.body.markerMaxGapSeconds);
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 3600) {
+      return res.status(400).json({ error: 'markerMaxGapSeconds debe ser un número entre 1 y 3600' });
+    }
+    await db.query(
+      `INSERT INTO app_settings (name, value)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
+      ['markerMaxGapSeconds', String(seconds)]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving marker max gap:', err);
+    res.status(500).json({ error: 'Error saving marker max gap' });
+  }
+});
+
+// GET/POST /config/overtime-settings -- hora de corte y tope diario para la
+// regla "clasica" de horas extra (2do fichaje post-corte -> ultimo fichaje,
+// topeado), unificada 2026-08-07 entre index.html (donde ya vivia, fija a
+// 13:40/360min) y /attendance-range (que antes usaba una heuristica propia,
+// distinta y sin tope -- ver overtimeCalculations.js para la regla completa).
+async function fetchOvertimeSettings() {
+  const [rows] = await db.query(
+    `SELECT name, value FROM app_settings WHERE name IN ('overtimeCutoffTime', 'overtimeCapMinutes')`
+  );
+  const byName = Object.fromEntries(rows.map(r => [r.name, r.value]));
+  const cutoffTime = byName.overtimeCutoffTime || '13:40';
+  const [cutH, cutM] = cutoffTime.split(':').map(Number);
+  const capMinutes = byName.overtimeCapMinutes ? Number(byName.overtimeCapMinutes) : overtimeCalc.DEFAULT_CAP_MINUTES;
+  return {
+    cutoffTime,
+    cutoffMinutes: (Number.isFinite(cutH) ? cutH : 13) * 60 + (Number.isFinite(cutM) ? cutM : 40),
+    capMinutes: Number.isFinite(capMinutes) && capMinutes > 0 ? capMinutes : overtimeCalc.DEFAULT_CAP_MINUTES
+  };
+}
+
+app.get('/config/overtime-settings', async (req, res) => {
+  try {
+    const settings = await fetchOvertimeSettings();
+    res.json({ overtimeCutoffTime: settings.cutoffTime, overtimeCapMinutes: settings.capMinutes });
+  } catch (err) {
+    console.error('ERROR fetching overtime settings:', err);
+    res.status(500).json({ error: 'Error fetching overtime settings' });
+  }
+});
+
+app.post('/config/overtime-settings', async (req, res) => {
+  try {
+    const { overtimeCutoffTime, overtimeCapMinutes } = req.body;
+    if (overtimeCutoffTime !== undefined) {
+      if (!/^\d{1,2}:\d{2}$/.test(overtimeCutoffTime)) {
+        return res.status(400).json({ error: 'overtimeCutoffTime debe tener formato HH:MM' });
+      }
+      await db.query(
+        `INSERT INTO app_settings (name, value) VALUES ('overtimeCutoffTime', ?)
+         ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
+        [overtimeCutoffTime]
+      );
+    }
+    if (overtimeCapMinutes !== undefined) {
+      const cap = Number(overtimeCapMinutes);
+      if (!Number.isFinite(cap) || cap <= 0 || cap > 1440) {
+        return res.status(400).json({ error: 'overtimeCapMinutes debe ser un número entre 1 y 1440' });
+      }
+      await db.query(
+        `INSERT INTO app_settings (name, value) VALUES ('overtimeCapMinutes', ?)
+         ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
+        [String(cap)]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving overtime settings:', err);
+    res.status(500).json({ error: 'Error saving overtime settings' });
   }
 });
 
@@ -2759,6 +3323,25 @@ app.get('/api/users/cleanup-duplicates', async (req, res) => {
   }
 });
 
+
+/* ===============================
+   MANEJO DE ERRORES GLOBAL
+================================ */
+// Sin esto, un archivo mas grande que el limite de multer (ver `upload`
+// arriba) tiraba el error handler por defecto de Express (HTML, no JSON,
+// y el stack podia terminar expuesto) en vez de una respuesta prolija.
+// Va al final, despues de todas las rutas, como pide Express para un
+// error handler (4 argumentos).
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? 'El archivo supera el tamaño máximo permitido (20MB).'
+      : 'Error al procesar el archivo subido.';
+    return res.status(413).json({ error: message });
+  }
+  console.error('[UNHANDLED ERROR]:', err);
+  res.status(500).json({ error: 'Error interno del servidor' });
+});
 
 /* ===============================
    START

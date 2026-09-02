@@ -10,8 +10,12 @@ module.exports = function (db) {
   router.get('/', requirePermission('employees', 'read'), async (req, res) => {
     try {
       const { includeInactive } = req.query;
+      // Sin fallback a tenant_id IS NULL: la migracion a categorias por
+      // tenant ya esta completa, no debe quedar ninguna fila global -- si
+      // alguna vez aparece una (import/bug), mejor invisible para todos que
+      // visible para todos.
       const effectiveTenantId = resolveTenantId(req);
-      const tenantClause = effectiveTenantId !== null ? ' AND (tenant_id = ? OR tenant_id IS NULL)' : '';
+      const tenantClause = effectiveTenantId !== null ? ' AND tenant_id = ?' : '';
       const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
       const sql = includeInactive === 'true'
         ? `SELECT * FROM employee_categories WHERE 1=1${tenantClause} ORDER BY name ASC`

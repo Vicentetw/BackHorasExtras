@@ -40,6 +40,19 @@ router.get('/', requirePermission('employees', 'read'), async (req, res) => {
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
+    // Busqueda exacta por legajo -- usada por el pre-chequeo de "ya existe"
+    // del import de employees-v2.html/EmployeesPage antes de crear cada fila.
+    // No existia hasta ahora: el query param se mandaba pero el backend lo
+    // ignoraba en silencio, asi que ese chequeo siempre terminaba comparando
+    // contra la primera fila de la pagina por defecto (cualquiera), no
+    // contra el legajo real -- avisaba "ya existe" con el nombre equivocado
+    // en pricticamente cualquier import.
+    const employeeIdParam = req.query.employee_id;
+    if (employeeIdParam !== undefined) {
+      whereClauses.push('employee_id = ?');
+      params.push(employeeIdParam);
+    }
+
     if (status !== undefined) {
       whereClauses.push(status === '1' ? 'activo = 1' : 'activo = 0');
     }

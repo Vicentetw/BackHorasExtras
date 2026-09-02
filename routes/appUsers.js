@@ -22,6 +22,7 @@ module.exports = function (db) {
       id: req.appUser.id,
       email: req.appUser.email,
       tenantId: req.appUser.tenantId,
+      roleId: req.appUser.roleId,
       isSuperadmin: req.appUser.isSuperadmin,
       permissions: Array.from(req.appUser.permissions)
     });
@@ -39,7 +40,7 @@ module.exports = function (db) {
       if (effectiveTenantId === null) {
         // Superadmin sin ?tenantId= explicito: lista todos los app_users
         const [rows] = await db.query(
-          `SELECT id, firebase_uid, email, tenant_id, is_superadmin, is_active, created_at FROM app_users ORDER BY tenant_id, email`
+          `SELECT id, firebase_uid, email, tenant_id, role_id, is_superadmin, is_active, created_at FROM app_users ORDER BY tenant_id, email`
         );
         return res.json({ users: rows });
       }
@@ -64,7 +65,7 @@ module.exports = function (db) {
   // ==========================
   router.post('/', requirePermission('users', 'create'), async (req, res) => {
     try {
-      const { email, permissions } = req.body;
+      const { email, permissions, roleId } = req.body;
       const bodyTenantId = req.body.tenant_id ?? req.body.tenantId;
       const isSuperadminRequested = Boolean(req.body.isSuperadmin) && req.appUser && req.appUser.isSuperadmin;
 
@@ -103,6 +104,9 @@ module.exports = function (db) {
       if (Array.isArray(permissions) && permissions.length) {
         await appUserRepository.setPermissions(result.insertId, permissions, db);
       }
+      if (roleId) {
+        await appUserRepository.setRole(result.insertId, roleId, db);
+      }
 
       let resetLink = null;
       try {
@@ -124,7 +128,7 @@ module.exports = function (db) {
   router.put('/:id', requirePermission('users', 'update'), async (req, res) => {
     try {
       const { id } = req.params;
-      const { permissions, isActive, tenant_id: bodyTenantId, isSuperadmin } = req.body;
+      const { permissions, isActive, tenant_id: bodyTenantId, isSuperadmin, roleId } = req.body;
 
       const [[user]] = await db.query('SELECT id, tenant_id FROM app_users WHERE id = ?', [id]);
       if (!user) {
@@ -137,6 +141,11 @@ module.exports = function (db) {
 
       if (Array.isArray(permissions)) {
         await appUserRepository.setPermissions(id, permissions, db);
+      }
+      // roleId: undefined -> no tocar; null -> volver a "sin rol" (permisos
+      // 100% manuales); numero -> asignar ese rol.
+      if (roleId !== undefined) {
+        await appUserRepository.setRole(id, roleId, db);
       }
 
       const updates = [];

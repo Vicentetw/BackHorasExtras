@@ -393,6 +393,11 @@ function createMotorLaboralAdminRoutes(db) {
           continue;
         }
 
+        if (emp[0].tenant_id && templateTenantId && templateTenantId !== 0 && templateTenantId !== emp[0].tenant_id) {
+          results.skipped.push({ employeeId, reason: 'La plantilla pertenece a otra empresa (tenant_id no coincide con el del empleado)' });
+          continue;
+        }
+
         if (!emp[0].tenant_id && templateTenantId) {
           await db.query('UPDATE employees SET tenant_id = ? WHERE id = ?', [templateTenantId, employeeId]);
         }
@@ -458,6 +463,13 @@ function createMotorLaboralAdminRoutes(db) {
 
       if (!empTenantId) {
         return res.status(400).json({ error: 'No hay tenant_id disponible para esta asignación' });
+      }
+
+      // La plantilla tiene que ser de la misma empresa que el empleado (o
+      // global, tenant_id = 0) -- si no, un empleado terminaba leyendo en
+      // silencio el horario de otra empresa.
+      if (emp[0].tenant_id && templateTenantId && templateTenantId !== 0 && templateTenantId !== emp[0].tenant_id) {
+        return res.status(400).json({ error: 'La plantilla pertenece a otra empresa (tenant_id no coincide con el del empleado)' });
       }
 
       if (!emp[0].tenant_id && templateTenantId) {
