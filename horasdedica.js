@@ -1,4 +1,4 @@
-require('dotenv').config();
+//require('dotenv').config();
 // quitar require('dotenv') si no usas .env local, y configurar variables de entorno en tu hosting
 const express = require('express');
 const cors = require('cors');
