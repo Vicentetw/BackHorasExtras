@@ -1722,6 +1722,33 @@ function formatLocalDate(date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// Igual que formatLocalDate pero con hora -- CRITICO para cualquier campo
+// que se mande tal cual al frontend (timeOut/timeIn de Salidas, etc.): un
+// objeto Date puesto directo en res.json() se serializa con .toISOString(),
+// que SIEMPRE devuelve UTC. Estos Date se construyen con
+// `new Date(str.replace(' ', 'T'))` a partir de un string de MySQL que en
+// realidad es hora LOCAL de Argentina sin marca de zona -- en un proceso
+// cuyo huso horario del sistema operativo sea Argentina (como esta compu),
+// eso da el resultado correcto sin que se note el problema, pero en
+// produccion (Render, contenedor en UTC) el mismo dato se interpreta como
+// si esas horas ya fueran UTC, y el JSON manda una hora que el navegador
+// (en Argentina) vuelve a correr 3 horas para atras al mostrarla -- bug
+// real encontrado en produccion (Salidas mostraba todo 3hs atrasado).
+// getFullYear/getHours/etc. leen los componentes en la MISMA referencia
+// con la que se construyo el Date, sin importar el huso horario del
+// proceso -- por eso formatear a mano en vez de dejar que
+// JSON.stringify llame a toISOString() es la forma segura.
+function formatLocalDateTime(date) {
+  if (!date) return null;
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+}
+
 // Función auxiliar: extraer hora de YYYY-MM-DD HH:mm:ss
 function extractTime(datetimeStr) {
   if (!datetimeStr) return '00:00';
@@ -2663,8 +2690,8 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
         employeeName: emp.Name,
         badge: emp.Badgenumber,
         category: e.category,
-        timeOut: e.timeOut,
-        timeIn: e.timeIn,
+        timeOut: formatLocalDateTime(e.timeOut),
+        timeIn: formatLocalDateTime(e.timeIn),
         hasReturn: e.hasReturn,
         durationMinutes
       });
@@ -2745,14 +2772,15 @@ app.get('/campana-range', requirePermission('attendance', 'read'), async (req, r
 
     const rows = events.map(e => {
       const emp = employeeById.get(e.employeeId);
+      const dias = movementsCalc.computeCampanaDias(e.timeOut, e.timeIn, cutoffTime);
       return {
         employeeId: e.employeeId,
         employeeName: emp.Name,
         badge: emp.Badgenumber,
-        timeOut: e.timeOut,
-        timeIn: e.timeIn,
+        timeOut: formatLocalDateTime(e.timeOut),
+        timeIn: formatLocalDateTime(e.timeIn),
         hasReturn: e.hasReturn,
-        dias: movementsCalc.computeCampanaDias(e.timeOut, e.timeIn, cutoffTime)
+        dias
       };
     });
 
