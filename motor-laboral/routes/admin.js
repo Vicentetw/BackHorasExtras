@@ -109,6 +109,16 @@ function createMotorLaboralAdminRoutes(db) {
   router.delete('/tenants/:id', requireSuperadmin, async (req, res) => {
     try {
       const { id } = req.params;
+      // Antes: DELETE directo, sin chequear nada -- dejaba empleados,
+      // plantillas y asignaciones huerfanas apuntando a un tenant_id
+      // inexistente (sin FK que lo evite en varias de esas tablas).
+      const [[employeeCount]] = await db.query(`SELECT COUNT(*) AS c FROM employees WHERE tenant_id = ?`, [id]);
+      const [[templateCount]] = await db.query(`SELECT COUNT(*) AS c FROM work_schedule_templates WHERE tenant_id = ?`, [id]);
+      if (employeeCount.c > 0 || templateCount.c > 0) {
+        return res.status(409).json({
+          error: `No se puede eliminar: tiene ${employeeCount.c} empleado(s) y ${templateCount.c} plantilla(s) asociadas. Reasignalos primero.`
+        });
+      }
       const [result] = await db.query(`DELETE FROM tenants WHERE id = ?`, [id]);
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {
@@ -208,6 +218,11 @@ function createMotorLaboralAdminRoutes(db) {
           return res.status(404).json({ error: 'Plantilla no encontrada' });
         }
       }
+      // Antes borraba solo la plantilla y dejaba shift_blocks huerfanos con
+      // un template_id que ya no existe -- pese a que el dialogo de
+      // confirmacion del cliente decia "se eliminaran tambien los bloques".
+      // Ahora sí borra los bloques primero, de verdad.
+      await db.query(`DELETE FROM shift_blocks WHERE template_id = ?`, [id]);
       const [result] = await db.query(`DELETE FROM work_schedule_templates WHERE id = ?`, [id]);
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {
@@ -475,6 +490,16 @@ function createMotorLaboralAdminRoutes(db) {
       if (!emp[0].tenant_id && templateTenantId) {
         await db.query('UPDATE employees SET tenant_id = ? WHERE id = ?', [templateTenantId, employeeId]);
       }
+
+      // Mismo criterio que bulk-assign-calendar (antes solo lo hacia esa
+      // ruta, no esta -- inconsistencia real: asignar de a uno dejaba dos
+      // asignaciones "abiertas" (valid_to NULL) superpuestas).
+      await db.query(
+        `UPDATE employee_work_calendars
+         SET valid_to = DATE_SUB(?, INTERVAL 1 DAY)
+         WHERE employee_id = ? AND valid_to IS NULL AND valid_from < ?`,
+        [valid_from, employeeId, valid_from]
+      );
 
       const [result] = await db.query(
         `INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to)

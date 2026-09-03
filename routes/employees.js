@@ -69,6 +69,22 @@ router.get('/', requirePermission('employees', 'read'), async (req, res) => {
       whereClauses.push(excludeValue ? 'exclude_from_report = 1' : 'exclude_from_report = 0');
     }
 
+    // ?inactiveDays=30 -- empleados sin ningun fichaje en los ultimos N dias
+    // (incluye a los que nunca fichajaron). Nuevo (Fase 6.4): filtro para
+    // detectar jubilados/bajas no cargadas formalmente todavia -- alguien
+    // que dejo de fichar hace meses pero sigue "activo" en el sistema.
+    const inactiveDays = req.query.inactiveDays;
+    if (inactiveDays !== undefined && !isNaN(parseInt(inactiveDays, 10))) {
+      whereClauses.push(`NOT EXISTS (
+        SELECT 1 FROM Checkins c
+        LEFT JOIN users u2 ON u2.USERID = c.USERID OR CAST(u2.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR)
+        LEFT JOIN user_employee_map uem2 ON uem2.USERID = u2.USERID
+        WHERE uem2.employee_id = employees.id
+          AND c.CHECKTIME >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      )`);
+      params.push(parseInt(inactiveDays, 10));
+    }
+
     const effectiveTenantId = resolveTenantId(req);
     if (effectiveTenantId !== null) {
       whereClauses.push('tenant_id = ?');
@@ -141,6 +157,7 @@ router.post('/', requirePermission('employees', 'create'), async (req, res) => {
       fecha_alta,
       fecha_baja,
       activo,
+      motivo_baja,
       overtime_authorized,
       exclude_from_report,
       legajo_alt
@@ -189,8 +206,8 @@ router.post('/', requirePermission('employees', 'create'), async (req, res) => {
     // Insertar
     const [result] = await db.query(
       `INSERT INTO employees
-       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, overtime_authorized, exclude_from_report, legajo_alt, tenant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, exclude_from_report, legajo_alt, tenant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         employee_id,
         nombre,
@@ -202,6 +219,7 @@ router.post('/', requirePermission('employees', 'create'), async (req, res) => {
         fecha_alta || null,
         fecha_baja || null,
         activo !== undefined ? activo : true,
+        motivo_baja || null,
         overtime_authorized !== undefined ? (overtime_authorized ? 1 : 0) : 1,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
@@ -241,6 +259,7 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
       fecha_alta,
       fecha_baja,
       activo,
+      motivo_baja,
       overtime_authorized,
       exclude_from_report,
       legajo_alt,
@@ -311,7 +330,7 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
       `UPDATE employees SET
        employee_id = ?, nombre = ?, documento = ?, tipo_documento = ?,
        direccion = ?, zona_id = ?, zona_real_id = ?, fecha_alta = ?,
-       fecha_baja = ?, activo = ?, overtime_authorized = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?,
+       fecha_baja = ?, activo = ?, motivo_baja = ?, overtime_authorized = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?,
        category_id = ?
        WHERE id = ?`,
       [
@@ -325,6 +344,7 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
         fecha_alta || null,
         fecha_baja || null,
         activo !== undefined ? activo : true,
+        motivo_baja || null,
         overtime_authorized !== undefined ? (overtime_authorized ? 1 : 0) : 1,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
