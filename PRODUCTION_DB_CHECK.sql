@@ -86,4 +86,20 @@ SELECT 'tabla role_permissions',
 UNION ALL
 SELECT 'app_users.role_id',
   EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
-    AND TABLE_NAME='app_users' AND COLUMN_NAME='role_id');
+    AND TABLE_NAME='app_users' AND COLUMN_NAME='role_id')
+UNION ALL
+SELECT 'specialusers.direction',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='specialusers' AND COLUMN_NAME='direction')
+UNION ALL
+SELECT 'users.isExcluded',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='users' AND COLUMN_NAME='isExcluded')
+UNION ALL
+SELECT 'holidays.name',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='holidays' AND COLUMN_NAME='name')
+UNION ALL
+SELECT 'holidays.type',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='holidays' AND COLUMN_NAME='type');

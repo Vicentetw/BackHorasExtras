@@ -30,6 +30,9 @@ crea:
 | Si **alguna si y otras no** de ese ultimo grupo | No corras el consolidado (fallaria en la parte que ya existe) -- corre a mano, una por una, solo las sentencias puntuales que correspondan a lo que falta (abrilo, es corto, cada seccion esta numerada y comentada) |
 | `employees.exclude_from_report` | `migrations/add-exclude-from-report.sql` |
 | `employees.categoria` | **No corras nada.** Es un campo de texto libre que quedo obsoleto: el consolidado de arriba va directo al catalogo (`category_id` + tabla `employee_categories`), sin pasar por este paso intermedio. Si tu base ya tiene esta columna de una prueba vieja, no molesta, pero no hace falta crearla de nuevo. |
+| `specialusers.direction` | `migrations/20260903_add_direction_to_specialusers.sql` (sin esta, la pantalla Salidas -- `/movements-range` -- tira 500: "Unknown column 'direction'"; encontrado recien en produccion, nunca habia quedado una migracion guardada para esta columna) |
+| `users.isExcluded` | Correr `node add-exclusion-column.js` (con las mismas variables `MYSQL_ADDON_*` exportadas -- ese script ya se conecta solo, revisa si la columna existe antes de crearla, es seguro correrlo aunque ya exista) |
+| `holidays.name` / `holidays.type` | Correr `node update-holidays-table.js` (mismo criterio: ya revisa antes de tocar nada) |
 
 **Orden importante dentro de lo que falte:** tenants/app_users antes que
 tenant-to-catalogs; tenant-id-to-employees antes que
