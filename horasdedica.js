@@ -155,6 +155,32 @@ function toMySQLDatetime(value) {
   return null;
 }
 
+// GET /config/manual-entries?userId=X&date=Y -- entradas manuales de ese
+// usuario para ese dia (HE manual/Licencia/Omitir). Nuevo (Fase 6.3):
+// hacia falta para poder EDITAR una entrada ya cargada desde Presentismo
+// (antes solo se veian via GET /data, el motor viejo de index.html) --
+// sin esto, el dialogo de Presentismo no tiene forma de saber si ya existe
+// una entrada ese dia, y arriesga crear una duplicada en vez de editarla.
+app.get('/config/manual-entries', requirePermission('attendance', 'read'), async (req, res) => {
+  try {
+    const { userId, date } = req.query;
+    if (!userId || !date) {
+      return res.status(400).json({ error: 'userId y date son requeridos' });
+    }
+    const [rows] = await db.query(
+      `SELECT id, userId, startDatetime, endDatetime, durationMinutes, type, note
+       FROM ManualEntries
+       WHERE userId = ? AND DATE(startDatetime) = ?
+       ORDER BY startDatetime ASC`,
+      [userId, date]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('ERROR fetching manual entries:', err);
+    res.status(500).json({ error: 'Error fetching manual entries' });
+  }
+});
+
 // Endpoint para agregar horas extras manuales o licencias
 app.post('/add/manual', requirePermission('attendance', 'create'), async (req, res) => {
   try {
@@ -1483,6 +1509,77 @@ app.post('/config/personal-leave-limit', requirePermission('schedules', 'update'
   }
 });
 
+// GET /config/particular-exit-limit - Tope mensual de horas de Salidas
+// particulares (minutos). Nuevo (Fase 6.4) -- distinto de
+// personal-leave-limit de arriba, que pese a su nombre en la UI vieja
+// ("salida particular") en realidad solo cubre llegadas tarde
+// justificadas, no las salidas reales de /movements-range.
+app.get('/config/particular-exit-limit', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT value FROM app_settings WHERE name = ?`,
+      ['particularExitMonthlyLimitMinutes']
+    );
+    res.json({ particularExitMonthlyLimitMinutes: rows[0] ? Number(rows[0].value) : 0 });
+  } catch (err) {
+    console.error('ERROR fetching particular exit limit:', err);
+    res.status(500).json({ error: 'Error fetching particular exit limit' });
+  }
+});
+
+app.post('/config/particular-exit-limit', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const minutes = Number(req.body.particularExitMonthlyLimitMinutes);
+    if (!Number.isFinite(minutes) || minutes < 0) {
+      return res.status(400).json({ error: 'particularExitMonthlyLimitMinutes debe ser un número >= 0' });
+    }
+    await db.query(
+      `INSERT INTO app_settings (name, value)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
+      ['particularExitMonthlyLimitMinutes', String(minutes)]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving particular exit limit:', err);
+    res.status(500).json({ error: 'Error saving particular exit limit' });
+  }
+});
+
+// GET /config/overtime-authorization-mode -- 'all' (todos computan HE,
+// ignora employees.overtime_authorized) o 'custom' (respeta el flag por
+// empleado). Nuevo (Fase 6.4) -- la columna overtime_authorized existia
+// desde antes pero nunca se aplicaba en ningun motor; este modo evita que
+// activarlo rompa de golpe el total de HE de una empresa que nunca cargo
+// el flag con cuidado (dato sucio por defecto en vez de una decision real).
+app.get('/config/overtime-authorization-mode', async (req, res) => {
+  try {
+    const [rows] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['overtimeAuthorizationMode']);
+    res.json({ overtimeAuthorizationMode: rows[0] ? rows[0].value : 'all' });
+  } catch (err) {
+    console.error('ERROR fetching overtime authorization mode:', err);
+    res.status(500).json({ error: 'Error fetching overtime authorization mode' });
+  }
+});
+
+app.post('/config/overtime-authorization-mode', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const mode = req.body.overtimeAuthorizationMode;
+    if (mode !== 'all' && mode !== 'custom') {
+      return res.status(400).json({ error: "overtimeAuthorizationMode debe ser 'all' o 'custom'" });
+    }
+    await db.query(
+      `INSERT INTO app_settings (name, value) VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
+      ['overtimeAuthorizationMode', mode]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving overtime authorization mode:', err);
+    res.status(500).json({ error: 'Error saving overtime authorization mode' });
+  }
+});
+
 // GET /config/users-with-exclusions - Listar usuarios con estado de exclusión
 app.get('/config/users-with-exclusions', requirePermission('exclusions', 'read'), async (req, res) => {
   try {
@@ -2362,6 +2459,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     const result = [];
 
     const overtimeSettings = await fetchOvertimeSettings();
+    const [[authModeRow]] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['overtimeAuthorizationMode']);
+    const overtimeAuthorizationMode = authModeRow ? authModeRow.value : 'all';
 
     employees.forEach(u => {
       const employeeId = String(u.employeeId);
@@ -2419,9 +2518,19 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
             cutoffMinutes: overtimeSettings.cutoffMinutes,
             capMinutes: overtimeSettings.capMinutes
           });
-          const computedOvertimeMinutes = overtimeResult ? overtimeResult.cappedMinutes : 0;
-          const dayOvertimeNeedsVerification = !!(overtimeResult && overtimeResult.needsVerification);
-          const dayOvertimeSource = overtimeResult ? overtimeResult.source : null;
+          // "Autorizado a hacer horas extras" (employees.overtime_authorized):
+          // existia la columna desde hacia tiempo pero ningun motor la
+          // aplicaba (confirmado al investigar antes de este cambio) -- un
+          // empleado no autorizado puede seguir fichando despues de su
+          // horario sin que eso le compute como HE automatica. Las entradas
+          // MANUALES (ManualEntries) no se bloquean por esto: son una carga
+          // explicita de un admin, no la deteccion automatica.
+          const isOvertimeAuthorized = overtimeAuthorizationMode !== 'custom'
+            ? true
+            : (u.overtimeAuthorized === undefined || u.overtimeAuthorized === null ? true : !!Number(u.overtimeAuthorized));
+          const computedOvertimeMinutes = (overtimeResult && isOvertimeAuthorized) ? overtimeResult.cappedMinutes : 0;
+          const dayOvertimeNeedsVerification = !!(overtimeResult && isOvertimeAuthorized && overtimeResult.needsVerification);
+          const dayOvertimeSource = (overtimeResult && isOvertimeAuthorized) ? overtimeResult.source : null;
 
           // ManualEntries: 'omit' anula el computo automatico (un fichaje
           // que no corresponde a HE real); 'he'/'licencia' se suman aparte
@@ -2714,7 +2823,25 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
       if (!e.hasReturn) s.openCount += 1;
     });
 
-    res.json({ from, to, category, groupBy, rows, summary: Array.from(summaryMap.values()) });
+    // Tope mensual de horas de salidas particulares -- nuevo (Fase 6.4), no
+    // existia en el sistema viejo (el limite que decia "salida particular"
+    // en dashboard.html en realidad solo cubria llegadas tarde justificadas,
+    // ver personalLeaveMonthlyLimitMinutes). 0 = sin tope configurado.
+    let particularExitLimitMinutes = 0;
+    if (category === 'PARTICULAR') {
+      const [[limitRow]] = await db.query(
+        `SELECT value FROM app_settings WHERE name = ?`,
+        ['particularExitMonthlyLimitMinutes']
+      );
+      particularExitLimitMinutes = limitRow ? Number(limitRow.value) : 0;
+    }
+    const summary = Array.from(summaryMap.values()).map(s => ({
+      ...s,
+      limitMinutes: particularExitLimitMinutes,
+      overLimit: particularExitLimitMinutes > 0 && s.totalMinutes > particularExitLimitMinutes
+    }));
+
+    res.json({ from, to, category, groupBy, rows, summary });
   } catch (err) {
     console.error('ERROR fetching movements-range:', err);
     if (err.code === 'ECONNREFUSED') {
