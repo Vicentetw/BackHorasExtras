@@ -7,6 +7,15 @@ function initFirebaseAdmin() {
   if (initialized) return;
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
   const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  // DEBUG TEMPORAL -- no imprime el contenido, solo si la variable llega y
+  // que tan larga es, para diagnosticar por que initFirebaseAdmin no
+  // inicializa en Render. Sacar despues de confirmar la causa.
+  console.log('[firebase-init-debug]', {
+    hasJson: !!serviceAccountJson,
+    jsonLength: serviceAccountJson ? serviceAccountJson.length : 0,
+    hasPath: !!serviceAccountPath,
+    pathValue: serviceAccountPath || '(unset)',
+  });
   if (!serviceAccountJson && !serviceAccountPath) return;
 
   try {
