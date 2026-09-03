@@ -7,7 +7,7 @@ const path = require('path');
 const mysql = require('mysql2/promise');
 const { parse } = require('csv-parse/sync');
 const { securityMiddlewares, apiKeyWarning } = require('./security');
-const { resolveTenantId, requirePermission } = require('./appUserMiddleware');
+const { resolveTenantId, requirePermission, requireSuperadmin } = require('./appUserMiddleware');
 const importRoutes = require('./routes/import.routes');
 const matchingRoutes = require('./routes/matching.routes');
 const employeesRoutes = require('./routes/employees');
@@ -156,7 +156,7 @@ function toMySQLDatetime(value) {
 }
 
 // Endpoint para agregar horas extras manuales o licencias
-app.post('/add/manual', async (req, res) => {
+app.post('/add/manual', requirePermission('attendance', 'create'), async (req, res) => {
   try {
     const {
       userId,
@@ -225,9 +225,59 @@ app.post('/add/manual', async (req, res) => {
 });
 
 /* ===============================
+   UPDATE MANUAL ENTRY (editar HE manual/licencia ya cargada)
+================================ */
+// No existia antes (solo alta/baja) -- lo pide Fase 6: "es necesario poder
+// editar" una entrada manual, no solo borrarla y volver a cargarla.
+app.put('/update/manual/:id', requirePermission('attendance', 'update'), async (req, res) => {
+  const { id } = req.params;
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ error: 'ID inválido' });
+  }
+
+  try {
+    const { startDatetime, endDatetime, durationMinutes, type, note } = req.body;
+
+    if (
+      !startDatetime ||
+      !endDatetime ||
+      typeof durationMinutes !== 'number' ||
+      !type
+    ) {
+      return res.status(400).json({ error: 'Datos inválidos o incompletos' });
+    }
+
+    const start = toMySQLDatetime(startDatetime);
+    const end = toMySQLDatetime(endDatetime);
+    if (!start || !end) {
+      return res.status(400).json({ error: 'Formato de fecha inválido' });
+    }
+    if (type !== 'omit' && end <= start) {
+      return res.status(400).json({ error: 'endDatetime debe ser mayor que startDatetime' });
+    }
+
+    const [result] = await db.query(
+      `UPDATE ManualEntries
+       SET startDatetime = ?, endDatetime = ?, durationMinutes = ?, type = ?, note = ?
+       WHERE id = ?`,
+      [start, end, Math.round(durationMinutes), type, note || null, Number(id)]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Registro manual no encontrado' });
+    }
+
+    res.json({ ok: true, id: Number(id) });
+  } catch (err) {
+    console.error('UPDATE MANUAL ERROR:', err);
+    res.status(500).json({ error: 'Error al editar registro manual' });
+  }
+});
+
+/* ===============================
    DELETE MANUAL ENTRY, ONLY MANUAL
 ================================ */
-app.delete('/delete/manual/:id', async (req, res) => {
+app.delete('/delete/manual/:id', requirePermission('attendance', 'delete'), async (req, res) => {
   const { id } = req.params;
 
   if (!id || isNaN(id)) {
@@ -255,7 +305,7 @@ app.delete('/delete/manual/:id', async (req, res) => {
 /* ===============================
    IMPORT CHECKINS
 ================================ */
-app.post('/import/checkins', upload.single('file'), async (req, res) => {
+app.post('/import/checkins', requirePermission('attendance', 'create'), upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Archivo CSV requerido' });
@@ -378,7 +428,7 @@ app.post('/import/checkins', upload.single('file'), async (req, res) => {
 /* ===============================
    IMPORT USERS
 ================================ */
-app.post('/import/users', upload.single('file'), async (req, res) => {
+app.post('/import/users', requirePermission('attendance', 'create'), upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Archivo CSV requerido' });
@@ -455,8 +505,9 @@ app.get('/', (req, res) => {
   res.send('Backend OK');
 });
 
-// DELETE ALL CHECKINS (¡cuidado, borra todo!)
-app.delete('/clear/checkins', async (req, res) => {
+// DELETE ALL CHECKINS (¡cuidado, borra todo!) -- irreversible y afecta a
+// TODOS los tenants de una, no un permiso de modulo: solo superadmin.
+app.delete('/clear/checkins', requireSuperadmin, async (req, res) => {
   try {
     const [result] = await db.query(`DELETE FROM Checkins`);
     res.json({
@@ -2155,6 +2206,30 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       }
     });
 
+    // ManualEntries (HE manual, Licencia, Omitir -- cargadas desde "Importar
+    // Fichajes y Usuarios" / Presentismo, Fase 6): antes solo se sumaban en
+    // GET /data (motor separado, sin horarios/feriados/exclusiones), invisible
+    // en este endpoint. 'he'/'licencia' suman minutos al total del dia
+    // (aunque no haya fichajes ese dia -- una licencia manual no requiere
+    // marcar reloj). 'omit' anula el computo automatico de ESE dia (para
+    // cuando un fichaje real no corresponde a horas extra) sin afectar el
+    // estado de presentismo (llegada tarde/ausente siguen igual).
+    const [manualEntryRows] = await db.query(`
+      SELECT userId, DATE(startDatetime) AS date, durationMinutes, type
+      FROM ManualEntries
+      WHERE startDatetime >= ? AND startDatetime < ?
+    `, [from, exclusiveEndDateStr]);
+    const manualMinutesByUserDate = new Map();
+    const manualOmitByUserDate = new Set();
+    manualEntryRows.forEach(m => {
+      const key = `${m.userId}_${m.date}`;
+      if (m.type === 'omit') {
+        manualOmitByUserDate.add(key);
+      } else {
+        manualMinutesByUserDate.set(key, (manualMinutesByUserDate.get(key) || 0) + Number(m.durationMinutes));
+      }
+    });
+
     const getScheduleEntry = (date, assignedScheduleMap, tenantScheduleMap, employeeId, tenantId) => {
       if (assignedScheduleMap && assignedScheduleMap[employeeId]) {
         return assignedScheduleMap[employeeId];
@@ -2280,8 +2355,14 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         const isWorkDay = holidayOverride !== null ? holidayOverride : schedule.isWorkDay == 1;
 
         if (!isWorkDay) {
+          // Una HE manual puede cargarse para un dia no laborable (trabajo
+          // en un fin de semana, por ejemplo) -- se respeta igual, no se
+          // pierde solo porque el dia no era de horario normal.
+          const manualKeyNonWork = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesNonWork = manualKeyNonWork ? (manualMinutesByUserDate.get(manualKeyNonWork) || 0) : 0;
+          if (manualMinutesNonWork > 0) overtimeMinutes += manualMinutesNonWork;
           if (days) {
-            days.push({ date, status: 'NonWorkDay' });
+            days.push({ date, status: 'NonWorkDay', overtimeManualMinutes: manualMinutesNonWork });
           }
           return;
         }
@@ -2311,9 +2392,17 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
             cutoffMinutes: overtimeSettings.cutoffMinutes,
             capMinutes: overtimeSettings.capMinutes
           });
-          const dayOvertimeMinutes = overtimeResult ? overtimeResult.cappedMinutes : 0;
+          const computedOvertimeMinutes = overtimeResult ? overtimeResult.cappedMinutes : 0;
           const dayOvertimeNeedsVerification = !!(overtimeResult && overtimeResult.needsVerification);
           const dayOvertimeSource = overtimeResult ? overtimeResult.source : null;
+
+          // ManualEntries: 'omit' anula el computo automatico (un fichaje
+          // que no corresponde a HE real); 'he'/'licencia' se suman aparte
+          // -- no se pisan entre si, un dia puede tener las dos cosas.
+          const manualKey = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesThisDay = manualKey ? (manualMinutesByUserDate.get(manualKey) || 0) : 0;
+          const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
+          const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
 
           const { isLate, lateMinutes, justified: lateJustifiedThisDay } = attendanceCalc.resolveLateJustification({
             firstMinutes: firstMin,
@@ -2345,6 +2434,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               overtimeMinutes: dayOvertimeMinutes,
               overtimeNeedsVerification: dayOvertimeNeedsVerification,
               overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
+              overtimeManualMinutes: manualMinutesThisDay,
+              overtimeManuallyOmitted: isManuallyOmitted,
               lateMinutes: isLate ? lateMinutes : 0,
               reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
               eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,
@@ -2354,19 +2445,28 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           }
         } else if (exclusion || leaveEvent) {
           excused++;
+          // Una licencia manual (HE/Licencia) puede caer en un dia sin
+          // fichajes -- no requiere marcar reloj, se suma igual.
+          const manualKeyExcused = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesExcused = manualKeyExcused ? (manualMinutesByUserDate.get(manualKeyExcused) || 0) : 0;
+          if (manualMinutesExcused > 0) overtimeMinutes += manualMinutesExcused;
           if (days) {
             days.push({
               date,
               status: 'Excused',
               reason: leaveEvent ? (leaveEvent.observaciones || null) : (exclusion.reason || null),
               eventTypeCode: leaveEvent ? (leaveEvent.eventTypeCode || null) : (exclusion.eventTypeCode || null),
-              eventTypeDescripcion: leaveEvent ? (leaveEvent.eventTypeDescripcion || null) : (exclusion.eventTypeDescripcion || null)
+              eventTypeDescripcion: leaveEvent ? (leaveEvent.eventTypeDescripcion || null) : (exclusion.eventTypeDescripcion || null),
+              overtimeManualMinutes: manualMinutesExcused
             });
           }
         } else {
           absent++;
+          const manualKeyAbsent = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesAbsent = manualKeyAbsent ? (manualMinutesByUserDate.get(manualKeyAbsent) || 0) : 0;
+          if (manualMinutesAbsent > 0) overtimeMinutes += manualMinutesAbsent;
           if (days) {
-            days.push({ date, status: 'Absent' });
+            days.push({ date, status: 'Absent', overtimeManualMinutes: manualMinutesAbsent });
           }
         }
       });

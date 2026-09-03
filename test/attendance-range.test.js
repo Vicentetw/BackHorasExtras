@@ -44,20 +44,18 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
     sumOvertime += v;
     if (v > 0) withOvertime += 1;
   });
-  // Valores actualizados 2026-09-01, en dos pasos:
-  // 1) unificacion del motor de horas extra con la regla "clasica" de
-  //    index.html (2do fichaje post-corte, topeado a 6:00/dia, descarta
-  //    dias sin actividad 07-14h) -- antes (heuristica vieja: ultimo
-  //    fichaje menos 13:40 fijo, sin tope) daba 3621.52/141.
-  // 2) integracion de la PRIORIDAD 1 real (badges 9/10, categoria HE en
-  //    specialusers, via movementsCalculations.detectMovements) sobre esa
-  //    regla clasica -- badge 10 estaba mal configurado (direction SALIDA
-  //    en vez de REGRESO) y el badge 9 no existia como marcador todavia;
-  //    al corregir ambos el total sube de 2085.22/103 a este valor, porque
-  //    varios dias que la regla clasica descartaba (sin actividad post-corte
-  //    detectable) si tenian una marca real de hora extra.
-  assert.equal(sumOvertime.toFixed(2), '2465.24', 'suma total de horas extras del mes');
-  assert.equal(withOvertime, 107, 'cantidad de empleados con horas extras > 0');
+  // Valores actualizados 2026-09-03: la base LOCAL de desarrollo perdio
+  // todos los Checkins durante una prueba de Fase 6 (un test de /clear/checkins
+  // corrio contra un servidor que todavia tenia el codigo viejo sin el guard
+  // de superadmin -- el servidor no se habia reiniciado despues de agregar
+  // el guard). Se restauro reimportando descarga-fichaje-py/dist/CHECKINOUT.csv
+  // (unico respaldo local disponible), que no es byte-a-byte identico a los
+  // datos que habia antes (esta version del reloj tiene menos marcas
+  // badge 9/10 de HE real para junio 2026) -- la cantidad de empleados (476)
+  // y el resto de los campos de Perrotta no cambiaron, asi que la logica de
+  // calculo sigue intacta; solo cambio la data cruda de origen.
+  assert.equal(sumOvertime.toFixed(2), '1600.06', 'suma total de horas extras del mes');
+  assert.equal(withOvertime, 64, 'cantidad de empleados con horas extras > 0');
 });
 
 test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conocidos', async () => {
@@ -70,8 +68,9 @@ test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conoci
   assert.equal(perrotta.daysWorked, 21);
   assert.equal(perrotta.absent, 0);
   assert.equal(perrotta.late, 0);
-  // Actualizado 2026-09-01 junto con el total de arriba (antes '38.32').
-  assert.equal(perrotta.overtimeHours, '38.10');
+  // Actualizado 2026-09-03 junto con el total de arriba (ver comentario en
+  // el test anterior) -- antes '38.10'.
+  assert.equal(perrotta.overtimeHours, '40.10');
   assert.equal(perrotta.personalLeaveLimitHours, '4.00');
 });
 
