@@ -159,6 +159,7 @@ router.post('/', requirePermission('employees', 'create'), async (req, res) => {
       activo,
       motivo_baja,
       overtime_authorized,
+      payroll_regime,
       exclude_from_report,
       legajo_alt
     } = req.body;
@@ -206,8 +207,8 @@ router.post('/', requirePermission('employees', 'create'), async (req, res) => {
     // Insertar
     const [result] = await db.query(
       `INSERT INTO employees
-       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, exclude_from_report, legajo_alt, tenant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, payroll_regime, exclude_from_report, legajo_alt, tenant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         employee_id,
         nombre,
@@ -221,6 +222,7 @@ router.post('/', requirePermission('employees', 'create'), async (req, res) => {
         activo !== undefined ? activo : true,
         motivo_baja || null,
         overtime_authorized !== undefined ? (overtime_authorized ? 1 : 0) : 1,
+        payroll_regime || null,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
         effectiveTenantId
@@ -261,6 +263,7 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
       activo,
       motivo_baja,
       overtime_authorized,
+      payroll_regime,
       exclude_from_report,
       legajo_alt,
       tenant_id,
@@ -330,7 +333,7 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
       `UPDATE employees SET
        employee_id = ?, nombre = ?, documento = ?, tipo_documento = ?,
        direccion = ?, zona_id = ?, zona_real_id = ?, fecha_alta = ?,
-       fecha_baja = ?, activo = ?, motivo_baja = ?, overtime_authorized = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?,
+       fecha_baja = ?, activo = ?, motivo_baja = ?, overtime_authorized = ?, payroll_regime = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?,
        category_id = ?
        WHERE id = ?`,
       [
@@ -346,6 +349,7 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
         activo !== undefined ? activo : true,
         motivo_baja || null,
         overtime_authorized !== undefined ? (overtime_authorized ? 1 : 0) : 1,
+        payroll_regime || null,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
         effectiveTenantId,

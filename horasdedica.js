@@ -1546,6 +1546,80 @@ app.post('/config/particular-exit-limit', requirePermission('schedules', 'update
   }
 });
 
+const PAYROLL_REGIMES = ['weekly', 'biweekly', 'monthly'];
+
+// GET/POST /config/payroll-regime -- Fase 7: que regimen de pago (semanal/
+// quincenal/mensual) usa una empresa por defecto, para la pantalla "Horas
+// Extra por Regimen". tenant_id NULL = default global (mismo patron que
+// vacation_scale/holidays). El regimen puntual de UN empleado se guarda
+// aparte, en employees.payroll_regime (NULL = hereda este default).
+app.get('/config/payroll-regime', async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const [rows] = await db.query(
+      `SELECT tenant_id, regime, week_start_day, biweekly_cut_day1, biweekly_cut_day2
+       FROM payroll_regime_settings
+       WHERE tenant_id <=> ? OR tenant_id IS NULL
+       ORDER BY (tenant_id IS NULL) ASC
+       LIMIT 1`,
+      [tenantId]
+    );
+    const row = rows[0] || { regime: 'monthly', week_start_day: 1, biweekly_cut_day1: 1, biweekly_cut_day2: 16 };
+    res.json({
+      regime: row.regime,
+      weekStartDay: row.week_start_day,
+      biweeklyCutDay1: row.biweekly_cut_day1,
+      biweeklyCutDay2: row.biweekly_cut_day2,
+      isGlobalDefault: row.tenant_id == null,
+    });
+  } catch (err) {
+    console.error('ERROR fetching payroll regime config:', err);
+    res.status(500).json({ error: 'Error fetching payroll regime config' });
+  }
+});
+
+app.post('/config/payroll-regime', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const { regime, weekStartDay, biweeklyCutDay1, biweeklyCutDay2 } = req.body;
+
+    if (!PAYROLL_REGIMES.includes(regime)) {
+      return res.status(400).json({ error: `regime debe ser uno de: ${PAYROLL_REGIMES.join(', ')}` });
+    }
+    const week = Number(weekStartDay);
+    if (!Number.isInteger(week) || week < 0 || week > 6) {
+      return res.status(400).json({ error: 'weekStartDay debe ser un entero entre 0 (domingo) y 6 (sábado)' });
+    }
+    const cut1 = Number(biweeklyCutDay1);
+    const cut2 = Number(biweeklyCutDay2);
+    if (!Number.isInteger(cut1) || !Number.isInteger(cut2) || cut1 < 1 || cut1 > 28 || cut2 < 1 || cut2 > 28 || cut1 >= cut2) {
+      return res.status(400).json({ error: 'Los días de corte quincenal deben ser 1-28, con el primero menor al segundo (ej. 1 y 16)' });
+    }
+
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(`DELETE FROM payroll_regime_settings WHERE tenant_id <=> ?`, [tenantId]);
+      await conn.query(
+        `INSERT INTO payroll_regime_settings (tenant_id, regime, week_start_day, biweekly_cut_day1, biweekly_cut_day2)
+         VALUES (?, ?, ?, ?, ?)`,
+        [tenantId, regime, week, cut1, cut2]
+      );
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving payroll regime config:', err);
+    res.status(500).json({ error: 'Error saving payroll regime config' });
+  }
+});
+
 // GET /config/overtime-authorization-mode -- 'all' (todos computan HE,
 // ignora employees.overtime_authorized) o 'custom' (respeta el flag por
 // empleado). Nuevo (Fase 6.4) -- la columna overtime_authorized existia

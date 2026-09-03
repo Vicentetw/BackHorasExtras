@@ -39,7 +39,12 @@ function buildScheduleFromBlocks(template, blocks, date) {
 }
 
 async function findAssignedScheduleMapForDate(date, employeeIds, db) {
-  if (!employeeIds || !employeeIds.length) return {};
+  // Defensa extra ademas del filtro que ya hace el caller (attendanceService.js):
+  // un solo NaN colado en la lista (empleado con employee_id nulo/vacio) hace
+  // que MySQL tire "Unknown column 'NaN'" al armar el IN (?) y tumba el motor
+  // diario ENTERO para todos los empleados, no solo para el que tiene el dato malo.
+  const safeIds = (employeeIds || []).filter((id) => typeof id === 'number' && !Number.isNaN(id));
+  if (!safeIds.length) return {};
 
   const [rows] = await db.query(
     `SELECT e.employee_id AS employeeId, t.*
@@ -51,7 +56,7 @@ async function findAssignedScheduleMapForDate(date, employeeIds, db) {
        AND (c.valid_to IS NULL OR c.valid_to >= ?)
        AND t.active = 1
      ORDER BY e.employee_id ASC, c.valid_from DESC`,
-    [employeeIds, date, date]
+    [safeIds, date, date]
   );
 
   const map = {};
