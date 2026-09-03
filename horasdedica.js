@@ -1,4 +1,4 @@
-//require('dotenv').config();
+require('dotenv').config();
 // quitar require('dotenv') si no usas .env local, y configurar variables de entorno en tu hosting
 const express = require('express');
 const cors = require('cors');
@@ -55,9 +55,10 @@ app.use('/api/employees', employeesRoutes);
 // Limite de tamano para subida de archivos (CSV/Excel de fichajes) -- sin
 // esto, multer aceptaba cualquier tamano en memoria (memoryStorage), un
 // vector facil de agotamiento de memoria con un solo archivo gigante.
-// 20MB es generoso para un CSV/XLSX de fichajes de un mes, sin dejarlo sin
-// limite.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+// 50MB para que coincida con lo que ya le promete al usuario
+// index.html/informe-horas-extras.html (CHECKINOUT.csv puede acumular
+// muchos meses de fichajes) -- estaba en 20MB, mas chico que ese mensaje.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 /* ===============================
    MySQL – Clever Cloud
