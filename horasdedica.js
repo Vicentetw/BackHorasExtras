@@ -2659,6 +2659,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               firstCheckin: extractTime(first),
               lastCheckin: extractTime(last),
               totalCheckins: checks.length,
+              // Lista completa de fichajes del dia -- necesaria para poder
+              // revisar un caso raro (ej. 4 marcas pero solo 5 minutos de
+              // HE) sin tener que ir a buscarlo aparte. Mismo campo que ya
+              // expone /api/labor-engine/attendance/:date (motor diario).
+              checkins: checks.map(c => extractTime(c)),
               overtimeMinutes: dayOvertimeMinutes,
               overtimeStartTime: dayOvertimeStartTime,
               overtimeNeedsVerification: dayOvertimeNeedsVerification,
