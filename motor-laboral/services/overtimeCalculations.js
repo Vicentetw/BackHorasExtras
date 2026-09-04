@@ -103,7 +103,12 @@ function resolveDailyOvertime(heInterval, fallbackChecks, options = {}) {
         minutes,
         cappedMinutes: Math.min(minutes, capMinutes),
         overCap: minutes > capMinutes,
-        needsVerification: false
+        needsVerification: false,
+        // start/end -- igual que ya devuelve el fallback de abajo, para que
+        // el listado "Horas Extra por Regimen" pueda mostrar la hora exacta
+        // en la que empezo la HE sin importar de que fuente salio.
+        start: heInterval.timeOut,
+        end: heInterval.timeIn
       };
     }
   }

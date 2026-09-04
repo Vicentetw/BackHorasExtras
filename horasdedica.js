@@ -1920,6 +1920,18 @@ function formatLocalDateTime(date) {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 }
 
+// Hora local "HH:mm" a partir de un Date -- mismo criterio que
+// formatLocalDateTime (getHours/getMinutes locales, nunca toISOString) para
+// no repetir el bug de 3hs de diferencia en produccion. Usado para exponer
+// la hora exacta de inicio/fin de HE (resolveDailyOvertime devuelve Date,
+// no un string de la base).
+function formatLocalTime(date) {
+  if (!date) return null;
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mi}`;
+}
+
 // Función auxiliar: extraer hora de YYYY-MM-DD HH:mm:ss
 function extractTime(datetimeStr) {
   if (!datetimeStr) return '00:00';
@@ -2613,6 +2625,12 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const manualMinutesThisDay = manualKey ? (manualMinutesByUserDate.get(manualKey) || 0) : 0;
           const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
           const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
+          // Hora exacta en la que arranca la HE automatica (marker o
+          // fallback) -- Fase 7, "Horas Extra por Regimen" necesita mostrar
+          // entrada / inicio HE / salida por dia, no solo la duracion.
+          const dayOvertimeStartTime = (overtimeResult && isOvertimeAuthorized && !isManuallyOmitted)
+            ? formatLocalTime(overtimeResult.start)
+            : null;
 
           const { isLate, lateMinutes, justified: lateJustifiedThisDay } = attendanceCalc.resolveLateJustification({
             firstMinutes: firstMin,
@@ -2642,6 +2660,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               lastCheckin: extractTime(last),
               totalCheckins: checks.length,
               overtimeMinutes: dayOvertimeMinutes,
+              overtimeStartTime: dayOvertimeStartTime,
               overtimeNeedsVerification: dayOvertimeNeedsVerification,
               overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
               overtimeManualMinutes: manualMinutesThisDay,
@@ -2681,6 +2700,15 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         }
       });
 
+      // isOvertimeAuthorized se recalcula por dia dentro del forEach de
+      // arriba (puede variar si el modo es 'custom' y el flag del empleado
+      // cambio a mitad del rango, aunque en la practica es constante por
+      // empleado) -- para el filtro "solo autorizados" del listado alcanza
+      // con el mismo criterio que ya usa el modo 'all'/'custom' de arriba.
+      const rowIsOvertimeAuthorized = overtimeAuthorizationMode !== 'custom'
+        ? true
+        : (u.overtimeAuthorized === undefined || u.overtimeAuthorized === null ? true : !!Number(u.overtimeAuthorized));
+
       const row = {
         userId: u.USERID,
         employeeId: u.employeeId,
@@ -2694,7 +2722,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         overtimeHours: (overtimeMinutes / 60).toFixed(2),
         personalLeaveHours: (personalLeaveMinutes / 60).toFixed(2),
         personalLeaveLimitHours: (personalLeaveLimitMinutesForRange / 60).toFixed(2),
-        overLimitHours: (Math.max(0, personalLeaveMinutes - personalLeaveLimitMinutesForRange) / 60).toFixed(2)
+        overLimitHours: (Math.max(0, personalLeaveMinutes - personalLeaveLimitMinutesForRange) / 60).toFixed(2),
+        overtimeAuthorized: rowIsOvertimeAuthorized
       };
       if (days) {
         row.days = days;
