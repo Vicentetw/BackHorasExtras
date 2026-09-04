@@ -52,7 +52,11 @@ function computeDailyOvertime(checkins, options = {}) {
   });
   if (!huboActividadNormal) return null;
 
-  const postCutoff = sorted.filter(d => minutesSinceMidnight(d) >= cutoffMinutes);
+  // "posterior a" el corte, estricto -- una marca justo EN el corte todavia
+  // es el fichaje normal del corte, no el reingreso a hora extra (pedido
+  // explicito del usuario: el ingreso a HE tiene que ser posterior a la
+  // hora configurada, no igual).
+  const postCutoff = sorted.filter(d => minutesSinceMidnight(d) > cutoffMinutes);
   const lastCheckin = sorted[sorted.length - 1];
 
   let start;
@@ -61,8 +65,17 @@ function computeDailyOvertime(checkins, options = {}) {
     start = postCutoff[1];
     needsVerification = false;
   } else {
+    // Antes esto usaba un "14:00" fijo (heredado de js/app.js) sin importar
+    // que corte estuviera configurado -- si alguien configuraba, por
+    // ejemplo, las 13:38, el fallback igual asumia 14:00 e ignoraba lo
+    // configurado. Ahora el fallback ES la hora de corte configurada (sigue
+    // siendo una suposicion que necesita needsVerification=true, pero
+    // arranca del corte real en vez de un horario hardcodeado que no
+    // respeta la configuracion).
     const base = sorted[0];
-    start = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 14, 0, 0);
+    const cutoffHour = Math.floor(cutoffMinutes / 60);
+    const cutoffMin = Math.floor(cutoffMinutes % 60);
+    start = new Date(base.getFullYear(), base.getMonth(), base.getDate(), cutoffHour, cutoffMin, 0);
     needsVerification = true;
   }
 
