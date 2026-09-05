@@ -62,10 +62,15 @@ function computeInvoiceAmount({ plan, employeeCount, billingPeriod }) {
 // fechas -- tiene su propio current_period_end (signup + 1 mes) y, al
 // vencer, sigue EXACTAMENTE el mismo camino que 'active': grace (el mes de
 // margen para pagar, "al mes vencido") y despues readonly si no se pago.
-// Solo 'canceled' (corte MANUAL, lo pone un superadmin a mano) ignora las
-// fechas -- por eso sigue siendo el unico return temprano.
+//
+// Dos estados SI ignoran las fechas por completo, para siempre, hasta que
+// un superadmin los cambie a mano -- pedido del usuario 2026-09-06:
+//   'canceled': la empresa dejo de pagar del todo -- bloquea TODO.
+//   'free': la empresa nunca se factura (uso interno/particular, ej. AVP)
+//           -- nunca se bloquea, aunque el campo current_period_end tenga
+//           cualquier fecha (o ninguna) cargada.
 function resolveEffectiveStatus({ status, currentPeriodEnd, gracePeriodDays, defaultGraceDays, today }) {
-  if (status === 'canceled') return status;
+  if (status === 'canceled' || status === 'free') return status;
   if (!currentPeriodEnd) return status; // sin fecha de vencimiento cargada -- se respeta el status guardado
 
   const graceDays = gracePeriodDays != null ? Number(gracePeriodDays) : (defaultGraceDays != null ? Number(defaultGraceDays) : DEFAULT_GRACE_DAYS);

@@ -135,11 +135,19 @@ module.exports = function (db) {
     }
   });
 
+  // Estados que un superadmin puede elegir a mano. 'grace'/'readonly' NO
+  // estan acá a proposito -- esos son resultados CALCULADOS a partir de
+  // las fechas (ver resolveEffectiveStatus), no algo que se elija.
+  const MANUAL_STATUSES = ['trial', 'active', 'canceled', 'free'];
+
   router.post('/subscriptions/:tenantId', requireSuperadmin, async (req, res) => {
     try {
       const { tenantId } = req.params;
       const { plan_id, billing_period, status } = req.body;
       if (!plan_id) return res.status(400).json({ error: 'plan_id es requerido' });
+      if (status !== undefined && !MANUAL_STATUSES.includes(status)) {
+        return res.status(400).json({ error: `status debe ser uno de: ${MANUAL_STATUSES.join(', ')}` });
+      }
       const plan = await billingRepo.getPlanById(plan_id, db);
       if (!plan) return res.status(404).json({ error: 'Plan no encontrado' });
 

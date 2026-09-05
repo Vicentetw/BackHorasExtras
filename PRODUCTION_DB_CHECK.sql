@@ -152,4 +152,8 @@ SELECT 'tabla tenant_subscriptions',
 UNION ALL
 SELECT 'tabla payment_records',
   EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()
-    AND TABLE_NAME='payment_records');
+    AND TABLE_NAME='payment_records')
+UNION ALL
+SELECT 'tenant_subscriptions.status incluye "free" (Fase 9b)',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='tenant_subscriptions' AND COLUMN_NAME='status' AND COLUMN_TYPE LIKE '%''free''%');
