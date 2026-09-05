@@ -2,13 +2,14 @@ const express = require('express');
 const { requireSuperadmin, resolveTenantId } = require('../appUserMiddleware');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
 const { computeInvoiceAmount, resolveEffectiveStatus, DEFAULT_GRACE_DAYS } = require('../motor-laboral/services/billingCalculations');
+const mp = require('../motor-laboral/services/mercadopagoService');
 
 // Fase 9 (venta): planes configurables (base + precio por empleado) +
-// suscripcion por empresa + pagos manuales (MercadoPago se suma despues,
-// mismo esquema -- payment_records.method ya distingue el origen). Config
-// de precios = platform-level, no de una empresa en particular, por eso
-// requireSuperadmin en casi todo salvo lo que un admin de empresa necesita
-// ver sobre SU PROPIA suscripcion (estado, proximo vencimiento, historial).
+// suscripcion por empresa + pagos manuales o por MercadoPago
+// (payment_records.method distingue el origen). Config de precios =
+// platform-level, no de una empresa en particular, por eso requireSuperadmin
+// en casi todo salvo lo que un admin de empresa necesita ver sobre SU
+// PROPIA suscripcion (estado, proximo vencimiento, historial).
 module.exports = function (db) {
   const router = express.Router();
 
@@ -239,6 +240,61 @@ module.exports = function (db) {
     } catch (err) {
       console.error('ERROR fetching payment history:', err);
       res.status(500).json({ error: 'Error al leer el historial de pagos' });
+    }
+  });
+
+  // Genera un link de checkout de MercadoPago para que el cliente autorice
+  // el cobro recurrente (Suscripciones -- Preapproval API). El monto va en
+  // pesos (o lo que se mande) a mano, no se auto-calcula desde el USD de
+  // referencia -- el tipo de cambio lo controla el superadmin (ver la
+  // conversacion sobre precios en USD vs cobro en ARS). El link resultante
+  // (initPoint) se le manda al cliente por fuera del sistema (email,
+  // whatsapp, etc.) -- todavia no hay un flujo de autoservicio.
+  router.post('/subscriptions/:tenantId/mercadopago-checkout', requireSuperadmin, async (req, res) => {
+    try {
+      const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+      if (!accessToken) {
+        return res.status(503).json({ error: 'MERCADOPAGO_ACCESS_TOKEN no está configurado en el servidor' });
+      }
+
+      const { tenantId } = req.params;
+      const { payer_email, monthly_amount, currency_id } = req.body;
+      if (!payer_email || !monthly_amount) {
+        return res.status(400).json({ error: 'payer_email y monthly_amount son requeridos' });
+      }
+
+      const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
+      if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada -- asignale un plan primero' });
+
+      const tenantName = subscription.tenant_name || `Empresa #${tenantId}`;
+      const backUrl = process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/facturacion` : undefined;
+
+      const checkout = await mp.createSubscriptionCheckout({
+        accessToken,
+        tenantId,
+        tenantName,
+        payerEmail: payer_email,
+        monthlyAmountUsd: monthly_amount, // nombre del parametro heredado, es el monto en la moneda que se mande (ver currency_id)
+        currencyId: currency_id || 'ARS',
+        backUrl
+      });
+
+      await billingRepo.upsertSubscription(tenantId, {
+        plan_id: subscription.plan_id,
+        billing_period: subscription.billing_period,
+        status: subscription.status,
+        payment_method: 'mercadopago',
+        mercadopago_subscription_id: checkout.id,
+        current_period_start: subscription.current_period_start,
+        current_period_end: subscription.current_period_end,
+        grace_period_days: subscription.grace_period_days,
+        grace_message: subscription.grace_message
+      }, db);
+
+      res.status(201).json({ ok: true, mercadopagoSubscriptionId: checkout.id, checkoutUrl: checkout.initPoint });
+    } catch (err) {
+      console.error('ERROR creating MercadoPago checkout:', err);
+      res.status(502).json({ error: err.message || 'Error al crear el checkout de MercadoPago', mpResponse: err.mpResponse });
     }
   });
 

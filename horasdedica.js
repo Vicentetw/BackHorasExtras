@@ -27,8 +27,27 @@ const attendanceCalc = require('./motor-laboral/services/attendanceCalculations'
 const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
+const mercadopagoWebhookRoutes = require('./routes/mercadopagoWebhook');
 
 const app = express();
+
+// Fase 9b: el webhook de MercadoPago se registra ANTES de express.json()
+// y de securityMiddlewares() a proposito:
+//   1) necesita el body CRUDO (sin parsear) para poder validar la firma
+//      x-signature -- si express.json() corriera primero, req.body ya
+//      vendria convertido a objeto.
+//   2) MercadoPago nunca manda nuestro x-api-key ni un token de Firebase
+//      (no es un usuario logueado, es el servidor de MercadoPago) -- si
+//      pasara por securityMiddlewares() como cualquier otra ruta,
+//      authMiddleware lo rechazaria con 401 antes de llegar a esta ruta.
+//      La autenticacion de un webhook es la firma HMAC (ver
+//      mercadopagoWebhook.js), no las mismas credenciales que un usuario.
+// Usa su PROPIO pool (require('./db'), el modulo compartido) en vez del
+// pool local `db` de mas abajo -- ese todavia no existe a esta altura del
+// archivo (se crea despues de varias rutas), y esta ruta necesita quedar
+// registrada antes que nada mas.
+app.use('/webhooks/mercadopago', mercadopagoWebhookRoutes(require('./db')));
+
 app.use(express.json({ limit: '1mb' }));
 securityMiddlewares(app, cors);
 apiKeyWarning();
