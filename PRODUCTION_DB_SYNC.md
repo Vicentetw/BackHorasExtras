@@ -44,8 +44,18 @@ nueva y conviene dejarla al final para no perderla de vista).
 
 ## Paso 2b -- lo que se agrego 2026-09-03 a 09-06 (turno partido, seguridad multi-tenant, facturacion)
 
-Mismo criterio que arriba: correlas en este orden, salteando la que ya
-exista segun el Paso 1.
+**Atajo recomendado**: `migrations/20260906c_PRODUCCION_consolidado.sql`
+junta las 6 migraciones de esta seccion en un solo archivo, con un
+chequeo antes de cada `ALTER TABLE` para que sea seguro pegarlo entero de
+una sola vez aunque alguna pieza ya estuviera aplicada (probado corriendo
+el archivo dos veces seguidas contra una base que ya tenia todo -- la
+segunda vez no rompe nada). Requiere que lo de ANTES de esta fecha (Paso
+1/2 de arriba) ya este aplicado -- varias tablas de aca tienen FOREIGN
+KEY contra `tenants`.
+
+Si preferís correrlas una por una en vez del consolidado, mismo criterio
+que arriba -- correlas en este orden, salteando la que ya exista segun el
+Paso 1.
 
 | Si no existe... | Correr |
 |---|---|
