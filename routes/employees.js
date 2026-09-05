@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
+const { resolveTenantId, requirePermission, requireActiveSubscription } = require('../appUserMiddleware');
 
 // NOTE: Automatic employee->user sync has been disabled.
 // Matching now requires explicit approval via the matching dashboard.
@@ -143,7 +143,12 @@ router.get('/', requirePermission('employees', 'read'), async (req, res) => {
  * ➕ CREAR EMPLEADO
  * POST /api/employees
  */
-router.post('/', requirePermission('employees', 'create'), async (req, res) => {
+// Fase 9 (venta): si a la empresa se le vencio el periodo de gracia de
+// pago, no puede cargar empleados nuevos (ni uno por uno ni por Excel --
+// el import de Empleados de Angular hace un POST por fila a esta misma
+// ruta, no hay un endpoint de "confirmar lote" en uso hoy). Leer/editar/
+// borrar los que ya tiene siguen andando -- el bloqueo es solo crecer.
+router.post('/', requirePermission('employees', 'create'), requireActiveSubscription, async (req, res) => {
   try {
     const {
       employee_id,

@@ -1,5 +1,7 @@
 const db = require('./db');
 const appUserRepository = require('./motor-laboral/repositories/appUserRepository');
+const billingRepository = require('./motor-laboral/repositories/billingRepository');
+const { resolveEffectiveStatus, isWriteBlocked, isFullyBlocked, DEFAULT_GRACE_DAYS } = require('./motor-laboral/services/billingCalculations');
 
 // Modulos y acciones disponibles (documentacion, no una lista cerrada en
 // codigo -- un permiso es simplemente el string "modulo:accion"):
@@ -27,6 +29,36 @@ async function appUserMiddleware(req, res, next) {
     if (!appUser || !appUser.isActive) {
       return res.status(403).json({ error: 'Usuario no habilitado en el sistema' });
     }
+
+    // Fase 9 (venta): corte manual de acceso -- a diferencia de 'readonly'
+    // (automatico, solo bloquea alta de fichajes/empleados, ver
+    // requireActiveSubscription mas abajo), 'canceled' lo pone a mano un
+    // superadmin cuando la empresa dejo de pagar del todo, y bloquea
+    // CUALQUIER ruta para esa empresa, no solo las de alta. Superadmin
+    // nunca se bloquea (es el operador de la plataforma). Fail-open si
+    // falla la consulta -- no se corta a nadie por un error nuestro.
+    if (!appUser.isSuperadmin && appUser.tenantId != null) {
+      try {
+        const subscription = await billingRepository.getSubscriptionByTenant(appUser.tenantId, db);
+        if (subscription) {
+          const effectiveStatus = resolveEffectiveStatus({
+            status: subscription.status,
+            currentPeriodEnd: subscription.current_period_end,
+            gracePeriodDays: subscription.grace_period_days,
+            defaultGraceDays: DEFAULT_GRACE_DAYS
+          });
+          if (isFullyBlocked(effectiveStatus)) {
+            return res.status(403).json({
+              error: subscription.grace_message || 'El acceso de tu empresa fue suspendido. Contactá a soporte para regularizar la situación.',
+              effectiveStatus
+            });
+          }
+        }
+      } catch (billingErr) {
+        console.error('appUserMiddleware billing check error:', billingErr);
+      }
+    }
+
     req.appUser = appUser;
     return next();
   } catch (err) {
@@ -90,10 +122,48 @@ function resolveTenantId(req) {
   return req.appUser.tenantId;
 }
 
+// Fase 9 (venta): bloquea escritura (POST/PUT/DELETE) si a la empresa se le
+// vencio el periodo de gracia de pago ('readonly'). Un tenant SIN fila en
+// tenant_subscriptions (empresas que ya usaban el sistema antes de que
+// existiera este esquema) no se bloquea -- se trata como sin restriccion
+// todavia, para no tumbar de golpe a nadie. Superadmin nunca se bloquea
+// (es el operador de la plataforma, no un cliente). Fail-open a proposito:
+// si falla la consulta de suscripcion, no se bloquea a nadie por un error
+// nuestro -- mejor de mas tiempo de gracia que un cliente al dia trabado
+// por un bug de este chequeo.
+function requireActiveSubscription(req, res, next) {
+  if (!req.appUser || req.appUser.isSuperadmin) return next();
+  const tenantId = req.appUser.tenantId;
+  if (tenantId == null) return next();
+
+  billingRepository.getSubscriptionByTenant(tenantId, db)
+    .then((subscription) => {
+      if (!subscription) return next();
+      const effectiveStatus = resolveEffectiveStatus({
+        status: subscription.status,
+        currentPeriodEnd: subscription.current_period_end,
+        gracePeriodDays: subscription.grace_period_days,
+        defaultGraceDays: DEFAULT_GRACE_DAYS
+      });
+      if (isWriteBlocked(effectiveStatus)) {
+        return res.status(402).json({
+          error: subscription.grace_message || 'Tu suscripción está vencida. Regularizá el pago para poder seguir cargando datos.',
+          effectiveStatus
+        });
+      }
+      return next();
+    })
+    .catch((err) => {
+      console.error('requireActiveSubscription error:', err);
+      return next();
+    });
+}
+
 module.exports = {
   appUserMiddleware,
   requirePermission,
   requireSuperadmin,
+  requireActiveSubscription,
   tenantFilter,
   resolveTenantId
 };

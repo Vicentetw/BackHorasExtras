@@ -2,7 +2,8 @@ const { getLocalDayOfWeek } = require('../repositories/scheduleRepository');
 const {
   getEntranceReference,
   resolveToleranceMinutes,
-  resolveLateJustification
+  resolveLateJustification,
+  evaluateMultiVisitDay
 } = require('./attendanceCalculations');
 
 function isDefaultWorkday(dateString) {
@@ -87,20 +88,38 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
     const entranceRef = getEntranceReference(userSchedule);
     const entranceMinutes = Number(entranceRef.split(':')[0]) * 60 + Number(entranceRef.split(':')[1]);
     const toleranceMin = resolveToleranceMinutes(userSchedule);
+    // Turno partido / visitas multiples (profesor, medico que va varias
+    // veces por dia): solo cuando la plantilla tiene MAS de un bloque WORK
+    // para este dia -- el caso de un solo bloque sigue exactamente igual que
+    // siempre (ver evaluateMultiVisitDay en attendanceCalculations.js).
+    const workBlocks = (userSchedule.blocks || []).filter(b => b.block_type === 'WORK');
 
     let status = 'Absent';
+    let multiVisit = null;
     if (checkinsSorted.length > 0) {
-      const firstTime = firstCheckin.split(' ')[1].substring(0, 5);
-      const [h, m] = firstTime.split(':').map(Number);
-      const firstMinutes = h * 60 + m;
+      if (workBlocks.length > 1) {
+        multiVisit = evaluateMultiVisitDay({
+          workBlocks,
+          checkinsSorted,
+          toleranceMinutes: toleranceMin,
+          exclusion
+        });
+        status = multiVisit.isPartial
+          ? 'PartialAbsence'
+          : (!multiVisit.isLate ? 'OnTime' : (multiVisit.justified ? 'LateJustified' : 'Late'));
+      } else {
+        const firstTime = firstCheckin.split(' ')[1].substring(0, 5);
+        const [h, m] = firstTime.split(':').map(Number);
+        const firstMinutes = h * 60 + m;
 
-      const { isLate, justified } = resolveLateJustification({
-        firstMinutes,
-        entranceMinutes,
-        toleranceMinutes: toleranceMin,
-        exclusion
-      });
-      status = !isLate ? 'OnTime' : (justified ? 'LateJustified' : 'Late');
+        const { isLate, justified } = resolveLateJustification({
+          firstMinutes,
+          entranceMinutes,
+          toleranceMinutes: toleranceMin,
+          exclusion
+        });
+        status = !isLate ? 'OnTime' : (justified ? 'LateJustified' : 'Late');
+      }
       if (isHoliday) {
         status = 'WorkedHoliday';
       }
@@ -123,6 +142,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       lastCheckin,
       totalCheckins: checkinsSorted.length,
       checkins: checkinsSorted,
+      visits: multiVisit ? multiVisit.visits : null,
       exclusion: exclusion || null,
       assigned: !!(assignedScheduleMap && assignedScheduleMap[u.employeeId]),
       schedule: {
@@ -146,6 +166,10 @@ function buildSummary(attendance) {
     lateJustified: attendance.filter(a => a.status === 'LateJustified').length,
     absent: attendance.filter(a => a.status === 'Absent').length,
     excused: attendance.filter(a => a.status === 'Excused').length,
+    // Solo aplica a empleados con turno partido (mas de un bloque WORK por
+    // dia) -- faltó marcar entrada y/o salida de alguna de sus visitas, pero
+    // no de todas (si no, ya cuenta como Absent). Ver evaluateMultiVisitDay.
+    partialAbsence: attendance.filter(a => a.status === 'PartialAbsence').length,
     total: attendance.length
   };
 }

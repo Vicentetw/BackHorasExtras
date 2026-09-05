@@ -42,6 +42,19 @@ le agrega `tenant_id` a `employee_categories`); todo lo anterior antes
 que `20260902_add_roles.sql` (no depende de las otras, pero es la mas
 nueva y conviene dejarla al final para no perderla de vista).
 
+## Paso 2b -- lo que se agrego 2026-09-03 a 09-06 (turno partido, seguridad multi-tenant, facturacion)
+
+Mismo criterio que arriba: correlas en este orden, salteando la que ya
+exista segun el Paso 1.
+
+| Si no existe... | Correr |
+|---|---|
+| `tabla vacation_scale` / `employee_leave_balances.expiration_date` / `employee_events.balance_year` / `employees.motivo_baja` | `migrations/20260903_overtime_auth_and_vacation_scale.sql` (si `employees.overtime_authorized` NO existe tampoco, la columna se agrega a mano primero: `ALTER TABLE employees ADD COLUMN overtime_authorized TINYINT(1) NOT NULL DEFAULT 1;`, ver el comentario al principio de ese archivo) |
+| `employees.payroll_regime` / `tabla payroll_regime_settings` | `migrations/20260903_payroll_regime.sql` |
+| `app_settings.tenant_id` | `migrations/20260905_tenant_scope_app_settings.sql` -- **OJO**: este archivo hace `ALTER TABLE app_settings DROP PRIMARY KEY` sobre una tabla que en produccion puede tener datos reales cargados (corte de HE, tope de campana, etc.) -- no borra filas, solo cambia la clave, pero corré un `SELECT * FROM app_settings` antes para tener el valor de referencia a mano por las dudas. |
+| `app_settings.tenant_key` | `migrations/20260905b_app_settings_unique_key.sql` (DESPUES del anterior, no antes -- necesita `tenant_id` ya creado). Este archivo primero DEDUPLICA filas repetidas antes de agregar la UNIQUE KEY -- si en producción llegó a pasar lo mismo que en local (dos filas globales para el mismo nombre, ver el comentario adentro del archivo), el DELETE de la migración se encarga solo. |
+| `tabla plans` / `tabla tenant_subscriptions` / `tabla payment_records` | `migrations/20260906_billing_plans.sql` -- siembra un plan default (USD 18 base + USD 2,20/empleado, piso 5) automáticamente, no hace falta cargarlo a mano. Ninguna empresa existente queda con una suscripción asignada todavía (eso es a proposito -- no se bloquea a nadie solo por correr esta migración; asignar plan y activar se hace aparte, por `POST /api/billing/subscriptions/:tenantId`). |
+
 ## Paso 3 -- verificar
 
 Volve a correr `PRODUCTION_DB_CHECK.sql`: todas las filas deberian dar

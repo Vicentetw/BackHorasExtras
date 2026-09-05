@@ -102,4 +102,54 @@ SELECT 'holidays.name',
 UNION ALL
 SELECT 'holidays.type',
   EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
-    AND TABLE_NAME='holidays' AND COLUMN_NAME='type');
+    AND TABLE_NAME='holidays' AND COLUMN_NAME='type')
+UNION ALL
+-- Fase 6.4/7/8/9 (sesion 2026-09-03 a 09-06) -- agregado despues del corte
+-- original de este archivo, ver PRODUCTION_DB_SYNC.md para el orden.
+SELECT 'tabla vacation_scale',
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='vacation_scale')
+UNION ALL
+SELECT 'employee_leave_balances.expiration_date',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='employee_leave_balances' AND COLUMN_NAME='expiration_date')
+UNION ALL
+SELECT 'employee_events.balance_year',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='employee_events' AND COLUMN_NAME='balance_year')
+UNION ALL
+SELECT 'employees.motivo_baja',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='employees' AND COLUMN_NAME='motivo_baja')
+UNION ALL
+SELECT 'employees.overtime_authorized',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='employees' AND COLUMN_NAME='overtime_authorized')
+UNION ALL
+SELECT 'employees.payroll_regime',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='employees' AND COLUMN_NAME='payroll_regime')
+UNION ALL
+SELECT 'tabla payroll_regime_settings',
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='payroll_regime_settings')
+UNION ALL
+SELECT 'app_settings.tenant_id (Fase 8, seguridad multi-tenant)',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='app_settings' AND COLUMN_NAME='tenant_id')
+UNION ALL
+SELECT 'app_settings.tenant_key (UNIQUE KEY real, evita duplicados)',
+  EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='app_settings' AND COLUMN_NAME='tenant_key')
+UNION ALL
+SELECT 'tabla plans (Fase 9, facturacion)',
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='plans')
+UNION ALL
+SELECT 'tabla tenant_subscriptions',
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='tenant_subscriptions')
+UNION ALL
+SELECT 'tabla payment_records',
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()
+    AND TABLE_NAME='payment_records');

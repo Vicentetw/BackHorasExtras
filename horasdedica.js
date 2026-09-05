@@ -7,7 +7,7 @@ const path = require('path');
 const mysql = require('mysql2/promise');
 const { parse } = require('csv-parse/sync');
 const { securityMiddlewares, apiKeyWarning } = require('./security');
-const { resolveTenantId, requirePermission, requireSuperadmin } = require('./appUserMiddleware');
+const { resolveTenantId, requirePermission, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
 const importRoutes = require('./routes/import.routes');
 const matchingRoutes = require('./routes/matching.routes');
 const employeesRoutes = require('./routes/employees');
@@ -18,6 +18,7 @@ const leaveBalancesRoutes = require('./routes/leaveBalances');
 const employeeCategoriesRoutes = require('./routes/employeeCategories');
 const appUsersRoutes = require('./routes/appUsers');
 const rolesRoutes = require('./routes/roles');
+const billingRoutes = require('./routes/billing');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
 const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
 const userRepository = require('./motor-laboral/repositories/userRepository');
@@ -25,6 +26,7 @@ const employeeEventRepository = require('./motor-laboral/repositories/employeeEv
 const attendanceCalc = require('./motor-laboral/services/attendanceCalculations');
 const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
+const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -83,6 +85,7 @@ app.use('/api/leave-balances', leaveBalancesRoutes(db));
 app.use('/api/employee-categories', employeeCategoriesRoutes(db));
 app.use('/api/app-users', appUsersRoutes(db));
 app.use('/api/roles', rolesRoutes(db));
+app.use('/api/billing', billingRoutes(db));
 app.use('/api/labor-engine', createMotorLaboralRoutes(db));
 
 function parseCheckTime(value) {
@@ -331,7 +334,10 @@ app.delete('/delete/manual/:id', requirePermission('attendance', 'delete'), asyn
 /* ===============================
    IMPORT CHECKINS
 ================================ */
-app.post('/import/checkins', requirePermission('attendance', 'create'), upload.single('file'), async (req, res) => {
+// Fase 9 (venta): si a la empresa se le vencio el periodo de gracia de
+// pago, no puede subir fichajes nuevos. Ver empleados nuevos (no puede
+// crearlos) en routes/employees.js -- mismo criterio.
+app.post('/import/checkins', requirePermission('attendance', 'create'), requireActiveSubscription, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Archivo CSV requerido' });
@@ -554,7 +560,12 @@ app.delete('/clear/checkins', requireSuperadmin, async (req, res) => {
 /* ===============================
    DEBUG STATUS - Diagnóstico
 ================================ */
-app.get('/debug/status', async (req, res) => {
+// Sin ningun guard antes -- devuelve una muestra cruda de `users`/`Checkins`
+// de TODAS las empresas, sin filtro de tenant. Cualquier app_user logueado
+// (de cualquier empresa, cualquier rol) podia ver datos de otra empresa.
+// Es una herramienta de diagnostico interno, no algo que use ningun cliente
+// -- queda restringida a superadmin.
+app.get('/debug/status', requireSuperadmin, async (req, res) => {
   try {
     const [[usersCount]] = await db.query('SELECT COUNT(*) as count FROM users');
     const [[checkinsCount]] = await db.query('SELECT COUNT(*) as count FROM Checkins');
@@ -609,7 +620,11 @@ app.get('/users', requirePermission('exclusions', 'read'), async (req, res) => {
    DIAGNÓSTICO PARA DEBUG (Endpoint Temporal)
 ================================ */
 
-app.get('/diagnostic/:badge/:month', async (req, res) => {
+// Sin ningun guard antes, y sin filtro de tenant en las consultas internas
+// -- cualquier app_user logueado podia diagnosticar el legajo de OTRA
+// empresa. Herramienta de soporte interno, no algo que use ningun cliente
+// -- queda restringida a superadmin.
+app.get('/diagnostic/:badge/:month', requireSuperadmin, async (req, res) => {
   try {
     const { badge, month } = req.params;
     
@@ -1146,25 +1161,17 @@ app.post('/config/schedule', requirePermission('schedules', 'update'), async (re
 
 app.get('/config/theme', async (req, res) => {
   try {
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS app_settings (
-        name VARCHAR(100) PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      )
-    `);
-
-    const [rows] = await db.query(
-      `SELECT value FROM app_settings WHERE name = ?`,
-      ['theme']
-    );
-
-    res.json({ theme: rows[0]?.value || '' });
+    // Antes era una unica fila GLOBAL (ver appSettingsRepository.js) -- el
+    // tema que alguien tocaba en la Empresa A se lo cambiaba a la Empresa B
+    // tambien. Ahora cada empresa tiene su propia fila (o hereda el
+    // default global si todavia no eligio ninguna).
+    const value = await getAppSetting('theme', resolveTenantId(req), db);
+    res.json({ theme: value || '' });
   } catch (err) {
     console.error('ERROR fetching theme:', err);
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
+      return res.status(503).json({
+        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
       });
     }
     res.status(500).json({ error: 'Error fetching theme' });
@@ -1174,28 +1181,13 @@ app.get('/config/theme', async (req, res) => {
 app.post('/config/theme', async (req, res) => {
   try {
     const { theme = '' } = req.body;
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS app_settings (
-        name VARCHAR(100) PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      )
-    `);
-
-    await db.query(
-      `INSERT INTO app_settings (name, value)
-       VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
-      ['theme', theme]
-    );
-
+    await setAppSetting('theme', resolveTenantId(req), theme, db);
     res.json({ ok: true });
   } catch (err) {
     console.error('ERROR saving theme:', err);
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
+      return res.status(503).json({
+        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
       });
     }
     res.status(500).json({ error: 'Error saving theme' });
@@ -1473,13 +1465,10 @@ app.delete('/config/user-exclusions/:id', requirePermission('exclusions', 'delet
 });
 
 // GET /config/personal-leave-limit - Límite mensual de salida particular (minutos)
-app.get('/config/personal-leave-limit', async (req, res) => {
+app.get('/config/personal-leave-limit', requirePermission('schedules', 'read'), async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT value FROM app_settings WHERE name = ?`,
-      ['personalLeaveMonthlyLimitMinutes']
-    );
-    res.json({ personalLeaveMonthlyLimitMinutes: rows[0] ? Number(rows[0].value) : 0 });
+    const value = await getAppSetting('personalLeaveMonthlyLimitMinutes', resolveTenantId(req), db);
+    res.json({ personalLeaveMonthlyLimitMinutes: value ? Number(value) : 0 });
   } catch (err) {
     console.error('ERROR fetching personal leave limit:', err);
     res.status(500).json({ error: 'Error fetching personal leave limit' });
@@ -1489,19 +1478,14 @@ app.get('/config/personal-leave-limit', async (req, res) => {
 // POST /config/personal-leave-limit
 // Mismo hallazgo que /config/schedule: sin esto, cualquier app_user
 // logueado podia cambiar el limite mensual de licencia personal de toda
-// la empresa.
+// la empresa. Ahora ademas queda scoped por tenant (ver appSettingsRepository.js).
 app.post('/config/personal-leave-limit', requirePermission('schedules', 'update'), async (req, res) => {
   try {
     const minutes = Number(req.body.personalLeaveMonthlyLimitMinutes);
     if (!Number.isFinite(minutes) || minutes < 0) {
       return res.status(400).json({ error: 'personalLeaveMonthlyLimitMinutes debe ser un número >= 0' });
     }
-    await db.query(
-      `INSERT INTO app_settings (name, value)
-       VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
-      ['personalLeaveMonthlyLimitMinutes', String(minutes)]
-    );
+    await setAppSetting('personalLeaveMonthlyLimitMinutes', resolveTenantId(req), String(minutes), db);
     res.json({ ok: true });
   } catch (err) {
     console.error('ERROR saving personal leave limit:', err);
@@ -1514,13 +1498,10 @@ app.post('/config/personal-leave-limit', requirePermission('schedules', 'update'
 // personal-leave-limit de arriba, que pese a su nombre en la UI vieja
 // ("salida particular") en realidad solo cubre llegadas tarde
 // justificadas, no las salidas reales de /movements-range.
-app.get('/config/particular-exit-limit', async (req, res) => {
+app.get('/config/particular-exit-limit', requirePermission('schedules', 'read'), async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT value FROM app_settings WHERE name = ?`,
-      ['particularExitMonthlyLimitMinutes']
-    );
-    res.json({ particularExitMonthlyLimitMinutes: rows[0] ? Number(rows[0].value) : 0 });
+    const value = await getAppSetting('particularExitMonthlyLimitMinutes', resolveTenantId(req), db);
+    res.json({ particularExitMonthlyLimitMinutes: value ? Number(value) : 0 });
   } catch (err) {
     console.error('ERROR fetching particular exit limit:', err);
     res.status(500).json({ error: 'Error fetching particular exit limit' });
@@ -1533,12 +1514,7 @@ app.post('/config/particular-exit-limit', requirePermission('schedules', 'update
     if (!Number.isFinite(minutes) || minutes < 0) {
       return res.status(400).json({ error: 'particularExitMonthlyLimitMinutes debe ser un número >= 0' });
     }
-    await db.query(
-      `INSERT INTO app_settings (name, value)
-       VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
-      ['particularExitMonthlyLimitMinutes', String(minutes)]
-    );
+    await setAppSetting('particularExitMonthlyLimitMinutes', resolveTenantId(req), String(minutes), db);
     res.json({ ok: true });
   } catch (err) {
     console.error('ERROR saving particular exit limit:', err);
@@ -1626,10 +1602,10 @@ app.post('/config/payroll-regime', requirePermission('schedules', 'update'), asy
 // desde antes pero nunca se aplicaba en ningun motor; este modo evita que
 // activarlo rompa de golpe el total de HE de una empresa que nunca cargo
 // el flag con cuidado (dato sucio por defecto en vez de una decision real).
-app.get('/config/overtime-authorization-mode', async (req, res) => {
+app.get('/config/overtime-authorization-mode', requirePermission('schedules', 'read'), async (req, res) => {
   try {
-    const [rows] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['overtimeAuthorizationMode']);
-    res.json({ overtimeAuthorizationMode: rows[0] ? rows[0].value : 'all' });
+    const value = await getAppSetting('overtimeAuthorizationMode', resolveTenantId(req), db);
+    res.json({ overtimeAuthorizationMode: value || 'all' });
   } catch (err) {
     console.error('ERROR fetching overtime authorization mode:', err);
     res.status(500).json({ error: 'Error fetching overtime authorization mode' });
@@ -1642,11 +1618,7 @@ app.post('/config/overtime-authorization-mode', requirePermission('schedules', '
     if (mode !== 'all' && mode !== 'custom') {
       return res.status(400).json({ error: "overtimeAuthorizationMode debe ser 'all' o 'custom'" });
     }
-    await db.query(
-      `INSERT INTO app_settings (name, value) VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
-      ['overtimeAuthorizationMode', mode]
-    );
+    await setAppSetting('overtimeAuthorizationMode', resolveTenantId(req), mode, db);
     res.json({ ok: true });
   } catch (err) {
     console.error('ERROR saving overtime authorization mode:', err);
@@ -2249,16 +2221,14 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       return res.json({ from, to, data: [] });
     }
 
-    const [[personalLeaveLimitRow]] = await db.query(
-      `SELECT value FROM app_settings WHERE name = ?`,
-      ['personalLeaveMonthlyLimitMinutes']
-    );
-    const personalLeaveMonthlyLimitMinutes = personalLeaveLimitRow ? Number(personalLeaveLimitRow.value) : 0;
+    const tenantId = resolveTenantId(req);
+    const personalLeaveLimitValue = await getAppSetting('personalLeaveMonthlyLimitMinutes', tenantId, db);
+    const personalLeaveMonthlyLimitMinutes = personalLeaveLimitValue ? Number(personalLeaveLimitValue) : 0;
     const distinctMonthsInRange = new Set(dateRange.map(d => d.slice(0, 7))).size;
     const personalLeaveLimitMinutesForRange = personalLeaveMonthlyLimitMinutes * distinctMonthsInRange;
 
     const detailEmployeeId = req.query.employeeId ? String(req.query.employeeId) : null;
-    let employees = await userRepository.findAll({ tenantId: resolveTenantId(req) }, db);
+    let employees = await userRepository.findAll({ tenantId }, db);
     if (detailEmployeeId) {
       employees = employees.filter(e => String(e.employeeId) === detailEmployeeId);
     }
@@ -2504,7 +2474,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     const possibleJustificationByEmployeeDate = new Map();
     if (detailEmployeeId) {
       const particularMarkerMap = await fetchMarkerMap('PARTICULAR');
-      const maxMarkerGapMs = await fetchMarkerMaxGapMs();
+      const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
       for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
         const { orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs });
         orphanReturns
@@ -2530,7 +2500,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     {
       const heMarkerMap = await fetchMarkerMap('HE');
       if (Object.keys(heMarkerMap).length > 0) {
-        const maxMarkerGapMs = await fetchMarkerMaxGapMs();
+        const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
         for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
           const { closedEvents } = movementsCalc.detectMovements(dayCheckins, heMarkerMap, { maxMarkerGapMs });
           closedEvents
@@ -2544,9 +2514,9 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
 
     const result = [];
 
-    const overtimeSettings = await fetchOvertimeSettings();
-    const [[authModeRow]] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['overtimeAuthorizationMode']);
-    const overtimeAuthorizationMode = authModeRow ? authModeRow.value : 'all';
+    const overtimeSettings = await fetchOvertimeSettings(tenantId);
+    const authModeValue = await getAppSetting('overtimeAuthorizationMode', tenantId, db);
+    const overtimeAuthorizationMode = authModeValue || 'all';
 
     employees.forEach(u => {
       const employeeId = String(u.employeeId);
@@ -2556,6 +2526,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       let late = 0;
       let lateJustified = 0;
       let excused = 0;
+      let partialAbsence = 0;
       let overtimeMinutes = 0;
       let personalLeaveMinutes = 0;
       const days = detailEmployeeId ? [] : null;
@@ -2592,6 +2563,19 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const entranceRef = attendanceCalc.getEntranceReference(schedule);
           const entranceMin = timeToMinutes(entranceRef);
           const tolerance = attendanceCalc.resolveToleranceMinutes(schedule);
+          // Turno partido / visitas multiples (profesor, medico que va varias
+          // veces por dia): solo cuando la plantilla tiene MAS de un bloque
+          // WORK para este dia -- un solo bloque sigue exactamente igual que
+          // siempre. Ver evaluateMultiVisitDay en attendanceCalculations.js.
+          const workBlocks = (schedule.blocks || []).filter(b => b.block_type === 'WORK');
+          const multiVisit = workBlocks.length > 1
+            ? attendanceCalc.evaluateMultiVisitDay({
+                workBlocks,
+                checkinsSorted: checks,
+                toleranceMinutes: tolerance,
+                exclusion
+              })
+            : null;
           // Misma jerarquia que index.html/js/app.js: PRIORIDAD 1, badge
           // 9/10 real (heIntervalsByEmployeeDate, ya detectado arriba con
           // detectMovements) -- si ese dia no tiene marca real, PRIORIDAD 2,
@@ -2632,14 +2616,19 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
             ? formatLocalTime(overtimeResult.start)
             : null;
 
-          const { isLate, lateMinutes, justified: lateJustifiedThisDay } = attendanceCalc.resolveLateJustification({
-            firstMinutes: firstMin,
-            entranceMinutes: entranceMin,
-            toleranceMinutes: tolerance,
-            exclusion
-          });
+          const { isLate, lateMinutes, justified: lateJustifiedThisDay } = multiVisit
+            ? { isLate: multiVisit.isLate, lateMinutes: multiVisit.lateMinutes, justified: multiVisit.justified }
+            : attendanceCalc.resolveLateJustification({
+                firstMinutes: firstMin,
+                entranceMinutes: entranceMin,
+                toleranceMinutes: tolerance,
+                exclusion
+              });
+          const isPartialAbsence = !!(multiVisit && multiVisit.isPartial);
 
-          if (isLate && lateJustifiedThisDay) {
+          if (isPartialAbsence) {
+            partialAbsence++;
+          } else if (isLate && lateJustifiedThisDay) {
             lateJustified++;
             personalLeaveMinutes += lateMinutes;
           } else if (isLate) {
@@ -2649,7 +2638,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
 
           if (days) {
             let status = 'OnTime';
-            if (isLate) status = lateJustifiedThisDay ? 'LateJustified' : 'Late';
+            if (isPartialAbsence) status = 'PartialAbsence';
+            else if (isLate) status = lateJustifiedThisDay ? 'LateJustified' : 'Late';
             const possibleJustification = isLate && !lateJustifiedThisDay
               ? possibleJustificationByEmployeeDate.get(`${date}|${extractTime(first)}`) || null
               : null;
@@ -2664,6 +2654,9 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               // HE) sin tener que ir a buscarlo aparte. Mismo campo que ya
               // expone /api/labor-engine/attendance/:date (motor diario).
               checkins: checks.map(c => extractTime(c)),
+              // Detalle por visita (entrada/salida de cada bloque WORK) solo
+              // en dias de turno partido -- null en el caso normal.
+              visits: multiVisit ? multiVisit.visits : null,
               overtimeMinutes: dayOvertimeMinutes,
               overtimeStartTime: dayOvertimeStartTime,
               overtimeNeedsVerification: dayOvertimeNeedsVerification,
@@ -2724,6 +2717,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         late,
         lateJustified,
         excused,
+        partialAbsence,
         overtimeHours: (overtimeMinutes / 60).toFixed(2),
         personalLeaveHours: (personalLeaveMinutes / 60).toFixed(2),
         personalLeaveLimitHours: (personalLeaveLimitMinutesForRange / 60).toFixed(2),
@@ -2838,7 +2832,7 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
     // salida sin regreso el 3 quedaba "abierta" hasta el próximo fichaje
     // cualquiera de ese empleado, aunque fuera del día 6 (bug real, visto con
     // datos de julio 2026: daba 65hs de "salida particular").
-    const maxMarkerGapMs = await fetchMarkerMaxGapMs();
+    const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
     const checkinsByDate = new Map();
     checkins.forEach(c => {
       const dateStr = formatLocalDate(c.checktime);
@@ -2937,11 +2931,8 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
     // ver personalLeaveMonthlyLimitMinutes). 0 = sin tope configurado.
     let particularExitLimitMinutes = 0;
     if (category === 'PARTICULAR') {
-      const [[limitRow]] = await db.query(
-        `SELECT value FROM app_settings WHERE name = ?`,
-        ['particularExitMonthlyLimitMinutes']
-      );
-      particularExitLimitMinutes = limitRow ? Number(limitRow.value) : 0;
+      const limitValue = await getAppSetting('particularExitMonthlyLimitMinutes', tenantId, db);
+      particularExitLimitMinutes = limitValue ? Number(limitValue) : 0;
     }
     const summary = Array.from(summaryMap.values()).map(s => ({
       ...s,
@@ -2991,11 +2982,11 @@ app.get('/campana-range', requirePermission('attendance', 'read'), async (req, r
     const exclusiveEnd = nextDayStr(to);
 
     const checkins = await fetchMovementCheckins(lookbackFromStr, exclusiveEnd);
-    const maxMarkerGapMs = await fetchMarkerMaxGapMs();
+    const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
     const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs });
 
-    const [[cutoffRow]] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['campanaArrivalCutoffTime']);
-    const cutoffTime = cutoffRow ? cutoffRow.value : '09:00';
+    const cutoffValue = await getAppSetting('campanaArrivalCutoffTime', tenantId, db);
+    const cutoffTime = cutoffValue || '09:00';
     const fromDate = new Date(fy, fm - 1, fd);
 
     const events = [
@@ -3033,28 +3024,23 @@ app.get('/campana-range', requirePermission('attendance', 'read'), async (req, r
 
 // GET/POST /config/campana-cutoff -- horario de corte para computar "cantidad
 // de días" de una salida a Campaña (mismo patrón que /config/personal-leave-limit).
-app.get('/config/campana-cutoff', async (req, res) => {
+app.get('/config/campana-cutoff', requirePermission('schedules', 'read'), async (req, res) => {
   try {
-    const [rows] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['campanaArrivalCutoffTime']);
-    res.json({ campanaArrivalCutoffTime: rows[0] ? rows[0].value : '09:00' });
+    const value = await getAppSetting('campanaArrivalCutoffTime', resolveTenantId(req), db);
+    res.json({ campanaArrivalCutoffTime: value || '09:00' });
   } catch (err) {
     console.error('ERROR fetching campana cutoff:', err);
     res.status(500).json({ error: 'Error fetching campana cutoff' });
   }
 });
 
-app.post('/config/campana-cutoff', async (req, res) => {
+app.post('/config/campana-cutoff', requirePermission('schedules', 'update'), async (req, res) => {
   try {
     const value = String(req.body.campanaArrivalCutoffTime || '');
     if (!/^\d{2}:\d{2}(:\d{2})?$/.test(value)) {
       return res.status(400).json({ error: 'campanaArrivalCutoffTime debe tener formato HH:MM' });
     }
-    await db.query(
-      `INSERT INTO app_settings (name, value)
-       VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
-      ['campanaArrivalCutoffTime', value]
-    );
+    await setAppSetting('campanaArrivalCutoffTime', resolveTenantId(req), value, db);
     res.json({ ok: true });
   } catch (err) {
     console.error('ERROR saving campana cutoff:', err);
@@ -3068,34 +3054,29 @@ app.post('/config/campana-cutoff', async (req, res) => {
 // empleado, o porque lo dejó fichado sin volver) podía terminar
 // atribuyéndosele a cualquiera que fichara minutos después por un motivo
 // no relacionado -- caso real: Perrotta 02/07/2026.
-async function fetchMarkerMaxGapMs() {
-  const [rows] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['markerMaxGapSeconds']);
-  const seconds = rows[0] ? Number(rows[0].value) : 30;
+async function fetchMarkerMaxGapMs(tenantId) {
+  const value = await getAppSetting('markerMaxGapSeconds', tenantId, db);
+  const seconds = value ? Number(value) : 30;
   return (Number.isFinite(seconds) && seconds > 0 ? seconds : 30) * 1000;
 }
 
-app.get('/config/marker-max-gap-seconds', async (req, res) => {
+app.get('/config/marker-max-gap-seconds', requirePermission('schedules', 'read'), async (req, res) => {
   try {
-    const [rows] = await db.query(`SELECT value FROM app_settings WHERE name = ?`, ['markerMaxGapSeconds']);
-    res.json({ markerMaxGapSeconds: rows[0] ? Number(rows[0].value) : 30 });
+    const value = await getAppSetting('markerMaxGapSeconds', resolveTenantId(req), db);
+    res.json({ markerMaxGapSeconds: value ? Number(value) : 30 });
   } catch (err) {
     console.error('ERROR fetching marker max gap:', err);
     res.status(500).json({ error: 'Error fetching marker max gap' });
   }
 });
 
-app.post('/config/marker-max-gap-seconds', async (req, res) => {
+app.post('/config/marker-max-gap-seconds', requirePermission('schedules', 'update'), async (req, res) => {
   try {
     const seconds = Number(req.body.markerMaxGapSeconds);
     if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 3600) {
       return res.status(400).json({ error: 'markerMaxGapSeconds debe ser un número entre 1 y 3600' });
     }
-    await db.query(
-      `INSERT INTO app_settings (name, value)
-       VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
-      ['markerMaxGapSeconds', String(seconds)]
-    );
+    await setAppSetting('markerMaxGapSeconds', resolveTenantId(req), String(seconds), db);
     res.json({ ok: true });
   } catch (err) {
     console.error('ERROR saving marker max gap:', err);
@@ -3108,24 +3089,24 @@ app.post('/config/marker-max-gap-seconds', async (req, res) => {
 // topeado), unificada 2026-08-07 entre index.html (donde ya vivia, fija a
 // 13:40/360min) y /attendance-range (que antes usaba una heuristica propia,
 // distinta y sin tope -- ver overtimeCalculations.js para la regla completa).
-async function fetchOvertimeSettings() {
-  const [rows] = await db.query(
-    `SELECT name, value FROM app_settings WHERE name IN ('overtimeCutoffTime', 'overtimeCapMinutes')`
-  );
-  const byName = Object.fromEntries(rows.map(r => [r.name, r.value]));
-  const cutoffTime = byName.overtimeCutoffTime || '13:40';
-  const [cutH, cutM] = cutoffTime.split(':').map(Number);
-  const capMinutes = byName.overtimeCapMinutes ? Number(byName.overtimeCapMinutes) : overtimeCalc.DEFAULT_CAP_MINUTES;
+async function fetchOvertimeSettings(tenantId) {
+  const [cutoffTime, capMinutesRaw] = await Promise.all([
+    getAppSetting('overtimeCutoffTime', tenantId, db),
+    getAppSetting('overtimeCapMinutes', tenantId, db)
+  ]);
+  const resolvedCutoff = cutoffTime || '13:40';
+  const [cutH, cutM] = resolvedCutoff.split(':').map(Number);
+  const capMinutes = capMinutesRaw ? Number(capMinutesRaw) : overtimeCalc.DEFAULT_CAP_MINUTES;
   return {
-    cutoffTime,
+    cutoffTime: resolvedCutoff,
     cutoffMinutes: (Number.isFinite(cutH) ? cutH : 13) * 60 + (Number.isFinite(cutM) ? cutM : 40),
     capMinutes: Number.isFinite(capMinutes) && capMinutes > 0 ? capMinutes : overtimeCalc.DEFAULT_CAP_MINUTES
   };
 }
 
-app.get('/config/overtime-settings', async (req, res) => {
+app.get('/config/overtime-settings', requirePermission('schedules', 'read'), async (req, res) => {
   try {
-    const settings = await fetchOvertimeSettings();
+    const settings = await fetchOvertimeSettings(resolveTenantId(req));
     res.json({ overtimeCutoffTime: settings.cutoffTime, overtimeCapMinutes: settings.capMinutes });
   } catch (err) {
     console.error('ERROR fetching overtime settings:', err);
@@ -3133,557 +3114,27 @@ app.get('/config/overtime-settings', async (req, res) => {
   }
 });
 
-app.post('/config/overtime-settings', async (req, res) => {
+app.post('/config/overtime-settings', requirePermission('schedules', 'update'), async (req, res) => {
   try {
+    const tenantId = resolveTenantId(req);
     const { overtimeCutoffTime, overtimeCapMinutes } = req.body;
     if (overtimeCutoffTime !== undefined) {
       if (!/^\d{1,2}:\d{2}$/.test(overtimeCutoffTime)) {
         return res.status(400).json({ error: 'overtimeCutoffTime debe tener formato HH:MM' });
       }
-      await db.query(
-        `INSERT INTO app_settings (name, value) VALUES ('overtimeCutoffTime', ?)
-         ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
-        [overtimeCutoffTime]
-      );
+      await setAppSetting('overtimeCutoffTime', tenantId, overtimeCutoffTime, db);
     }
     if (overtimeCapMinutes !== undefined) {
       const cap = Number(overtimeCapMinutes);
       if (!Number.isFinite(cap) || cap <= 0 || cap > 1440) {
         return res.status(400).json({ error: 'overtimeCapMinutes debe ser un número entre 1 y 1440' });
       }
-      await db.query(
-        `INSERT INTO app_settings (name, value) VALUES ('overtimeCapMinutes', ?)
-         ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = CURRENT_TIMESTAMP`,
-        [String(cap)]
-      );
+      await setAppSetting('overtimeCapMinutes', tenantId, String(cap), db);
     }
     res.json({ ok: true });
   } catch (err) {
     console.error('ERROR saving overtime settings:', err);
     res.status(500).json({ error: 'Error saving overtime settings' });
-  }
-});
-
-// ========================================
-// ENDPOINTS PARA GESTIÓN DE EMPLEADOS & MATCHING
-// ========================================
-
-// GET /api/employees - Listar todos los empleados
-app.get('/api/employees', async (req, res) => {
-  try {
-    const { page = 1, limit = 50, search = '', active = '' } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    let whereClause = '';
-    const params = [];
-
-    if (search) {
-      whereClause += ' AND (e.nombre LIKE ? OR e.documento LIKE ? OR e.employee_id LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-    }
-
-    if (active !== '') {
-      whereClause += ' AND e.activo = ?';
-      params.push(active === 'true' ? 1 : 0);
-    }
-
-    // Total count
-    const [countResult] = await db.query(
-      `SELECT COUNT(*) as total FROM employees e WHERE 1=1 ${whereClause}`,
-      params
-    );
-    const total = countResult[0].total;
-
-    // Get employees with matching user info
-    const [employees] = await db.query(`
-      SELECT 
-        e.*,
-        u.USERID,
-        u.Name as user_name,
-        u.Badgenumber,
-        uem.match_type
-      FROM employees e
-      LEFT JOIN user_employee_map uem ON e.id = uem.employee_id
-      LEFT JOIN users u ON uem.USERID = u.USERID
-      WHERE 1=1 ${whereClause}
-      ORDER BY e.nombre
-      LIMIT ? OFFSET ?
-    `, [...params, parseInt(limit), offset]);
-
-    res.json({
-      data: employees,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit))
-      }
-    });
-  } catch (err) {
-    console.error('ERROR getting employees:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error obteniendo empleados' });
-  }
-});
-
-// GET /api/employees/:id - Obtener empleado por ID
-app.get('/api/employees/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const [employee] = await db.query(
-      `SELECT * FROM employees WHERE id = ?`,
-      [parseInt(id)]
-    );
-
-    if (employee.length === 0) {
-      return res.status(404).json({ error: 'Empleado no encontrado' });
-    }
-
-    // Get mapping info
-    const [mapping] = await db.query(
-      `SELECT u.*, uem.match_type FROM user_employee_map uem
-       LEFT JOIN users u ON uem.USERID = u.USERID
-       WHERE uem.employee_id = ?`,
-      [parseInt(id)]
-    );
-
-    res.json({
-      ...employee[0],
-      user_mapping: mapping[0] || null
-    });
-  } catch (err) {
-    console.error('ERROR getting employee:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error obteniendo empleado' });
-  }
-});
-
-// POST /api/employees - Crear nuevo empleado
-app.post('/api/employees', async (req, res) => {
-  try {
-    const { employee_id, nombre, documento, tipo_documento, direccion, zona_id, fecha_alta, activo } = req.body;
-
-    if (!nombre || !employee_id) {
-      return res.status(400).json({ error: 'nombre y employee_id son requeridos' });
-    }
-
-    const [result] = await db.query(
-      `INSERT INTO employees 
-       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, fecha_alta, activo, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-      [employee_id, nombre, documento || null, tipo_documento || null, direccion || null, zona_id || null, fecha_alta || null, activo !== false ? 1 : 0]
-    );
-
-    res.json({ 
-      ok: true, 
-      message: 'Empleado creado',
-      id: result.insertId
-    });
-  } catch (err) {
-    if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'El employee_id ya existe' });
-    }
-    console.error('ERROR creating employee:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error creando empleado' });
-  }
-});
-
-// PUT /api/employees/:id - Actualizar empleado
-app.put('/api/employees/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { nombre, documento, tipo_documento, direccion, zona_id, fecha_baja, activo } = req.body;
-
-    // Check if exists
-    const [existing] = await db.query('SELECT id FROM employees WHERE id = ?', [parseInt(id)]);
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Empleado no encontrado' });
-    }
-
-    const updates = [];
-    const values = [];
-
-    if (nombre !== undefined) {
-      updates.push('nombre = ?');
-      values.push(nombre);
-    }
-    if (documento !== undefined) {
-      updates.push('documento = ?');
-      values.push(documento);
-    }
-    if (tipo_documento !== undefined) {
-      updates.push('tipo_documento = ?');
-      values.push(tipo_documento);
-    }
-    if (direccion !== undefined) {
-      updates.push('direccion = ?');
-      values.push(direccion);
-    }
-    if (zona_id !== undefined) {
-      updates.push('zona_id = ?');
-      values.push(zona_id);
-    }
-    if (fecha_baja !== undefined) {
-      updates.push('fecha_baja = ?');
-      values.push(fecha_baja);
-    }
-    if (activo !== undefined) {
-      updates.push('activo = ?');
-      values.push(activo ? 1 : 0);
-    }
-
-    updates.push('updated_at = NOW()');
-    values.push(parseInt(id));
-
-    if (updates.length > 1) {
-      await db.query(
-        `UPDATE employees SET ${updates.join(', ')} WHERE id = ?`,
-        values
-      );
-    }
-
-    res.json({ ok: true, message: 'Empleado actualizado' });
-  } catch (err) {
-    console.error('ERROR updating employee:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error actualizando empleado' });
-  }
-});
-
-// DELETE /api/employees/:id - Eliminar empleado
-app.delete('/api/employees/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Check if exists
-    const [existing] = await db.query('SELECT id FROM employees WHERE id = ?', [parseInt(id)]);
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Empleado no encontrado' });
-    }
-
-    // Check if has mappings - prevent deletion if mapped
-    const [mappings] = await db.query(
-      'SELECT COUNT(*) as cnt FROM user_employee_map WHERE employee_id = ?',
-      [parseInt(id)]
-    );
-
-    if (mappings[0].cnt > 0) {
-      return res.status(409).json({ 
-        error: 'No se puede eliminar empleado con relaciones activas',
-        relatedRecords: mappings[0].cnt 
-      });
-    }
-
-    await db.query('DELETE FROM employees WHERE id = ?', [parseInt(id)]);
-
-    res.json({ ok: true, message: 'Empleado eliminado' });
-  } catch (err) {
-    console.error('ERROR deleting employee:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error eliminando empleado' });
-  }
-});
-
-// ========================================
-// ENDPOINTS PARA AUTO-MATCHING
-// ========================================
-
-// POST /api/matching/auto - Auto-match preview only (no changes saved)
-app.post('/api/matching/auto', async (req, res) => {
-  try {
-    const [predictions] = await db.query(`
-      SELECT 
-        u.USERID,
-        u.Badgenumber as user_badgenumber,
-        u.Name as user_name,
-        e.id as employee_id,
-        e.employee_id as emp_legajo,
-        e.nombre as employee_name,
-        'employee_id' as match_type
-      FROM users u
-      JOIN employees e 
-        ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
-      WHERE u.USERID > 10
-        AND e.activo = 1
-        AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
-    `);
-
-    res.json({
-      ok: true,
-      message: 'Auto-matching preview only: no changes were saved.',
-      would_match: predictions.length,
-      predictions
-    });
-  } catch (err) {
-    console.error('ERROR auto-matching preview:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error en auto-matching' });
-  }
-});
-
-// POST /api/matching/manual - Relacionar usuario con empleado manualmente
-app.post('/api/matching/manual', async (req, res) => {
-  try {
-    const payloadUserId = req.body.user_id ?? req.body.userId;
-    const payloadEmployeeId = req.body.employee_id ?? req.body.employeeId;
-    const userId = Number(payloadUserId);
-    const employeeId = Number(payloadEmployeeId);
-
-    if (!Number.isFinite(userId) || !Number.isFinite(employeeId) || userId <= 0 || employeeId <= 0) {
-      return res.status(400).json({ error: 'user_id/employee_id o userId/employeeId son requeridos y deben ser números válidos' });
-    }
-
-    // Check both exist
-    const [user] = await db.query('SELECT USERID FROM users WHERE USERID = ?', [userId]);
-    const [employee] = await db.query('SELECT id FROM employees WHERE id = ?', [employeeId]);
-
-    if (user.length === 0) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-    if (employee.length === 0) {
-      return res.status(404).json({ error: 'Empleado no encontrado' });
-    }
-
-    await db.query('DELETE FROM user_employee_map WHERE USERID = ? OR employee_id = ?', [userId, employeeId]);
-
-    await db.query(
-      'INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)',
-      [userId, employeeId, 'manual']
-    );
-
-    res.json({ ok: true, message: 'Usuario relacionado con empleado' });
-  } catch (err) {
-    console.error('ERROR manual matching:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error en relación manual' });
-  }
-});
-
-// DELETE /api/matching/:userId - Remover relación
-app.delete('/api/matching/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    const [result] = await db.query(
-      'DELETE FROM user_employee_map WHERE USERID = ?',
-      [parseInt(userId)]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Relación no encontrada' });
-    }
-
-    res.json({ ok: true, message: 'Relación removida' });
-  } catch (err) {
-    console.error('ERROR removing matching:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error removiendo relación' });
-  }
-});
-
-// GET /api/matching/unmatched-users - Obtener usuarios sin mapear
-app.get('/api/matching/unmatched-users', async (req, res) => {
-  try {
-    const [unmapped] = await db.query(`
-      SELECT u.USERID, u.Badgenumber, u.Name
-      FROM users u
-      WHERE u.USERID > 10 
-        AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
-      ORDER BY u.Name
-    `);
-
-    res.json(unmapped);
-  } catch (err) {
-    console.error('ERROR getting unmatched users:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error obteniendo usuarios sin mapear' });
-  }
-});
-
-// GET /api/matching/status - Ver estado del matching
-app.get('/api/matching/status', async (req, res) => {
-  try {
-    const [[{ total: totalUsers }]] = await db.query('SELECT COUNT(*) as total FROM users WHERE USERID > 10');
-    const [[{ mapped: mappedUsers }]] = await db.query('SELECT COUNT(*) as mapped FROM user_employee_map');
-    const [[{ total: totalEmployees }]] = await db.query('SELECT COUNT(*) as total FROM employees');
-
-    res.json({
-      totalUsers: parseInt(totalUsers),
-      mappedUsers: parseInt(mappedUsers),
-      unmappedUsers: parseInt(totalUsers) - parseInt(mappedUsers),
-      totalEmployees: parseInt(totalEmployees),
-      matchPercentage: ((parseInt(mappedUsers) / parseInt(totalUsers)) * 100).toFixed(2)
-    });
-  } catch (err) {
-    console.error('ERROR getting matching status:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Error obteniendo estado' });
-  }
-});
-
-/* ===============================
-   CLEANUP DUPLICATES
-================================ */
-app.get('/api/users/cleanup-duplicates', async (req, res) => {
-  try {
-    console.log('[CLEANUP] Iniciando limpieza de usuarios duplicados...');
-
-    // 1. Encontrar usuarios duplicados por Badgenumber
-    const [duplicates] = await db.query(`
-      SELECT TRIM(Badgenumber) as badge, COUNT(*) as count, GROUP_CONCAT(USERID) as userids
-      FROM users
-      GROUP BY TRIM(Badgenumber)
-      HAVING count > 1
-      ORDER BY count DESC
-    `);
-
-    console.log(`[CLEANUP] Encontrados ${duplicates.length} badges con duplicados`);
-
-    let totalDeleted = 0;
-    let totalMapsDeleted = 0;
-    let totalExclusionsDeleted = 0;
-
-    for (const dup of duplicates) {
-      const userids = dup.userids.split(',').map(Number);
-      const keepUID = userids[0];
-      const deleteUIDs = userids.slice(1);
-
-      console.log(`[CLEANUP] Badge: ${dup.badge} | Mantener: ${keepUID} | Eliminar: ${deleteUIDs.join(',')}`);
-
-      for (const uid of deleteUIDs) {
-        // Eliminar todas las referencias primero (ordenar por dependencias FK)
-        
-        // 1. specialusers references users
-        const [deletedSpecial] = await db.query(
-          'DELETE FROM specialusers WHERE userId = ?',
-          [uid]
-        );
-        console.log(`[CLEANUP]   → Eliminados ${deletedSpecial.affectedRows} registros de specialusers`);
-
-        // 2. userexclusions references users
-        const [deletedExcl] = await db.query(
-          'DELETE FROM userexclusions WHERE userId = ?',
-          [uid]
-        );
-        totalExclusionsDeleted += deletedExcl.affectedRows;
-
-        // 3. dailyattendance references users
-        const [deletedAttend] = await db.query(
-          'DELETE FROM dailyattendance WHERE userId = ?',
-          [uid]
-        );
-        console.log(`[CLEANUP]   → Eliminados ${deletedAttend.affectedRows} registros de attendance`);
-
-        // 4. dayassignments references users
-        const [deletedAssign] = await db.query(
-          'DELETE FROM dayassignments WHERE userId = ?',
-          [uid]
-        );
-        console.log(`[CLEANUP]   → Eliminados ${deletedAssign.affectedRows} registros de assignments`);
-
-        // 5. user_employee_map references users
-        const [deletedMaps] = await db.query(
-          'DELETE FROM user_employee_map WHERE USERID = ?',
-          [uid]
-        );
-        totalMapsDeleted += deletedMaps.affectedRows;
-
-        // 6. Finalmente, eliminar usuario
-        const [deleted] = await db.query(
-          'DELETE FROM users WHERE USERID = ?',
-          [uid]
-        );
-        totalDeleted += deleted.affectedRows;
-      }
-    }
-
-    // 2. Hacer TRIM en todos los Badgenumbers
-    await db.query('UPDATE users SET Badgenumber = TRIM(Badgenumber)');
-
-    // 3. Intentar agregar UNIQUE constraint
-    let constraintAdded = false;
-    try {
-      await db.query(`
-        ALTER TABLE users ADD UNIQUE KEY unique_badgenumber (Badgenumber)
-      `);
-      constraintAdded = true;
-      console.log('[CLEANUP] UNIQUE constraint agregado');
-    } catch (err) {
-      console.log('[CLEANUP] UNIQUE constraint ya existe o error:', err.code);
-    }
-
-    // 4. Verificar integridad
-    const [[{ totalUsers }]] = await db.query(
-      'SELECT COUNT(DISTINCT USERID) as totalUsers FROM users WHERE USERID > 10'
-    );
-    const [[{ totalBadges }]] = await db.query(
-      'SELECT COUNT(DISTINCT TRIM(Badgenumber)) as totalBadges FROM users WHERE USERID > 10'
-    );
-
-    res.json({
-      ok: true,
-      message: 'Limpieza completada',
-      stats: {
-        duplicatesFound: duplicates.length,
-        usersDeleted: totalDeleted,
-        mapsDeleted: totalMapsDeleted,
-        exclusionsDeleted: totalExclusionsDeleted,
-        constraintAdded: constraintAdded,
-        finalStats: {
-          totalUsers: totalUsers,
-          uniqueBadges: totalBadges
-        }
-      }
-    });
-
-  } catch (err) {
-    console.error('[CLEANUP ERROR]:', err);
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
-      });
-    }
-    res.status(500).json({ error: 'Cleanup failed', details: err.message });
   }
 });
 
