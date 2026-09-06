@@ -267,7 +267,12 @@ module.exports = function (db) {
       if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada -- asignale un plan primero' });
 
       const tenantName = subscription.tenant_name || `Empresa #${tenantId}`;
-      const backUrl = process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/facturacion` : undefined;
+      // back_url es REQUERIDO por MercadoPago (probado contra el sandbox
+      // real -- "back_url is required" si se manda undefined, pese a que
+      // los ejemplos de la documentacion lo muestran como si fuera
+      // opcional). Default al hosting de produccion conocido si no hay
+      // FRONTEND_URL configurada, para que nunca falte.
+      const backUrl = `${process.env.FRONTEND_URL || 'https://horasdedicacionavp.web.app'}/facturacion`;
 
       const checkout = await mp.createSubscriptionCheckout({
         accessToken,

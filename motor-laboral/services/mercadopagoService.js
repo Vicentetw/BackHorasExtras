@@ -26,6 +26,10 @@ const MP_API_BASE = 'https://api.mercadopago.com';
 // tenantId se manda como external_reference -- es lo que despues nos deja
 // saber, cuando llega el webhook, a que empresa pertenece esta suscripcion
 // (MercadoPago no sabe nada de nuestro modelo de tenants).
+//
+// backUrl es REQUERIDO -- probado contra el sandbox real: sin el, tira
+// "back_url is required" (400), aunque los ejemplos de la documentacion
+// oficial lo muestran como si fuera opcional.
 async function createSubscriptionCheckout({
   accessToken,
   tenantId,
@@ -37,7 +41,12 @@ async function createSubscriptionCheckout({
   fetchImpl = fetch
 }) {
   const body = {
-    reason: `Suscripción Sistema de Asistencia -- ${tenantName}`,
+    // "reason" tiene 2 restricciones reales de MercadoPago, encontradas
+    // probando contra el sandbox (no documentadas explicitamente): maximo
+    // 60 caracteres, y el doble guion "--" dispara su filtro de contenido
+    // ("Request contains invalid or disallowed content" / invalid_field_content).
+    // Se trunca defensivamente por si el nombre de la empresa es largo.
+    reason: `Suscripcion - ${tenantName}`.slice(0, 60),
     external_reference: String(tenantId),
     payer_email: payerEmail,
     auto_recurring: {

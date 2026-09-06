@@ -65,9 +65,10 @@ async function updatePlan(id, data, db) {
 async function getSubscriptionByTenant(tenantId, db) {
   const [[row]] = await db.query(
     `SELECT s.*, p.name AS plan_name, p.base_price_usd, p.price_per_employee_usd, p.min_billed_employees,
-            p.discount_quarterly_pct, p.discount_semiannual_pct, p.discount_annual_pct
+            p.discount_quarterly_pct, p.discount_semiannual_pct, p.discount_annual_pct, t.name AS tenant_name
      FROM tenant_subscriptions s
      JOIN plans p ON p.id = s.plan_id
+     JOIN tenants t ON t.id = s.tenant_id
      WHERE s.tenant_id = ?`,
     [tenantId]
   );
