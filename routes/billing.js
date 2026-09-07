@@ -119,9 +119,12 @@ module.exports = function (db) {
 
       if (!subscription) {
         // Empresa sin suscripcion configurada todavia (tenants que ya
-        // existian antes de este sistema) -- no se la bloquea, se informa
-        // que no tiene plan asignado en vez de tirar 404.
-        return res.json({ tenantId: Number(tenantId), subscription: null, employeeCount, effectiveStatus: 'trial' });
+        // existian antes de este sistema, o un usuario dado de alta a mano
+        // sin asignarle plan) -- no se la bloquea, se informa que no tiene
+        // plan asignado en vez de tirar 404. OJO: esto decia 'trial' antes
+        // (bug real, encontrado de paso en Fase 17) -- 'none' es lo que
+        // realmente pasa, nada que ver con estar en el mes de prueba.
+        return res.json({ tenantId: Number(tenantId), subscription: null, employeeCount, effectiveStatus: 'none' });
       }
 
       const effectiveStatus = resolveEffectiveStatus({
@@ -184,6 +187,12 @@ module.exports = function (db) {
         grace_period_days: req.body.grace_period_days ?? null,
         grace_message: req.body.grace_message || null
       }, db);
+
+      // Asignarle un plan de verdad ES la respuesta a un pedido pendiente
+      // (Fase 17) -- se resuelve solo, mismo espiritu que recordCheckoutLink
+      // con payment_requested_at.
+      const pendingRequest = await billingRepo.getPendingPlanRequestForTenant(tenantId, db);
+      if (pendingRequest) await billingRepo.resolvePlanRequest(pendingRequest.id, db);
 
       res.json({ ok: true });
     } catch (err) {
@@ -391,6 +400,69 @@ module.exports = function (db) {
     } catch (err) {
       console.error('ERROR requesting payment link:', err);
       res.status(500).json({ error: 'Error al pedir el link de pago' });
+    }
+  });
+
+  // Fase 17 -- hueco real reportado por el superadmin: una empresa SIN
+  // suscripcion todavia (ni siquiera un trial -- ej. un usuario creado a
+  // mano sin asignarle plan) caia en un /acceso-denegado incomprensible en
+  // la primera pantalla que probara, sin ninguna forma de pedir un plan.
+  // tenantId sale del usuario logueado, nunca del body -- mismo criterio
+  // de seguridad que el resto de este archivo.
+  router.post('/plan-requests', async (req, res) => {
+    try {
+      const tenantId = req.appUser?.tenantId;
+      if (req.appUser?.isSuperadmin || tenantId == null) {
+        return res.status(400).json({ error: 'Tu usuario no tiene una empresa asignada' });
+      }
+      const existingSubscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
+      if (existingSubscription) {
+        return res.status(409).json({ error: 'Tu empresa ya tiene un plan asignado' });
+      }
+      const { phone, contact_preference, employee_count, clock_count, schedule_type } = req.body;
+      await billingRepo.createPlanRequest({
+        tenantId,
+        requestedBy: req.appUser.id,
+        phone,
+        contactPreference: contact_preference,
+        employeeCount: employee_count,
+        clockCount: clock_count,
+        scheduleType: schedule_type
+      }, db);
+      res.status(201).json({ ok: true });
+    } catch (err) {
+      if (err.code === 'ALREADY_PENDING') return res.status(409).json({ error: err.message });
+      console.error('ERROR creating plan request:', err);
+      res.status(500).json({ error: 'Error al enviar el pedido de plan' });
+    }
+  });
+
+  // El propio tenant puede consultar si tiene un pedido pendiente (para que
+  // /pagos sepa que mensaje mostrar); el superadmin ve TODOS via ?all=1.
+  router.get('/plan-requests', async (req, res) => {
+    try {
+      if (req.query.all) {
+        if (!req.appUser?.isSuperadmin) return res.status(403).json({ error: 'No autorizado' });
+        const rows = await billingRepo.getAllPendingPlanRequests(db);
+        return res.json(rows);
+      }
+      const tenantId = req.appUser?.tenantId;
+      if (tenantId == null) return res.json(null);
+      const row = await billingRepo.getPendingPlanRequestForTenant(tenantId, db);
+      res.json(row);
+    } catch (err) {
+      console.error('ERROR listing plan requests:', err);
+      res.status(500).json({ error: 'Error al consultar los pedidos de plan' });
+    }
+  });
+
+  router.post('/plan-requests/:id/resolve', requireSuperadmin, async (req, res) => {
+    try {
+      await billingRepo.resolvePlanRequest(req.params.id, db);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('ERROR resolving plan request:', err);
+      res.status(500).json({ error: 'Error al resolver el pedido' });
     }
   });
 

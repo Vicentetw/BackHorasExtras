@@ -240,6 +240,52 @@ async function requestPaymentLink(tenantId, db) {
   await db.query(`UPDATE tenant_subscriptions SET payment_requested_at = NOW() WHERE tenant_id = ?`, [tenantId]);
 }
 
+// Fase 17 -- hueco real reportado por el superadmin: una empresa SIN
+// suscripcion armada todavia (ni siquiera un trial) no tenia forma de
+// pedir que le arme un plan -- caia en un /acceso-denegado generico e
+// incomprensible en la primera pantalla que probara. No puede vivir en
+// tenant_subscriptions (plan_id es NOT NULL, todavia no hay ninguno
+// elegido) -- tabla propia, mismo espiritu que requestPaymentLink/
+// requestCancellation: deja constancia del pedido, el superadmin sigue
+// siendo quien arma el plan de verdad desde Facturacion.
+async function createPlanRequest({ tenantId, requestedBy, phone, contactPreference, employeeCount, clockCount, scheduleType }, db) {
+  const [existing] = await db.query(`SELECT id FROM plan_requests WHERE tenant_id = ? AND status = 'pending'`, [tenantId]);
+  if (existing.length > 0) {
+    const err = new Error('Ya hay un pedido de plan pendiente para esta empresa');
+    err.code = 'ALREADY_PENDING';
+    throw err;
+  }
+  const [result] = await db.query(
+    `INSERT INTO plan_requests (tenant_id, requested_by, phone, contact_preference, employee_count, clock_count, schedule_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [tenantId, requestedBy || null, phone || null, contactPreference || 'whatsapp', employeeCount ?? null, clockCount ?? null, scheduleType || null]
+  );
+  return result.insertId;
+}
+
+async function getPendingPlanRequestForTenant(tenantId, db) {
+  const [[row]] = await db.query(`SELECT * FROM plan_requests WHERE tenant_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1`, [tenantId]);
+  return row || null;
+}
+
+// Para Facturacion -- se muestran junto al resto de las empresas (que ya
+// vienen todas, tengan o no suscripcion, desde subscriptions-page.ts).
+async function getAllPendingPlanRequests(db) {
+  const [rows] = await db.query(
+    `SELECT pr.*, au.email AS requested_by_email, t.name AS tenant_name
+     FROM plan_requests pr
+     LEFT JOIN app_users au ON au.id = pr.requested_by
+     JOIN tenants t ON t.id = pr.tenant_id
+     WHERE pr.status = 'pending'
+     ORDER BY pr.created_at ASC`
+  );
+  return rows;
+}
+
+async function resolvePlanRequest(id, db) {
+  await db.query(`UPDATE plan_requests SET status = 'resolved', resolved_at = NOW() WHERE id = ?`, [id]);
+}
+
 module.exports = {
   countBillableEmployees,
   getPlans,
@@ -258,5 +304,9 @@ module.exports = {
   approveCancellation,
   recordCheckoutLink,
   requestPaymentLink,
-  checkEmployeeCapacity
+  checkEmployeeCapacity,
+  createPlanRequest,
+  getPendingPlanRequestForTenant,
+  getAllPendingPlanRequests,
+  resolvePlanRequest
 };

@@ -27,6 +27,13 @@ module.exports = function (db) {
     // ya usa GET /api/billing/subscriptions/:tenantId (no reimplementar).
     // null para superadmin o para un usuario sin empresa asignada -- a
     // ninguno de los dos se lo bloquea nunca por esto.
+    //
+    // Fase 17 -- bug real: 'none' (empresa CON tenant pero SIN suscripcion
+    // armada todavia, ni siquiera un trial -- ej. un usuario creado a mano
+    // sin asignarle plan) quedaba indistinguible de null (superadmin/sin
+    // empresa) -- permission-guard.ts no tenia forma de mandarlo a /pagos,
+    // y terminaba en un /acceso-denegado incomprensible en la primera
+    // pantalla que probara.
     let subscriptionStatus = null;
     if (!req.appUser.isSuperadmin && req.appUser.tenantId != null) {
       try {
@@ -38,6 +45,8 @@ module.exports = function (db) {
             gracePeriodDays: subscription.grace_period_days,
             defaultGraceDays: DEFAULT_GRACE_DAYS
           });
+        } else {
+          subscriptionStatus = 'none';
         }
       } catch (err) {
         console.error('ERROR resolviendo subscriptionStatus en /me:', err);
