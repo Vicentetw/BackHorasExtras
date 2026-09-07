@@ -73,8 +73,16 @@ function corsOptionsDelegate(req, callback) {
 // definicion las llama alguien que todavia no tiene ninguna cuenta.
 // routes/public.js aplica su propio rate-limit mas estricto encima de
 // esto para esa ruta puntual.
+// Bug real encontrado en Fase 18: un `startsWith` ingenuo hace que
+// '/api/agent-keys' (que SI necesita Firebase + superadmin) matchee el
+// prefijo publico '/api/agent' (los endpoints del agente de sincronizacion,
+// que a proposito no llevan Firebase) -- '/api/agent-keys'.startsWith('/api/agent')
+// es true. Se exige que despues del prefijo venga un '/' o que termine ahi
+// mismo, para que dos rutas hermanas con el mismo prefijo de texto no se
+// pisen (ej. /api/agent vs /api/agent-keys, o /api/public vs /api/publicidad
+// si algun dia existiera).
 function isPublicPath(req, publicPaths) {
-  return publicPaths.some((p) => req.path.startsWith(p));
+  return publicPaths.some((p) => req.path === p || req.path.startsWith(p + '/'));
 }
 
 function securityMiddlewares(app, cors, { publicPaths = [] } = {}) {
@@ -105,5 +113,6 @@ module.exports = {
   authMiddleware,
   corsOptionsDelegate,
   securityMiddlewares,
-  apiKeyWarning
+  apiKeyWarning,
+  isPublicPath
 };

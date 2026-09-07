@@ -19,6 +19,9 @@ const employeeCategoriesRoutes = require('./routes/employeeCategories');
 const appUsersRoutes = require('./routes/appUsers');
 const rolesRoutes = require('./routes/roles');
 const billingRoutes = require('./routes/billing');
+const agentRoutes = require('./routes/agent');
+const agentKeysRoutes = require('./routes/agentKeys');
+const { insertCheckinsBatch, upsertUsersBatch } = require('./motor-laboral/services/checkinsIngestService');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
 const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
 const userRepository = require('./motor-laboral/repositories/userRepository');
@@ -53,7 +56,10 @@ app.use(express.json({ limit: '1mb' }));
 // Fase 11 (landing publica + alta autoservicio): /api/public es la unica
 // superficie del sistema pensada para alguien SIN ninguna cuenta todavia
 // -- ver security.js para el detalle de que capas salta y cuales no.
-securityMiddlewares(app, cors, { publicPaths: ['/api/public'] });
+// Fase 18: /api/agent tampoco tiene sesion de Firebase (agente desatendido)
+// -- se identifica con su propia clave (x-agent-key), verificada dentro de
+// routes/agent.js, no con un login humano.
+securityMiddlewares(app, cors, { publicPaths: ['/api/public', '/api/agent'] });
 apiKeyWarning();
 
 // Middleware para loguear todas las requests
@@ -111,6 +117,8 @@ app.use('/api/roles', rolesRoutes(db));
 app.use('/api/billing', billingRoutes(db));
 app.use('/api/labor-engine', createMotorLaboralRoutes(db));
 app.use('/api/public', publicRoutes(db));
+app.use('/api/agent', agentRoutes(db));
+app.use('/api/agent-keys', agentKeysRoutes(db));
 
 function parseCheckTime(value) {
   if (!value) return null;
@@ -130,28 +138,9 @@ function parseCheckTime(value) {
   return null;
 }
 
-// Función para parsear fechas de checkins sin convertir a UTC
-function parseCheckTimeArgentina(value) {
-  if (!value) return null;
-  const v = value.trim();
-  // DD/MM/YYYY HH:mm[:ss]
-  if (v.match(/^\d{1,2}\/\d{1,2}\/\d{4} \d{2}:\d{2}(?::\d{2})?$/)) {
-    const [date, time] = v.split(' ');
-    const [dd, mm, yyyy] = date.split('/');
-    const t = time.length === 5 ? `${time}:00` : time;
-    return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')} ${t}`;
-  }
-  // YYYY-MM-DD HH:mm[:ss]
-  if (v.match(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?$/)) {
-    const [date, time] = v.split(' ');
-    const t = time.length === 5 ? `${time}:00` : time;
-    return `${date} ${t}`;
-  }
-  // Si no matchea, loguea para revisión
-  console.warn('Formato de CHECKTIME no reconocido:', value);
-  return null;
-}
-
+// parseCheckTimeArgentina se movio a motor-laboral/services/checkinsIngestService.js
+// (Fase 18 -- agente de sincronizacion de relojes, reusada tambien desde
+// routes/agent.js). Se sigue importando arriba, no se reimplementa aca.
 // Normalizo la fecha para que no de error agregar en forma manual
 // IMPORTANTE: Las fechas vienen del cliente en hora local (Argentina UTC-3)
 // NO deben ser convertidas a UTC, se guardan directamente como vienen
@@ -375,104 +364,20 @@ app.post('/import/checkins', requirePermission('attendance', 'create'), requireA
       trim: true
     });
 
-    let inserted = 0;
-    let skipped = 0;
-    let errors = 0;
-
-    const batchSize = 50;
-    let batch = [];
-
-    for (const r of records) {
-      // Limpiar espacios y caracteres invisibles
-      const userIdClean = r.USERID ? r.USERID.toString().replace(/\s+/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '') : '';
-      const checktimeRaw = r.CHECKTIME ? r.CHECKTIME.toString().replace(/\s+/g, ' ').replace(/[\u200B-\u200D\uFEFF]/g, '').trim() : '';
-
-      if (!userIdClean || !checktimeRaw) {
-        skipped++;
-        console.warn('Registro saltado por campos vacíos:', r);
-        continue;
-      }
-
-      const checktime = parseCheckTimeArgentina(checktimeRaw);
-      if (!checktime) {
-        skipped++;
-        errors++;
-        console.warn('Parseo fallido CHECKTIME:', checktimeRaw, 'USERID:', userIdClean);
-        continue;
-      }
-
-      const machine_ip = r.MACHINE_IP ? r.MACHINE_IP.toString().trim() : null;
-      const machine_sn = r.MACHINE_SN ? r.MACHINE_SN.toString().trim() : null;
-      batch.push([Number(userIdClean), checktime, machine_ip, machine_sn]);
-
-      if (batch.length >= batchSize) {
-        try {
-          await db.query(
-            `INSERT IGNORE INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES ?`,
-            [batch]
-          );
-          inserted += batch.length;
-          batch = [];
-        } catch (err) {
-          // Detectamos si es max_user_connections
-          if (err.code === 'ER_CON_COUNT_ERROR' || err.message.includes('max_user_connections')) {
-            console.error('Base de datos ocupada:', err.message);
-            return res.status(503).json({
-              error: 'La base de datos está ocupada. Intenta más tarde.'
-            });
-          } else if (err.code === 'ECONNREFUSED') {
-            console.error('Error de conexión a la base de datos:', err.message);
-            return res.status(503).json({
-              error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
-            });
-          } else {
-            console.error('ROW BATCH ERROR:', batch, err.message);
-            errors += batch.length;
-            batch = [];
-          }
-        }
-      }
-    }
-
-    // Insertar lo que quede en el batch final
-    if (batch.length > 0) {
-      try {
-        await db.query(
-          `INSERT IGNORE INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES ?`,
-          [batch]
-        );
-        inserted += batch.length;
-      } catch (err) {
-        if (err.code === 'ER_CON_COUNT_ERROR' || err.message.includes('max_user_connections')) {
-          console.error('Base de datos ocupada al final del batch:', err.message);
-          return res.status(503).json({
-            error: 'La base de datos está ocupada. Intenta más tarde.'
-          });
-        } else if (err.code === 'ECONNREFUSED') {
-          console.error('Error de conexión a la base de datos al final del batch:', err.message);
-          return res.status(503).json({
-            error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
-          });
-        } else {
-          console.error('FINAL BATCH ERROR:', batch, err.message);
-          errors += batch.length;
-        }
-      }
-    }
-
-    res.json({
-      ok: true,
-      inserted,
-      skipped,
-      errors,
-      total: records.length
-    });
+    // Insercion/dedupe extraida a checkinsIngestService.js (Fase 18) --
+    // reusada TAL CUAL por el agente automatico (routes/agent.js).
+    const result = await insertCheckinsBatch(records, db);
+    res.json({ ok: true, ...result });
 
   } catch (err) {
+    if (err.code === 'DB_BUSY' || err.code === 'DB_UNREACHABLE') {
+      console.error('IMPORT CHECKINS:', err.message);
+      return res.status(503).json({ error: err.message });
+    }
     console.error('IMPORT CHECKINS FATAL:', err);
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
+      return res.status(503).json({
+        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
       });
     }
     res.status(500).json({ error: 'Import checkins failed' });
@@ -491,7 +396,6 @@ app.post('/import/users', requirePermission('attendance', 'create'), upload.sing
     }
 
     const csv = req.file.buffer.toString('utf8');
-
     const records = parse(csv, {
       columns: true,
       delimiter: ';',
@@ -499,55 +403,16 @@ app.post('/import/users', requirePermission('attendance', 'create'), upload.sing
       trim: true
     });
 
-    let upserted = 0;
-    let skipped = 0;
-
-    for (const r of records) {
-      if (!r.USERID || !r.Badgenumber || !r.Name) {
-        skipped++;
-        continue;
-      }
-
-      const trimmedBadge = String(r.Badgenumber).trim();
-      const userId = Number(r.USERID);
-
-      // Verificar si Badgenumber ya existe
-      const [existing] = await db.query(
-        'SELECT USERID FROM users WHERE TRIM(Badgenumber) = ? LIMIT 1',
-        [trimmedBadge]
-      );
-
-      if (existing.length > 0) {
-        // Si existe, actualizar solo el Name si el USERID es diferente
-        if (existing[0].USERID !== userId) {
-          await db.query(
-            'UPDATE users SET Name = ? WHERE USERID = ?',
-            [r.Name, existing[0].USERID]
-          );
-        }
-      } else {
-        // Si no existe, insertar nuevo
-        await db.query(
-          'INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)',
-          [userId, trimmedBadge, r.Name]
-        );
-      }
-
-      upserted++;
-    }
-
-    res.json({ 
-      ok: true, 
-      users: upserted,
-      skipped: skipped,
-      message: 'Importacion completada'
-    });
+    // Upsert extraido a checkinsIngestService.js (Fase 18) -- reusado TAL
+    // CUAL por el agente automatico (routes/agent.js).
+    const { upserted, skipped } = await upsertUsersBatch(records, db);
+    res.json({ ok: true, users: upserted, skipped, message: 'Importacion completada' });
 
   } catch (err) {
     console.error('IMPORT USERS ERROR:', err);
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
+      return res.status(503).json({
+        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
       });
     }
     res.status(500).json({ error: 'Import users failed' });
