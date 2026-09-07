@@ -176,12 +176,23 @@ async function approveCancellation(tenantId, db) {
 // perdia. Se persiste aca para que el cliente lo pueda ver despues desde
 // /pagos. El periodo elegido se guarda aparte, en el mismo upsertSubscription
 // que ya corre justo antes de esto (ver routes/billing.js) -- no se duplica
-// aca.
+// aca. Tambien limpia payment_requested_at -- si el cliente habia pedido
+// el link, este nuevo link es justamente la respuesta a ese pedido.
 async function recordCheckoutLink(tenantId, checkoutUrl, db) {
   await db.query(
-    `UPDATE tenant_subscriptions SET last_checkout_url = ?, last_checkout_generated_at = NOW() WHERE tenant_id = ?`,
+    `UPDATE tenant_subscriptions SET last_checkout_url = ?, last_checkout_generated_at = NOW(), payment_requested_at = NULL WHERE tenant_id = ?`,
     [checkoutUrl, tenantId]
   );
+}
+
+// Fase 12 -- hueco real encontrado probando con un usuario de verdad: el
+// cliente no tenia forma de avisar que necesita el link de pago (solo
+// aparece si el superadmin ya lo genero antes desde Facturacion). Mismo
+// espiritu que requestCancellation: deja constancia del pedido, no genera
+// nada solo (evita el problema de calcular un monto en ARS sin que el
+// cliente lo pueda manipular, ver el diseño original de /pagos).
+async function requestPaymentLink(tenantId, db) {
+  await db.query(`UPDATE tenant_subscriptions SET payment_requested_at = NOW() WHERE tenant_id = ?`, [tenantId]);
 }
 
 module.exports = {
@@ -200,5 +211,6 @@ module.exports = {
   requestCancellation,
   clearCancellationRequest,
   approveCancellation,
-  recordCheckoutLink
+  recordCheckoutLink,
+  requestPaymentLink
 };

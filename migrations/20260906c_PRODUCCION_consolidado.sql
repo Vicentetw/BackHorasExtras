@@ -246,4 +246,14 @@ CREATE TABLE IF NOT EXISTS signup_leads (
   CONSTRAINT fk_signup_leads_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );
 
-SELECT 'CONSOLIDADO 2026-09-03 a 09-08 aplicado correctamente' AS resultado;
+
+-- ------------------------------------------------------------
+-- 6) Fase 12 (2026-09-09): pedido de link de pago desde /pagos. Ver
+--    20260909_payment_requested.sql.
+-- ------------------------------------------------------------
+
+SET @falta := (SELECT COUNT(*) = 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tenant_subscriptions' AND COLUMN_NAME='payment_requested_at');
+SET @sql := IF(@falta, 'ALTER TABLE tenant_subscriptions ADD COLUMN payment_requested_at DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SELECT 'CONSOLIDADO 2026-09-03 a 09-09 aplicado correctamente' AS resultado;

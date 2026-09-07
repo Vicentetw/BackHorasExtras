@@ -367,5 +367,24 @@ module.exports = function (db) {
     }
   });
 
+  // Fase 12 -- el cliente pide desde /pagos que le generen un link de pago
+  // (hueco real: antes no tenia forma de avisar, ni de entender por que no
+  // veia ningun boton). Solo deja constancia -- el superadmin sigue siendo
+  // quien genera el link de verdad (POST mercadopago-checkout, mas abajo),
+  // que ya limpia esta marca solo al hacerlo.
+  router.post('/subscriptions/:tenantId/request-payment-link', async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      if (!canViewTenant(req, tenantId)) return res.status(403).json({ error: 'No autorizado' });
+      const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
+      if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada' });
+      await billingRepo.requestPaymentLink(tenantId, db);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('ERROR requesting payment link:', err);
+      res.status(500).json({ error: 'Error al pedir el link de pago' });
+    }
+  });
+
   return router;
 };

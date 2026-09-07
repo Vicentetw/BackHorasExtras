@@ -83,6 +83,56 @@ test('GET /api/app-users/me: incluye subscriptionStatus para un tenant normal, n
   assert.equal(meSuper.subscriptionStatus, null);
 });
 
+test('pedir el link de pago: queda constancia del pedido', async () => {
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/request-payment-link`, {
+    method: 'POST',
+    headers: headersTenant
+  });
+  assert.equal(res.status, 200);
+
+  const subRes = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}`, { headers: headersTenant });
+  const sub = await subRes.json();
+  assert.ok(sub.subscription.payment_requested_at, 'debe quedar la marca del pedido');
+});
+
+test('otro tenant no puede pedir el link de pago ajeno', async () => {
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/request-payment-link`, {
+    method: 'POST',
+    headers: headersOther
+  });
+  assert.equal(res.status, 403);
+});
+
+test('generar el link de MercadoPago limpia el pedido de pago pendiente', async () => {
+  if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
+    console.log('  (saltado: MERCADOPAGO_ACCESS_TOKEN no configurado en este entorno)');
+    return;
+  }
+  const testUserRes = await fetch('https://api.mercadopago.com/users/test_user', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.MERCADOPAGO_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site_id: 'MLA' })
+  });
+  const testUser = await testUserRes.json();
+  if (testUserRes.status !== 201) {
+    console.log('  (saltado: no se pudo crear el comprador de prueba -- ' + JSON.stringify(testUser) + ')');
+    return;
+  }
+  await new Promise((r) => setTimeout(r, 4000));
+
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/mercadopago-checkout`, {
+    method: 'POST',
+    headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payer_email: testUser.email, monthly_amount: 1000, currency_id: 'ARS', billing_period: 'monthly' })
+  });
+  const json = await res.json();
+  assert.equal(res.status, 201, JSON.stringify(json));
+
+  const subRes = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}`, { headers: headersTenant });
+  const sub = await subRes.json();
+  assert.equal(sub.subscription.payment_requested_at, null, 'generar el link responde al pedido -- se limpia solo');
+});
+
 test('pedir la baja: queda pendiente, NO cambia el status todavia', async () => {
   const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/request-cancellation`, {
     method: 'POST',
