@@ -142,7 +142,7 @@ module.exports = function (db) {
         return res.status(400).json({ error: 'leadId y message son requeridos' });
       }
 
-      const [[lead]] = await db.query('SELECT id, chat_questions_used FROM signup_leads WHERE id = ?', [leadId]);
+      const [[lead]] = await db.query('SELECT id, chat_questions_used, chat_history FROM signup_leads WHERE id = ?', [leadId]);
       if (!lead) return res.status(404).json({ error: 'No se encontró el registro' });
 
       if (lead.chat_questions_used >= CHAT_QUESTION_LIMIT) {
@@ -157,9 +157,18 @@ module.exports = function (db) {
       const plan = await billingRepository.getDefaultPlan(db);
       if (!plan) return res.status(503).json({ error: 'No hay un plan configurado' });
 
-      const { reply } = await askSalesChat({ apiKey, plan, userMessage: message });
+      // Bug real: antes cada mensaje se mandaba SOLO, sin los anteriores --
+      // el modelo no tenia forma de entender un "si" respondiendo a su
+      // propia pregunta. El historial de ESTE lead se persiste aca mismo
+      // (JSON, acotado solo por CHAT_QUESTION_LIMIT).
+      const history = Array.isArray(lead.chat_history) ? lead.chat_history : [];
+      const { reply } = await askSalesChat({ apiKey, plan, history, userMessage: message });
+      const updatedHistory = [...history, { role: 'user', content: message }, { role: 'assistant', content: reply }];
 
-      await db.query('UPDATE signup_leads SET chat_questions_used = chat_questions_used + 1 WHERE id = ?', [leadId]);
+      await db.query(
+        'UPDATE signup_leads SET chat_questions_used = chat_questions_used + 1, chat_history = ? WHERE id = ?',
+        [JSON.stringify(updatedHistory), leadId]
+      );
 
       const questionsLeft = CHAT_QUESTION_LIMIT - (lead.chat_questions_used + 1);
       res.json({ reply, questionsLeft, limitReached: questionsLeft <= 0 });

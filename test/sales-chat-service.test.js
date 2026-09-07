@@ -52,6 +52,30 @@ test('askSalesChat: trunca defensivamente una respuesta larga, no confia solo en
   assert.ok(result.reply.endsWith('…'));
 });
 
+test('askSalesChat: manda el historial previo antes del mensaje nuevo', async () => {
+  // Bug real encontrado probando la landing de verdad: antes se mandaba
+  // SOLO el mensaje nuevo -- un "si" respondiendo a la propia pregunta del
+  // bot le llegaba sin ningun contexto y el modelo contestaba cualquier cosa.
+  const fetchImpl = fakeFetch({ content: [{ type: 'text', text: 'Dale, usá el botón de WhatsApp.' }] });
+  const history = [
+    { role: 'user', content: '¿en qué link me registro?' },
+    { role: 'assistant', content: 'El formulario está arriba en esta misma página.' }
+  ];
+  await askSalesChat({ apiKey: 'KEY', plan: FAKE_PLAN, history, userMessage: 'si', fetchImpl });
+
+  const body = JSON.parse(fetchImpl.calls[0].options.body);
+  assert.equal(body.messages.length, 3);
+  assert.deepEqual(body.messages[0], history[0]);
+  assert.deepEqual(body.messages[1], history[1]);
+  assert.equal(body.messages[2].content, 'si');
+});
+
+test('buildSystemPrompt: sabe que el formulario esta en la pagina y que no puede mandar links', () => {
+  const prompt = buildSystemPrompt(FAKE_PLAN);
+  assert.match(prompt, /formulario.*esta en ESTA MISMA pagina/i);
+  assert.match(prompt, /NO podés enviar links ni contactos/i);
+});
+
 test('askSalesChat: si Anthropic responde con error, lo propaga con detalle', async () => {
   const fetchImpl = fakeFetch({ error: { message: 'invalid_api_key' } }, { ok: false, status: 401 });
   await assert.rejects(
