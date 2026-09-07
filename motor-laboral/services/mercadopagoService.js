@@ -14,6 +14,7 @@
 // (default: fetch global) para poder testear la logica de negocio sin
 // pegarle a MercadoPago de verdad (no tenemos credenciales reales todavia).
 const crypto = require('crypto');
+const { PERIOD_MONTHS } = require('./billingCalculations');
 
 const MP_API_BASE = 'https://api.mercadopago.com';
 
@@ -35,11 +36,20 @@ async function createSubscriptionCheckout({
   tenantId,
   tenantName,
   payerEmail,
-  monthlyAmountUsd,
+  transactionAmount,
   currencyId,
   backUrl,
+  billingPeriod,
   fetchImpl = fetch
 }) {
+  // frequency/frequency_type de MercadoPago -- antes hardcodeado a 1 mes
+  // (unico caso probado originalmente). Fase 10: el superadmin puede elegir
+  // trimestral/semestral/anual al generar el link, reutilizando la MISMA
+  // tabla mensual->cantidad de meses que ya usa computeInvoiceAmount (no
+  // duplicar el mapeo). `transaction_amount` sigue siendo el monto YA
+  // calculado para todo el periodo (no el mensual) -- eso lo resuelve quien
+  // llama a esta funcion, aca solo se arma el request a MercadoPago.
+  const months = PERIOD_MONTHS[billingPeriod] || 1;
   const body = {
     // "reason" tiene 2 restricciones reales de MercadoPago, encontradas
     // probando contra el sandbox (no documentadas explicitamente): maximo
@@ -50,9 +60,9 @@ async function createSubscriptionCheckout({
     external_reference: String(tenantId),
     payer_email: payerEmail,
     auto_recurring: {
-      frequency: 1,
+      frequency: months,
       frequency_type: 'months',
-      transaction_amount: Number(monthlyAmountUsd),
+      transaction_amount: Number(transactionAmount),
       currency_id: currencyId || 'ARS'
     },
     back_url: backUrl,

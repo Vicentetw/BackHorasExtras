@@ -198,4 +198,28 @@ CREATE TABLE IF NOT EXISTS payment_records (
   CONSTRAINT fk_payment_records_app_user FOREIGN KEY (recorded_by) REFERENCES app_users(id)
 );
 
-SELECT 'CONSOLIDADO 2026-09-03 a 09-06 aplicado correctamente' AS resultado;
+
+-- ------------------------------------------------------------
+-- 4) Fase 10 (2026-09-07): panel de Pagos del cliente + baja
+--    autogestionada con aprobacion del superadmin. Ver
+--    20260907_billing_client_panel.sql para el detalle de por que cada
+--    columna existe.
+-- ------------------------------------------------------------
+
+SET @falta := (SELECT COUNT(*) = 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tenant_subscriptions' AND COLUMN_NAME='cancellation_requested_at');
+SET @sql := IF(@falta, 'ALTER TABLE tenant_subscriptions ADD COLUMN cancellation_requested_at DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @falta := (SELECT COUNT(*) = 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tenant_subscriptions' AND COLUMN_NAME='cancellation_requested_by');
+SET @sql := IF(@falta, 'ALTER TABLE tenant_subscriptions ADD COLUMN cancellation_requested_by INT NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @falta := (SELECT COUNT(*) = 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tenant_subscriptions' AND COLUMN_NAME='last_checkout_url');
+SET @sql := IF(@falta, 'ALTER TABLE tenant_subscriptions ADD COLUMN last_checkout_url TEXT NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @falta := (SELECT COUNT(*) = 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tenant_subscriptions' AND COLUMN_NAME='last_checkout_generated_at');
+SET @sql := IF(@falta, 'ALTER TABLE tenant_subscriptions ADD COLUMN last_checkout_generated_at DATETIME NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SELECT 'CONSOLIDADO 2026-09-03 a 09-07 aplicado correctamente' AS resultado;

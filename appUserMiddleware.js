@@ -37,7 +37,18 @@ async function appUserMiddleware(req, res, next) {
     // CUALQUIER ruta para esa empresa, no solo las de alta. Superadmin
     // nunca se bloquea (es el operador de la plataforma). Fail-open si
     // falla la consulta -- no se corta a nadie por un error nuestro.
-    if (!appUser.isSuperadmin && appUser.tenantId != null) {
+    //
+    // Bug real encontrado en Fase 10 (panel de Pagos del cliente): este
+    // chequeo bloqueaba TODAS las rutas sin excepcion, incluida
+    // /api/app-users/me -- un tenant cancelado ni podia cargar su propio
+    // perfil (la app le mostraba un error de diagnostico generico en vez
+    // de un mensaje entendible). Se exceptuan /api/app-users/me (para que
+    // pueda cargar su perfil y ver por que esta bloqueado) y /api/billing
+    // (para que pueda ver su suscripcion y el link de pago desde /pagos
+    // aunque este cancelado -- las rutas de billing ya tienen su propio
+    // chequeo de "es tu propia empresa" via canViewTenant).
+    const isBillingSelfServiceRoute = req.path === '/api/app-users/me' || req.path.startsWith('/api/billing');
+    if (!isBillingSelfServiceRoute && !appUser.isSuperadmin && appUser.tenantId != null) {
       try {
         const subscription = await billingRepository.getSubscriptionByTenant(appUser.tenantId, db);
         if (subscription) {

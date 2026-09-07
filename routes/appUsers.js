@@ -2,6 +2,8 @@ const express = require('express');
 const admin = require('firebase-admin');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
+const billingRepository = require('../motor-laboral/repositories/billingRepository');
+const { resolveEffectiveStatus, DEFAULT_GRACE_DAYS } = require('../motor-laboral/services/billingCalculations');
 
 // Panel de administracion de usuarios de la app (no confundir con los
 // "empleados" de RRHH -- estos son las cuentas que pueden ENTRAR al
@@ -18,13 +20,39 @@ module.exports = function (db) {
     if (!req.appUser) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
+
+    // Fase 10 (panel de Pagos del cliente): el front necesita saber si la
+    // suscripcion de su empresa esta cancelada para redirigir cualquier
+    // pantalla a /pagos (ver permission-guard.ts en Angular) -- se calcula
+    // aca, una sola vez al cargar el perfil, reusando la MISMA logica que
+    // ya usa GET /api/billing/subscriptions/:tenantId (no reimplementar).
+    // null para superadmin o para un usuario sin empresa asignada -- a
+    // ninguno de los dos se lo bloquea nunca por esto.
+    let subscriptionStatus = null;
+    if (!req.appUser.isSuperadmin && req.appUser.tenantId != null) {
+      try {
+        const subscription = await billingRepository.getSubscriptionByTenant(req.appUser.tenantId, db);
+        if (subscription) {
+          subscriptionStatus = resolveEffectiveStatus({
+            status: subscription.status,
+            currentPeriodEnd: subscription.current_period_end,
+            gracePeriodDays: subscription.grace_period_days,
+            defaultGraceDays: DEFAULT_GRACE_DAYS
+          });
+        }
+      } catch (err) {
+        console.error('ERROR resolviendo subscriptionStatus en /me:', err);
+      }
+    }
+
     res.json({
       id: req.appUser.id,
       email: req.appUser.email,
       tenantId: req.appUser.tenantId,
       roleId: req.appUser.roleId,
       isSuperadmin: req.appUser.isSuperadmin,
-      permissions: Array.from(req.appUser.permissions)
+      permissions: Array.from(req.appUser.permissions),
+      subscriptionStatus
     });
   });
 

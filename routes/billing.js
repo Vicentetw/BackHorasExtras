@@ -247,9 +247,14 @@ module.exports = function (db) {
   // el cobro recurrente (Suscripciones -- Preapproval API). El monto va en
   // pesos (o lo que se mande) a mano, no se auto-calcula desde el USD de
   // referencia -- el tipo de cambio lo controla el superadmin (ver la
-  // conversacion sobre precios en USD vs cobro en ARS). El link resultante
-  // (initPoint) se le manda al cliente por fuera del sistema (email,
-  // whatsapp, etc.) -- todavia no hay un flujo de autoservicio.
+  // conversacion sobre precios en USD vs cobro en ARS). Fase 10: ahora
+  // tambien se elige el periodo (mensual/trimestral/semestral/anual) y el
+  // link resultante se GUARDA (antes se perdia apenas se cerraba el
+  // dialogo) para que el cliente lo vea despues desde su propio panel
+  // (/pagos) -- sigue siendo el superadmin quien lo genera y se lo
+  // "entrega" viendolo en el panel, no un checkout que el cliente arma
+  // solo (evita todo el problema de calcular un precio en ARS de forma
+  // segura sin que el cliente lo pueda manipular).
   router.post('/subscriptions/:tenantId/mercadopago-checkout', requireSuperadmin, async (req, res) => {
     try {
       const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
@@ -258,15 +263,19 @@ module.exports = function (db) {
       }
 
       const { tenantId } = req.params;
-      const { payer_email, monthly_amount, currency_id } = req.body;
+      const { payer_email, monthly_amount, currency_id, billing_period } = req.body;
       if (!payer_email || !monthly_amount) {
         return res.status(400).json({ error: 'payer_email y monthly_amount son requeridos' });
+      }
+      if (billing_period !== undefined && !['monthly', 'quarterly', 'semiannual', 'annual'].includes(billing_period)) {
+        return res.status(400).json({ error: "billing_period debe ser 'monthly', 'quarterly', 'semiannual' o 'annual'" });
       }
 
       const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
       if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada -- asignale un plan primero' });
 
       const tenantName = subscription.tenant_name || `Empresa #${tenantId}`;
+      const effectiveBillingPeriod = billing_period || subscription.billing_period;
       // back_url es REQUERIDO por MercadoPago (probado contra el sandbox
       // real -- "back_url is required" si se manda undefined, pese a que
       // los ejemplos de la documentacion lo muestran como si fuera
@@ -279,14 +288,15 @@ module.exports = function (db) {
         tenantId,
         tenantName,
         payerEmail: payer_email,
-        monthlyAmountUsd: monthly_amount, // nombre del parametro heredado, es el monto en la moneda que se mande (ver currency_id)
+        transactionAmount: monthly_amount,
         currencyId: currency_id || 'ARS',
-        backUrl
+        backUrl,
+        billingPeriod: effectiveBillingPeriod
       });
 
       await billingRepo.upsertSubscription(tenantId, {
         plan_id: subscription.plan_id,
-        billing_period: subscription.billing_period,
+        billing_period: effectiveBillingPeriod,
         status: subscription.status,
         payment_method: 'mercadopago',
         mercadopago_subscription_id: checkout.id,
@@ -295,11 +305,69 @@ module.exports = function (db) {
         grace_period_days: subscription.grace_period_days,
         grace_message: subscription.grace_message
       }, db);
+      await billingRepo.recordCheckoutLink(tenantId, checkout.initPoint, db);
 
       res.status(201).json({ ok: true, mercadopagoSubscriptionId: checkout.id, checkoutUrl: checkout.initPoint });
     } catch (err) {
       console.error('ERROR creating MercadoPago checkout:', err);
       res.status(502).json({ error: err.message || 'Error al crear el checkout de MercadoPago', mpResponse: err.mpResponse });
+    }
+  });
+
+  // Fase 10 -- el cliente pide la baja desde su propio panel (/pagos). NO
+  // se cancela nada todavia: queda pendiente hasta que un superadmin la
+  // apruebe (ver approve-cancellation abajo). canViewTenant permite tanto
+  // al dueño del tenant como a un superadmin -- en la practica solo lo va
+  // a usar el cliente, pero no hace falta una regla aparte para eso.
+  router.post('/subscriptions/:tenantId/request-cancellation', async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      if (!canViewTenant(req, tenantId)) return res.status(403).json({ error: 'No autorizado' });
+
+      const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
+      if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada' });
+      if (subscription.status === 'canceled') {
+        return res.status(409).json({ error: 'La suscripción ya está dada de baja' });
+      }
+      if (subscription.cancellation_requested_at) {
+        return res.status(409).json({ error: 'Ya hay un pedido de baja pendiente' });
+      }
+
+      await billingRepo.requestCancellation(tenantId, req.appUser?.id || null, db);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('ERROR requesting cancellation:', err);
+      res.status(500).json({ error: 'Error al pedir la baja' });
+    }
+  });
+
+  // Retirar un pedido de baja pendiente -- lo puede hacer tanto el cliente
+  // (se arrepiente) como el superadmin (lo rechaza). Mismo efecto en
+  // ambos casos: se borra la marca de "pendiente", el status no se toca.
+  router.delete('/subscriptions/:tenantId/cancellation-request', async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      if (!canViewTenant(req, tenantId)) return res.status(403).json({ error: 'No autorizado' });
+      await billingRepo.clearCancellationRequest(tenantId, db);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('ERROR clearing cancellation request:', err);
+      res.status(500).json({ error: 'Error al retirar el pedido de baja' });
+    }
+  });
+
+  // Solo el superadmin aprueba -- recien aca se bloquea de verdad
+  // (status='canceled', ver isFullyBlocked en billingCalculations.js).
+  router.post('/subscriptions/:tenantId/approve-cancellation', requireSuperadmin, async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
+      if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada' });
+      await billingRepo.approveCancellation(tenantId, db);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('ERROR approving cancellation:', err);
+      res.status(500).json({ error: 'Error al aprobar la baja' });
     }
   });
 

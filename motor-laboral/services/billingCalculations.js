@@ -102,6 +102,7 @@ function isFullyBlocked(effectiveStatus) {
 
 module.exports = {
   DEFAULT_GRACE_DAYS,
+  PERIOD_MONTHS,
   computeInvoiceAmount,
   resolveEffectiveStatus,
   isWriteBlocked,
