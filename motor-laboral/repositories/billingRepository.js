@@ -109,8 +109,25 @@ async function upsertSubscription(tenantId, data, db) {
   );
 }
 
+// Bug real encontrado probando de punta a punta con MercadoPago: cuando el
+// webhook autoriza la suscripcion (ver mercadopagoWebhook.js) esto solo
+// tocaba `status`. El link de pago (last_checkout_url) quedaba activo para
+// siempre -- el cliente seguia viendo "Pagar ahora con MercadoPago" en
+// /pagos DESPUES de haber pagado, y podia autorizar la misma suscripcion
+// mas de una vez. Al pasar a 'active' el link ya cumplio su proposito
+// (autorizar el debito recurrente), igual que un pedido de pago pendiente
+// -- se limpian los dos.
 async function updateSubscriptionStatus(tenantId, status, db) {
-  await db.query(`UPDATE tenant_subscriptions SET status = ? WHERE tenant_id = ?`, [status, tenantId]);
+  if (status === 'active') {
+    await db.query(
+      `UPDATE tenant_subscriptions
+       SET status = ?, last_checkout_url = NULL, last_checkout_generated_at = NULL, payment_requested_at = NULL
+       WHERE tenant_id = ?`,
+      [status, tenantId]
+    );
+  } else {
+    await db.query(`UPDATE tenant_subscriptions SET status = ? WHERE tenant_id = ?`, [status, tenantId]);
+  }
 }
 
 // Registrar un pago (manual o MercadoPago) y extender el periodo vigente a
@@ -124,7 +141,8 @@ async function recordPayment({ tenantId, amountUsd, amountLocal, localCurrency, 
   );
   await db.query(
     `UPDATE tenant_subscriptions
-     SET status = 'active', current_period_start = ?, current_period_end = ?, last_payment_at = CURRENT_TIMESTAMP
+     SET status = 'active', current_period_start = ?, current_period_end = ?, last_payment_at = CURRENT_TIMESTAMP,
+         payment_requested_at = NULL
      WHERE tenant_id = ?`,
     [periodStart, periodEnd, tenantId]
   );

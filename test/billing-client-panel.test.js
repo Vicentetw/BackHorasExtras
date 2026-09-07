@@ -14,6 +14,7 @@ require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
+const billingRepo = require('../motor-laboral/repositories/billingRepository');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
@@ -63,6 +64,10 @@ before(async () => {
 });
 
 after(async () => {
+  // El nuevo test de "pago manual" (Fase 13) inserta una fila real en
+  // payment_records -- sin borrarla primero, el DELETE de tenants de abajo
+  // rompe por la foreign key (fk_payment_records_tenant).
+  await db.query(`DELETE FROM payment_records WHERE tenant_id IN (?, ?)`, [TENANT_C, OTHER_TENANT]);
   await db.query(`DELETE FROM tenant_subscriptions WHERE tenant_id IN (?, ?)`, [TENANT_C, OTHER_TENANT]);
   if (planId) await db.query(`DELETE FROM plans WHERE id = ?`, [planId]);
   await deleteTestUser(UID_TENANT);
@@ -131,6 +136,43 @@ test('generar el link de MercadoPago limpia el pedido de pago pendiente', async 
   const subRes = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}`, { headers: headersTenant });
   const sub = await subRes.json();
   assert.equal(sub.subscription.payment_requested_at, null, 'generar el link responde al pedido -- se limpia solo');
+});
+
+test('activar la suscripcion (webhook de MercadoPago autorizado) limpia el link de pago pendiente', async () => {
+  // Bug real encontrado probando de punta a punta: antes esto solo tocaba
+  // `status` -- el cliente seguia viendo "Pagar ahora con MercadoPago" en
+  // /pagos DESPUES de haber pagado, pudiendo autorizar la misma suscripcion
+  // mas de una vez. mercadopagoWebhook.js llama a esta misma funcion cuando
+  // MercadoPago avisa que la suscripcion quedo 'authorized'.
+  await db.query(`UPDATE tenant_subscriptions SET last_checkout_url = 'https://mp.example/fake-checkout' WHERE tenant_id = ?`, [TENANT_C]);
+  await billingRepo.updateSubscriptionStatus(TENANT_C, 'active', db);
+
+  const subRes = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}`, { headers: headersTenant });
+  const sub = await subRes.json();
+  assert.equal(sub.subscription.last_checkout_url, null, 'al activarse, el link ya cumplio su proposito -- se limpia solo');
+  assert.equal(sub.subscription.status, 'active');
+});
+
+test('registrar un pago manual tambien limpia el pedido de pago pendiente', async () => {
+  // Bug real encontrado revisando el circuito con el superadmin: antes solo
+  // se limpiaba al generar el link de MercadoPago -- si el pago se registra
+  // a mano (transferencia/efectivo, la opcion mas comun), el indicador
+  // "Pidio el link de pago" quedaba prendido para siempre.
+  await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/request-payment-link`, {
+    method: 'POST',
+    headers: headersTenant
+  });
+
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/payments`, {
+    method: 'POST',
+    headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount_local: 1000, local_currency: 'ARS', reference: 'transferencia-test' })
+  });
+  assert.equal(res.status, 201);
+
+  const subRes = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}`, { headers: headersTenant });
+  const sub = await subRes.json();
+  assert.equal(sub.subscription.payment_requested_at, null, 'registrar un pago manual tambien responde al pedido -- se limpia solo');
 });
 
 test('pedir la baja: queda pendiente, NO cambia el status todavia', async () => {
