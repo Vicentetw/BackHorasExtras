@@ -42,6 +42,11 @@ module.exports = function (db) {
         base_price_usd,
         price_per_employee_usd,
         min_billed_employees,
+        // Fase 15: tope de empleados incluidos en el plan ("como una
+        // telefonia") -- null/undefined = sin limite, a proposito (un plan
+        // enterprise a medida puede no tener tope).
+        max_employees: req.body.max_employees === undefined || req.body.max_employees === null || req.body.max_employees === ''
+          ? null : Number(req.body.max_employees),
         discount_quarterly_pct: req.body.discount_quarterly_pct ?? 5,
         discount_semiannual_pct: req.body.discount_semiannual_pct ?? 10,
         discount_annual_pct: req.body.discount_annual_pct ?? 17,
@@ -68,6 +73,9 @@ module.exports = function (db) {
         base_price_usd,
         price_per_employee_usd,
         min_billed_employees,
+        max_employees: req.body.max_employees === undefined
+          ? existing.max_employees
+          : (req.body.max_employees === null || req.body.max_employees === '' ? null : Number(req.body.max_employees)),
         discount_quarterly_pct: req.body.discount_quarterly_pct ?? existing.discount_quarterly_pct,
         discount_semiannual_pct: req.body.discount_semiannual_pct ?? existing.discount_semiannual_pct,
         discount_annual_pct: req.body.discount_annual_pct ?? existing.discount_annual_pct,

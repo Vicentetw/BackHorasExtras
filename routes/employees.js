@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { resolveTenantId, requirePermission, requireActiveSubscription } = require('../appUserMiddleware');
+const billingRepo = require('../motor-laboral/repositories/billingRepository');
 
 // NOTE: Automatic employee->user sync has been disabled.
 // Matching now requires explicit approval via the matching dashboard.
@@ -182,6 +183,22 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
     const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
       ? req.appUser.tenantId
       : (tenant_id || null);
+
+    // Fase 15 -- tope de empleados del plan contratado ("como una
+    // telefonia"): hueco real encontrado por el superadmin, se pudo cargar
+    // un empleado de mas de los que el plan de prueba permitia sin ningun
+    // aviso. Se aplica siempre que la empresa tenga un tenant conocido --
+    // incluye altas hechas por el superadmin a nombre de esa empresa (el
+    // tope es del CONTRATO de la empresa, no de quien hace el alta).
+    if (effectiveTenantId != null) {
+      const capacity = await billingRepo.checkEmployeeCapacity(effectiveTenantId, 1, db);
+      if (!capacity.allowed) {
+        return res.status(409).json({
+          error: `Tu plan (${capacity.planName}) permite hasta ${capacity.max} empleados y ya tenés ${capacity.current} activos. Para agregar más, cambiá a un plan superior.`,
+          employeeCap: capacity
+        });
+      }
+    }
 
     const normalizedDocumento = documento ? String(documento).trim() : null;
 

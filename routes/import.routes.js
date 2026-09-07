@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
+const billingRepo = require('../motor-laboral/repositories/billingRepository');
 
 console.log('🚀 Cargando import.routes.js v2.0 - con staging_employees');
 
@@ -180,6 +181,32 @@ router.post('/employees/confirm/:batchId', async (req, res) => {
       return res.status(404).json({ error: 'Batch no encontrado o ya procesado' });
     }
 
+    // Fase 15 -- tope de empleados del plan contratado ("como una
+    // telefonia"): un Excel de 60 filas no puede esquivar el mismo tope que
+    // ya se aplica al alta individual (routes/employees.js). Se cuenta
+    // ANTES de insertar nada cuantas filas van a ser altas NUEVAS de
+    // verdad (excluyendo las que ya existen, que el loop de abajo iba a
+    // saltear igual) y se rechaza el batch COMPLETO si se pasaria del tope
+    // -- nada de "importar los primeros 5 y cortar a mitad de la lista".
+    const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
+      ? req.appUser.tenantId
+      : (req.body?.tenant_id || null);
+    if (effectiveTenantId != null) {
+      const [existingRows] = await db.query(
+        `SELECT employee_id FROM employees WHERE employee_id IN (?)`,
+        [stagingRows.map((r) => r.employee_id)]
+      );
+      const existingIds = new Set(existingRows.map((r) => r.employee_id));
+      const newCount = stagingRows.filter((r) => !existingIds.has(r.employee_id)).length;
+      const capacity = await billingRepo.checkEmployeeCapacity(effectiveTenantId, newCount, db);
+      if (!capacity.allowed) {
+        return res.status(409).json({
+          error: `Este import agregaría ${newCount} empleados nuevos, pero tu plan (${capacity.planName}) permite hasta ${capacity.max} en total (ya tenés ${capacity.current}). Reducí la lista o cambiá a un plan superior.`,
+          employeeCap: capacity
+        });
+      }
+    }
+
     let inserted = 0;
     let skipped = 0;
     let errors = [];
@@ -201,8 +228,14 @@ router.post('/employees/confirm/:batchId', async (req, res) => {
       }
 
       console.log('Insertando empleado...');
-      
-      // Insertar en employees (incluye tenant_id si viene en el CSV)
+
+      // Insertar en employees. OJO -- bug real encontrado armando el tope
+      // de empleados (Fase 15): esto usaba `row.tenant_id`, pero la fila de
+      // staging NUNCA lo trae seteado (POST /employees de arriba no lo
+      // guarda) -- todo empleado importado por Excel quedaba con
+      // tenant_id NULL, sin excepcion. Se usa effectiveTenantId (misma
+      // resolucion que el alta individual: la empresa del usuario logueado,
+      // o la que mande explicitamente el superadmin) en su lugar.
       await db.query(`
         INSERT INTO employees
         (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, overtime_authorized, exclude_from_report, legajo_alt, tenant_id)
@@ -221,7 +254,7 @@ router.post('/employees/confirm/:batchId', async (req, res) => {
         row.overtime_authorized !== undefined ? (row.overtime_authorized ? 1 : 0) : 1,
         row.exclude_from_report !== undefined ? (row.exclude_from_report ? 1 : 0) : 0,
         row.legajo_alt,
-        row.tenant_id || null
+        effectiveTenantId
       ]);
 
       console.log('Empleado insertado correctamente');

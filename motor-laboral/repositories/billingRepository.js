@@ -31,11 +31,11 @@ async function getDefaultPlan(db) {
 
 async function createPlan(data, db) {
   const [result] = await db.query(
-    `INSERT INTO plans (name, base_price_usd, price_per_employee_usd, min_billed_employees,
+    `INSERT INTO plans (name, base_price_usd, price_per_employee_usd, min_billed_employees, max_employees,
        discount_quarterly_pct, discount_semiannual_pct, discount_annual_pct, active, is_default)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      data.name, data.base_price_usd, data.price_per_employee_usd, data.min_billed_employees,
+      data.name, data.base_price_usd, data.price_per_employee_usd, data.min_billed_employees, data.max_employees ?? null,
       data.discount_quarterly_pct, data.discount_semiannual_pct, data.discount_annual_pct,
       data.active ? 1 : 0, data.is_default ? 1 : 0
     ]
@@ -48,11 +48,11 @@ async function createPlan(data, db) {
 
 async function updatePlan(id, data, db) {
   await db.query(
-    `UPDATE plans SET name = ?, base_price_usd = ?, price_per_employee_usd = ?, min_billed_employees = ?,
+    `UPDATE plans SET name = ?, base_price_usd = ?, price_per_employee_usd = ?, min_billed_employees = ?, max_employees = ?,
        discount_quarterly_pct = ?, discount_semiannual_pct = ?, discount_annual_pct = ?, active = ?, is_default = ?
      WHERE id = ?`,
     [
-      data.name, data.base_price_usd, data.price_per_employee_usd, data.min_billed_employees,
+      data.name, data.base_price_usd, data.price_per_employee_usd, data.min_billed_employees, data.max_employees ?? null,
       data.discount_quarterly_pct, data.discount_semiannual_pct, data.discount_annual_pct,
       data.active ? 1 : 0, data.is_default ? 1 : 0, id
     ]
@@ -64,7 +64,7 @@ async function updatePlan(id, data, db) {
 
 async function getSubscriptionByTenant(tenantId, db) {
   const [[row]] = await db.query(
-    `SELECT s.*, p.name AS plan_name, p.base_price_usd, p.price_per_employee_usd, p.min_billed_employees,
+    `SELECT s.*, p.name AS plan_name, p.base_price_usd, p.price_per_employee_usd, p.min_billed_employees, p.max_employees,
             p.discount_quarterly_pct, p.discount_semiannual_pct, p.discount_annual_pct, t.name AS tenant_name
      FROM tenant_subscriptions s
      JOIN plans p ON p.id = s.plan_id
@@ -76,14 +76,41 @@ async function getSubscriptionByTenant(tenantId, db) {
 }
 
 async function getAllSubscriptions(db) {
+  // employeeCount via subquery correlacionada -- una sola consulta para
+  // toda la lista de Facturacion en vez de N+1 (una por tenant). Mismo
+  // criterio de "activo" que countBillableEmployees.
   const [rows] = await db.query(
-    `SELECT s.*, p.name AS plan_name, t.name AS tenant_name
+    `SELECT s.*, p.name AS plan_name, p.max_employees, t.name AS tenant_name,
+            (SELECT COUNT(*) FROM employees e WHERE e.tenant_id = s.tenant_id AND (e.activo = 1 OR e.activo IS NULL)) AS employeeCount
      FROM tenant_subscriptions s
      JOIN plans p ON p.id = s.plan_id
      JOIN tenants t ON t.id = s.tenant_id
      ORDER BY t.name ASC`
   );
   return rows;
+}
+
+// Fase 15 -- tope de empleados por plan ("como una telefonia"). NULL en
+// max_employees = sin limite (planes viejos/enterprise a medida). Un solo
+// lugar para esta regla -- lo usan tanto el alta individual (routes/employees.js)
+// como la confirmacion de un import masivo (routes/import.routes.js), asi
+// no se puede esquivar el tope subiendo un Excel en vez de cargar a mano.
+async function checkEmployeeCapacity(tenantId, additionalCount, db) {
+  const subscription = await getSubscriptionByTenant(tenantId, db);
+  // Sin suscripcion armada todavia -- no se bloquea (mismo criterio que
+  // requireActiveSubscription: no se puede exigir un tope de un plan que
+  // ni siquiera existe para esta empresa).
+  if (!subscription || subscription.max_employees == null) {
+    return { allowed: true, current: null, max: null, planName: subscription?.plan_name || null };
+  }
+  const current = await countBillableEmployees(tenantId, db);
+  const max = subscription.max_employees;
+  return {
+    allowed: current + additionalCount <= max,
+    current,
+    max,
+    planName: subscription.plan_name
+  };
 }
 
 // Alta o reemplazo completo de la suscripcion de una empresa -- una fila
@@ -230,5 +257,6 @@ module.exports = {
   clearCancellationRequest,
   approveCancellation,
   recordCheckoutLink,
-  requestPaymentLink
+  requestPaymentLink,
+  checkEmployeeCapacity
 };
