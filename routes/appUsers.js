@@ -1,5 +1,4 @@
 const express = require('express');
-const admin = require('firebase-admin');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
@@ -109,41 +108,20 @@ module.exports = function (db) {
         return res.status(400).json({ error: 'tenantId es requerido (salvo que sea superadmin)' });
       }
 
-      let firebaseUser;
+      let created;
       try {
-        firebaseUser = await admin.auth().getUserByEmail(email);
+        created = await appUserRepository.createInvitedUser(
+          { email, tenantId: isSuperadminRequested ? null : tenantId, isSuperadmin: isSuperadminRequested, roleId, permissions },
+          db
+        );
       } catch (err) {
-        if (err.code !== 'auth/user-not-found') throw err;
-        const tempPassword = Math.random().toString(36).slice(-10) + 'A1!';
-        firebaseUser = await admin.auth().createUser({ email, password: tempPassword });
+        if (err.code === 'EMAIL_TAKEN') {
+          return res.status(409).json({ error: err.message });
+        }
+        throw err;
       }
 
-      const [existing] = await db.query('SELECT id FROM app_users WHERE firebase_uid = ?', [firebaseUser.uid]);
-      if (existing.length > 0) {
-        return res.status(409).json({ error: 'Ese email ya tiene una cuenta habilitada en el sistema' });
-      }
-
-      const [result] = await db.query(
-        `INSERT INTO app_users (firebase_uid, email, tenant_id, is_superadmin, is_active)
-         VALUES (?, ?, ?, ?, 1)`,
-        [firebaseUser.uid, email, isSuperadminRequested ? null : tenantId, isSuperadminRequested ? 1 : 0]
-      );
-
-      if (Array.isArray(permissions) && permissions.length) {
-        await appUserRepository.setPermissions(result.insertId, permissions, db);
-      }
-      if (roleId) {
-        await appUserRepository.setRole(result.insertId, roleId, db);
-      }
-
-      let resetLink = null;
-      try {
-        resetLink = await admin.auth().generatePasswordResetLink(email);
-      } catch (err) {
-        console.warn('No se pudo generar el link de restablecimiento:', err.message);
-      }
-
-      res.json({ ok: true, id: result.insertId, resetLink });
+      res.json({ ok: true, id: created.id, resetLink: created.resetLink });
     } catch (err) {
       console.error('ERROR creating app user:', err);
       res.status(500).json({ error: 'Error al crear usuario: ' + err.message });

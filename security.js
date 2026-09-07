@@ -65,22 +65,34 @@ function corsOptionsDelegate(req, callback) {
   return callback(new Error(`CORS policy: Origin not allowed (${origin})`));
 }
 
-function securityMiddlewares(app, cors) {
+// Fase 11 (landing publica + alta autoservicio): rutas bajo publicPaths
+// (ej. /api/public) siguen pasando por helmet/rate-limit/CORS -- son la
+// superficie MAS expuesta del sistema, alcanzable sin ninguna credencial,
+// asi que esas protecciones importan mas ahi, no menos -- pero SALTAN las
+// 3 capas de identidad (API_KEY, Firebase, app_users), porque por
+// definicion las llama alguien que todavia no tiene ninguna cuenta.
+// routes/public.js aplica su propio rate-limit mas estricto encima de
+// esto para esa ruta puntual.
+function isPublicPath(req, publicPaths) {
+  return publicPaths.some((p) => req.path.startsWith(p));
+}
+
+function securityMiddlewares(app, cors, { publicPaths = [] } = {}) {
   app.disable('x-powered-by');
   app.use(helmet());
   app.use(apiRateLimiter);
   app.use(cors({ origin: corsOptionsDelegate, optionsSuccessStatus: 200 }));
-  app.use(authMiddleware);
+  app.use((req, res, next) => (isPublicPath(req, publicPaths) ? next() : authMiddleware(req, res, next)));
   // El API_KEY de arriba solo filtra bots/escaneos; no identifica usuarios.
   // Esto exige ademas un login real de Firebase en TODAS las rutas (antes
   // solo se exigia en /admin), para que los datos no queden accesibles con
   // solo copiar el API_KEY del codigo fuente del front.
-  app.use(firebaseAuthMiddleware);
+  app.use((req, res, next) => (isPublicPath(req, publicPaths) ? next() : firebaseAuthMiddleware(req, res, next)));
   // Un login de Firebase valido identifica a la persona, pero no dice a que
   // empresa pertenece ni que puede hacer -- eso vive en app_users/
   // user_permissions (paso 2 del plan multi-tenant), resuelto aca y colgado
   // en req.appUser para que cada ruta filtre por tenant y chequee permisos.
-  app.use(appUserMiddleware);
+  app.use((req, res, next) => (isPublicPath(req, publicPaths) ? next() : appUserMiddleware(req, res, next)));
 }
 
 function apiKeyWarning() {

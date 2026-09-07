@@ -1,7 +1,7 @@
 const express = require('express');
 const { requireSuperadmin, resolveTenantId } = require('../appUserMiddleware');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
-const { computeInvoiceAmount, resolveEffectiveStatus, DEFAULT_GRACE_DAYS } = require('../motor-laboral/services/billingCalculations');
+const { computeInvoiceAmount, resolveEffectiveStatus, DEFAULT_GRACE_DAYS, computeFreeTrialPeriod } = require('../motor-laboral/services/billingCalculations');
 const mp = require('../motor-laboral/services/mercadopagoService');
 
 // Fase 9 (venta): planes configurables (base + precio por empleado) +
@@ -162,11 +162,7 @@ module.exports = function (db) {
       let periodStart = req.body.current_period_start || null;
       let periodEnd = req.body.current_period_end || null;
       if (!periodStart && !periodEnd) {
-        const today = new Date();
-        const oneMonthOut = new Date(today);
-        oneMonthOut.setMonth(oneMonthOut.getMonth() + 1);
-        periodStart = today.toISOString().slice(0, 10);
-        periodEnd = oneMonthOut.toISOString().slice(0, 10);
+        ({ periodStart, periodEnd } = computeFreeTrialPeriod());
       }
 
       await billingRepo.upsertSubscription(tenantId, {

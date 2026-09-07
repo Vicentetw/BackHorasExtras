@@ -100,11 +100,27 @@ function isFullyBlocked(effectiveStatus) {
   return effectiveStatus === 'canceled';
 }
 
+// El primer mes gratis (trial): arranca HOY y dura 1 mes exacto, sin
+// importar el billing_period que vaya a tener despues la empresa. Extraida
+// de routes/billing.js (POST /subscriptions/:tenantId) para que
+// routes/public.js (Fase 11, alta autoservicio) arme el mismo periodo sin
+// duplicar la cuenta de fechas -- antes solo vivia inline en esa ruta.
+function computeFreeTrialPeriod(today = new Date()) {
+  const start = today instanceof Date ? today : new Date(today);
+  const end = new Date(start);
+  end.setMonth(end.getMonth() + 1);
+  return {
+    periodStart: start.toISOString().slice(0, 10),
+    periodEnd: end.toISOString().slice(0, 10)
+  };
+}
+
 module.exports = {
   DEFAULT_GRACE_DAYS,
   PERIOD_MONTHS,
   computeInvoiceAmount,
   resolveEffectiveStatus,
   isWriteBlocked,
-  isFullyBlocked
+  isFullyBlocked,
+  computeFreeTrialPeriod
 };

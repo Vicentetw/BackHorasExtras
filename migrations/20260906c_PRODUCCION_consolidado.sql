@@ -222,4 +222,28 @@ SET @falta := (SELECT COUNT(*) = 0 FROM information_schema.COLUMNS WHERE TABLE_S
 SET @sql := IF(@falta, 'ALTER TABLE tenant_subscriptions ADD COLUMN last_checkout_generated_at DATETIME NULL', 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-SELECT 'CONSOLIDADO 2026-09-03 a 09-07 aplicado correctamente' AS resultado;
+
+-- ------------------------------------------------------------
+-- 5) Fase 11 (2026-09-08): landing publica + alta autoservicio + chatbot
+--    de ventas. Ver 20260908_public_signup_leads.sql.
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS signup_leads (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(150) NOT NULL,
+  company_name VARCHAR(150) NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  phone VARCHAR(50) NULL,
+  contact_preference ENUM('whatsapp','llamada','email') NOT NULL DEFAULT 'whatsapp',
+  employee_count INT NULL,
+  clock_count INT NULL,
+  schedule_type VARCHAR(255) NULL,
+  tenant_id INT NULL,
+  status ENUM('pending','provisioned','failed') NOT NULL DEFAULT 'pending',
+  error_message TEXT NULL,
+  chat_questions_used INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_signup_leads_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+);
+
+SELECT 'CONSOLIDADO 2026-09-03 a 09-08 aplicado correctamente' AS resultado;

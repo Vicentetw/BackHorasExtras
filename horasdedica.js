@@ -28,6 +28,7 @@ const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
 const mercadopagoWebhookRoutes = require('./routes/mercadopagoWebhook');
+const publicRoutes = require('./routes/public');
 
 const app = express();
 
@@ -49,7 +50,10 @@ const app = express();
 app.use('/webhooks/mercadopago', mercadopagoWebhookRoutes(require('./db')));
 
 app.use(express.json({ limit: '1mb' }));
-securityMiddlewares(app, cors);
+// Fase 11 (landing publica + alta autoservicio): /api/public es la unica
+// superficie del sistema pensada para alguien SIN ninguna cuenta todavia
+// -- ver security.js para el detalle de que capas salta y cuales no.
+securityMiddlewares(app, cors, { publicPaths: ['/api/public'] });
 apiKeyWarning();
 
 // Middleware para loguear todas las requests
@@ -106,6 +110,7 @@ app.use('/api/app-users', appUsersRoutes(db));
 app.use('/api/roles', rolesRoutes(db));
 app.use('/api/billing', billingRoutes(db));
 app.use('/api/labor-engine', createMotorLaboralRoutes(db));
+app.use('/api/public', publicRoutes(db));
 
 function parseCheckTime(value) {
   if (!value) return null;
