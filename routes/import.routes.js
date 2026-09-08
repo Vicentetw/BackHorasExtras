@@ -4,7 +4,16 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
-const { requirePermission } = require('../appUserMiddleware');
+const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+
+// Mismo criterio de resolucion que el resto del sistema (employees.js,
+// admin.js): un usuario normal siempre importa para SU propia empresa,
+// solo el superadmin puede elegir explicitamente para cual.
+function effectiveTenantIdFor(req) {
+  return req.appUser && !req.appUser.isSuperadmin
+    ? req.appUser.tenantId
+    : (req.body?.tenant_id || null);
+}
 
 // Bug real de seguridad (auditoria general): las 4 rutas de este archivo
 // no tenian NINGUN requirePermission -- a diferencia del alta individual
@@ -32,17 +41,24 @@ router.post('/employees/upload', requirePermission('employees', 'create'), uploa
     });
 
     const batchId = Date.now().toString();
+    // Bug real de seguridad (migracion 20260915): antes esta fila no
+    // guardaba de que empresa era el lote -- sin este dato, GET
+    // /employees/preview/:batchId y POST /employees/confirm/:batchId no
+    // podian verificar dueño (el batchId, un timestamp en milisegundos,
+    // no alcanza como control de acceso).
+    const tenantId = effectiveTenantIdFor(req);
 
     for (const r of records) {
       await db.query(`
         INSERT INTO staging_employees
-        (import_batch_id, employee_id, nombre, documento)
-        VALUES (?, ?, ?, ?)
+        (import_batch_id, employee_id, nombre, documento, tenant_id)
+        VALUES (?, ?, ?, ?, ?)
       `, [
         batchId,
         r.employee_id || null,
         r.name || null,
-        r.nrodocumento || null
+        r.nrodocumento || null,
+        tenantId
       ]);
     }
 
@@ -72,6 +88,7 @@ router.post('/employees', requirePermission('employees', 'create'), async (req, 
     }
 
     const batchId = Date.now().toString();
+    const tenantId = effectiveTenantIdFor(req);
     const rows = []; // Resultado por fila
 
     for (let idx = 0; idx < employees.length; idx++) {
@@ -107,8 +124,8 @@ router.post('/employees', requirePermission('employees', 'create'), async (req, 
           // Insertar en staging
           await db.query(`
             INSERT INTO staging_employees
-            (import_batch_id, employee_id, nombre, documento, tipo_documento, direccion, zona_id, fecha_alta, fecha_baja, activo)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (import_batch_id, employee_id, nombre, documento, tipo_documento, direccion, zona_id, fecha_alta, fecha_baja, activo, tenant_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `, [
             batchId,
             employeeData.employee_id,
@@ -119,7 +136,8 @@ router.post('/employees', requirePermission('employees', 'create'), async (req, 
             employeeData.zona,
             employeeData.fecha_alta || null,
             employeeData.fecha_baja || null,
-            employeeData.activo
+            employeeData.activo,
+            tenantId
           ]);
           message = 'Listo para confirmar';
           data = employeeData;
@@ -162,12 +180,20 @@ router.post('/employees', requirePermission('employees', 'create'), async (req, 
  */
 router.get('/employees/preview/:batchId', requirePermission('employees', 'create'), async (req, res) => {
   const { batchId } = req.params;
+  // Bug real de seguridad (migracion 20260915): batchId es un timestamp
+  // en milisegundos -- sin filtrar por tenant_id, alguien que coincidiera
+  // (o adivinara) el batchId de otra empresa mientras esta sin confirmar
+  // podia ver sus datos (nombre, DNI) antes de que esa empresa los cargue.
+  const effectiveTenantId = resolveTenantId(req);
+  const tenantClause = effectiveTenantId !== null ? 'AND (tenant_id IS NULL OR tenant_id = ?)' : '';
+  const tenantParams = effectiveTenantId !== null ? [batchId, effectiveTenantId] : [batchId];
 
   const [rows] = await db.query(`
     SELECT * FROM staging_employees
     WHERE import_batch_id = ?
+    ${tenantClause}
     ORDER BY id
-  `, [batchId]);
+  `, tenantParams);
 
   res.json(rows);
 });
@@ -179,11 +205,23 @@ router.post('/employees/confirm/:batchId', requirePermission('employees', 'creat
   const { batchId } = req.params;
 
   try {
+    // Bug real de seguridad (migracion 20260915): sin filtrar por
+    // tenant_id, un usuario de OTRA empresa podia confirmar (crear como
+    // empleados REALES, asignados a SU PROPIA empresa) el lote de otra
+    // empresa que todavia estuviera sin confirmar, con solo acertar/
+    // conocer el batchId (un timestamp en milisegundos).
+    const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
+      ? req.appUser.tenantId
+      : (req.body?.tenant_id || null);
+    const stagingTenantClause = effectiveTenantId !== null ? 'AND (tenant_id IS NULL OR tenant_id = ?)' : '';
+    const stagingParams = effectiveTenantId !== null ? [batchId, effectiveTenantId] : [batchId];
+
     // Obtener datos del batch
     const [stagingRows] = await db.query(`
       SELECT * FROM staging_employees
       WHERE import_batch_id = ?
-    `, [batchId]);
+      ${stagingTenantClause}
+    `, stagingParams);
 
     if (stagingRows.length === 0) {
       return res.status(404).json({ error: 'Batch no encontrado o ya procesado' });
@@ -196,9 +234,6 @@ router.post('/employees/confirm/:batchId', requirePermission('employees', 'creat
     // verdad (excluyendo las que ya existen, que el loop de abajo iba a
     // saltear igual) y se rechaza el batch COMPLETO si se pasaria del tope
     // -- nada de "importar los primeros 5 y cortar a mitad de la lista".
-    const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
-      ? req.appUser.tenantId
-      : (req.body?.tenant_id || null);
     if (effectiveTenantId != null) {
       const [existingRows] = await db.query(
         `SELECT employee_id FROM employees WHERE employee_id IN (?)`,
