@@ -2304,16 +2304,20 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     // cuando un fichaje real no corresponde a horas extra) sin afectar el
     // estado de presentismo (llegada tarde/ausente siguen igual).
     const [manualEntryRows] = await db.query(`
-      SELECT userId, DATE(startDatetime) AS date, durationMinutes, type
+      SELECT id, userId, DATE(startDatetime) AS date, durationMinutes, type
       FROM ManualEntries
       WHERE startDatetime >= ? AND startDatetime < ?
     `, [from, exclusiveEndDateStr]);
     const manualMinutesByUserDate = new Map();
-    const manualOmitByUserDate = new Set();
+    // Antes era un Set (solo si HABIA un omit ese dia) -- ahora un Map a su
+    // id, para que el frontend pueda des-marcar "Omitir" con un checkbox
+    // directo (DELETE /delete/manual/:id) sin tener que abrir el dialogo
+    // completo solo para consultar cual es el id de la entrada a borrar.
+    const manualOmitByUserDate = new Map();
     manualEntryRows.forEach(m => {
       const key = `${m.userId}_${m.date}`;
       if (m.type === 'omit') {
-        manualOmitByUserDate.add(key);
+        manualOmitByUserDate.set(key, m.id);
       } else {
         manualMinutesByUserDate.set(key, (manualMinutesByUserDate.get(key) || 0) + Number(m.durationMinutes));
       }
@@ -2517,6 +2521,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const manualKey = u.USERID ? `${u.USERID}_${date}` : null;
           const manualMinutesThisDay = manualKey ? (manualMinutesByUserDate.get(manualKey) || 0) : 0;
           const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
+          const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
           const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
           // Hora exacta en la que arranca la HE automatica (marker o
           // fallback) -- Fase 7, "Horas Extra por Regimen" necesita mostrar
@@ -2572,6 +2577,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
               overtimeManualMinutes: manualMinutesThisDay,
               overtimeManuallyOmitted: isManuallyOmitted,
+              overtimeOmitEntryId: omitEntryId,
               lateMinutes: isLate ? lateMinutes : 0,
               reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
               eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,
