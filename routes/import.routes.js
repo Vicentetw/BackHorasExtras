@@ -4,6 +4,14 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const db = require('../db');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
+const { requirePermission } = require('../appUserMiddleware');
+
+// Bug real de seguridad (auditoria general): las 4 rutas de este archivo
+// no tenian NINGUN requirePermission -- a diferencia del alta individual
+// (routes/employees.js, que exige 'employees:create'), CUALQUIER usuario
+// autenticado (con cualquier permiso, o ninguno especifico de empleados)
+// podia subir/confirmar un import masivo de empleados. Mismo permiso que
+// el alta individual, por consistencia.
 
 console.log('🚀 Cargando import.routes.js v2.0 - con staging_employees');
 
@@ -13,7 +21,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 /**
  * 📥 SUBIR CSV → staging_employees (LEGACY - para RRHH)
  */
-router.post('/employees/upload', upload.single('file'), async (req, res) => {
+router.post('/employees/upload', requirePermission('employees', 'create'), upload.single('file'), async (req, res) => {
   try {
     const csv = req.file.buffer.toString('utf8');
 
@@ -55,7 +63,7 @@ router.post('/employees/upload', upload.single('file'), async (req, res) => {
  * POST /api/import/employees
  * Retorna status detallado de CADA fila para permitir correcciones
  */
-router.post('/employees', async (req, res) => {
+router.post('/employees', requirePermission('employees', 'create'), async (req, res) => {
   try {
     const { employees } = req.body;
 
@@ -152,7 +160,7 @@ router.post('/employees', async (req, res) => {
 /**
  * 👁️ PREVIEW DEL BATCH
  */
-router.get('/employees/preview/:batchId', async (req, res) => {
+router.get('/employees/preview/:batchId', requirePermission('employees', 'create'), async (req, res) => {
   const { batchId } = req.params;
 
   const [rows] = await db.query(`
@@ -167,7 +175,7 @@ router.get('/employees/preview/:batchId', async (req, res) => {
 /**
  * ✅ CONFIRMAR IMPORT → employees
  */
-router.post('/employees/confirm/:batchId', async (req, res) => {
+router.post('/employees/confirm/:batchId', requirePermission('employees', 'create'), async (req, res) => {
   const { batchId } = req.params;
 
   try {
