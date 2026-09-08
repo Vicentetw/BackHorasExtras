@@ -21,6 +21,7 @@ const rolesRoutes = require('./routes/roles');
 const billingRoutes = require('./routes/billing');
 const agentRoutes = require('./routes/agent');
 const agentKeysRoutes = require('./routes/agentKeys');
+const syncStatusRoutes = require('./routes/syncStatus');
 const { insertCheckinsBatch, upsertUsersBatch } = require('./motor-laboral/services/checkinsIngestService');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
 const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
@@ -119,6 +120,7 @@ app.use('/api/labor-engine', createMotorLaboralRoutes(db));
 app.use('/api/public', publicRoutes(db));
 app.use('/api/agent', agentRoutes(db));
 app.use('/api/agent-keys', agentKeysRoutes(db));
+app.use('/api/sync-status', syncStatusRoutes(db));
 
 function parseCheckTime(value) {
   if (!value) return null;

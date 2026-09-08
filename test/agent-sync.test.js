@@ -36,6 +36,10 @@ after(async () => {
   await db.query(`DELETE FROM Checkins WHERE USERID IN (SELECT USERID FROM users WHERE Badgenumber LIKE 'agent-test-%')`).catch(() => {});
   await db.query(`DELETE FROM users WHERE Badgenumber LIKE 'agent-test-%'`);
   await db.query(`DELETE FROM Checkins WHERE USERID BETWEEN 970000 AND 970100`);
+  // Fase 18 (continuacion) -- subir fichajes via el agente ahora tambien
+  // registra agent_sync_status por reloj; sin borrarlo primero, el DELETE
+  // de tenants de abajo rompe por la foreign key.
+  await db.query(`DELETE FROM agent_sync_status WHERE tenant_id = ?`, [TENANT_AGENT]);
   await db.query(`DELETE FROM tenant_agent_keys WHERE tenant_id = ?`, [TENANT_AGENT]);
   await deleteTestUser(UID_SUPERADMIN);
   await deleteTestUser(UID_TENANT);

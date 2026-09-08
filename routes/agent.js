@@ -11,6 +11,7 @@ const agentKeyRepository = require('../motor-laboral/repositories/agentKeyReposi
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
 const { resolveEffectiveStatus, isWriteBlocked, DEFAULT_GRACE_DAYS } = require('../motor-laboral/services/billingCalculations');
 const { insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_BATCH } = require('../motor-laboral/services/checkinsIngestService');
+const agentSyncStatusRepository = require('../motor-laboral/repositories/agentSyncStatusRepository');
 
 // Un sitio real sincroniza cada tantos minutos -- 30/min por IP da margen
 // de sobra para reintentos, sin abrir la puerta a un abuso de esta
@@ -83,6 +84,15 @@ module.exports = function (db) {
   router.post('/checkins', requireActiveSubscriptionAgent, validateRecordsBody, async (req, res) => {
     try {
       const result = await insertCheckinsBatch(req.body.records, db);
+      // Pedido real: saber "hasta cuando esta actualizado" cada reloj
+      // puntual, no solo la empresa entera -- se registra por separado,
+      // un problema con esto (ej. un reloj sin MACHINE_IP) no debe hacer
+      // fallar la subida de fichajes en si.
+      try {
+        await agentSyncStatusRepository.upsertSyncStatus(req.agentTenantId, req.body.records, db);
+      } catch (syncErr) {
+        console.error('ERROR registrando agent_sync_status (no afecta la subida de fichajes):', syncErr);
+      }
       res.json({ ok: true, ...result });
     } catch (err) {
       if (err.code === 'DB_BUSY' || err.code === 'DB_UNREACHABLE') {
