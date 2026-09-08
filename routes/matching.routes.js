@@ -18,6 +18,36 @@ const normalizeName = (name) => {
     .join(' ');
 };
 
+// Bug real de seguridad (auditoria general): esta consulta se repetia 3
+// veces (/auto, /manual-bulk, /predict) SIN ningun filtro de tenant --
+// cualquier usuario con permiso 'matching:read' de CUALQUIER empresa veia
+// los "would_match" (nombre, legajo, badge) de TODOS los empleados de
+// TODAS las empresas. Se extrae a una sola funcion, con el mismo tenant
+// filter que ya usaba /manual (el unico de los 6 endpoints de matching
+// que SI lo tenia).
+async function findAutoMatchPredictions(effectiveTenantId) {
+  const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ?' : '';
+  const params = effectiveTenantId !== null ? [effectiveTenantId] : [];
+  const [predictions] = await db.query(`
+    SELECT
+      u.USERID,
+      u.Badgenumber as user_badgenumber,
+      u.Name as user_name,
+      e.id as employee_id,
+      e.employee_id as emp_legajo,
+      e.nombre as employee_name,
+      'employee_id' as match_type
+    FROM users u
+    JOIN employees e
+      ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
+    WHERE u.USERID > 10
+      AND e.activo = 1
+      ${tenantClause}
+      AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
+  `, params);
+  return predictions;
+}
+
 const findMatchingUserForEmployee = (employee, users) => {
   const candidateIds = [employee.employee_id, employee.legajo_alt]
     .filter(Boolean)
@@ -42,22 +72,7 @@ const findMatchingUserForEmployee = (employee, users) => {
  */
 router.post('/auto', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const [predictions] = await pool.query(`
-      SELECT 
-        u.USERID,
-        u.Badgenumber as user_badgenumber,
-        u.Name as user_name,
-        e.id as employee_id,
-        e.employee_id as emp_legajo,
-        e.nombre as employee_name,
-        'employee_id' as match_type
-      FROM users u
-      JOIN employees e 
-        ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
-      WHERE u.USERID > 10
-        AND e.activo = 1
-        AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
-    `);
+    const predictions = await findAutoMatchPredictions(resolveTenantId(req));
 
     res.json({
       success: true,
@@ -75,70 +90,116 @@ router.post('/auto', requirePermission('matching', 'read'), async (req, res) => 
  * 📋 LISTAR MATCHING ACTUAL
  */
 router.get('/', requirePermission('matching', 'read'), async (req, res) => {
-  const [rows] = await db.query(`
-    SELECT 
-      u.USERID,
-      u.Badgenumber,
-      u.Name as user_name,
-      e.id as employee_id,
-      e.nombre as employee_name
-    FROM user_employee_map m
-    JOIN users u ON m.USERID = u.USERID
-    JOIN employees e ON m.employee_id = e.id
-  `);
+  try {
+    // Bug real de seguridad (auditoria general): sin este filtro, un usuario
+    // de cualquier empresa veia la tabla de matching COMPLETA -- nombre,
+    // legajo y badge de los empleados de TODAS las empresas, no solo la suya.
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantClause = effectiveTenantId !== null ? 'WHERE e.tenant_id = ?' : '';
+    const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
+    const [rows] = await db.query(`
+      SELECT
+        u.USERID,
+        u.Badgenumber,
+        u.Name as user_name,
+        e.id as employee_id,
+        e.nombre as employee_name
+      FROM user_employee_map m
+      JOIN users u ON m.USERID = u.USERID
+      JOIN employees e ON m.employee_id = e.id
+      ${tenantClause}
+    `, tenantParams);
 
-  res.json(rows);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**
  * 🔍 USUARIOS SIN MATCH
  */
 router.get('/unmatched', requirePermission('matching', 'read'), async (req, res) => {
-  const [rows] = await pool.query(`
-    SELECT u.*
-    FROM users u
-    LEFT JOIN user_employee_map m ON u.USERID = m.USERID
-    WHERE m.USERID IS NULL
-      AND u.USERID > 10
-  `);
+  try {
+    const [rows] = await pool.query(`
+      SELECT u.*
+      FROM users u
+      LEFT JOIN user_employee_map m ON u.USERID = m.USERID
+      WHERE m.USERID IS NULL
+        AND u.USERID > 10
+    `);
 
-  res.json(rows);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**
  * 🔍 EMPLEADOS SIN MATCH
  */
 router.get('/unmatched-employees', requirePermission('matching', 'read'), async (req, res) => {
-  const [rows] = await db.query(`
-    SELECT e.*
-    FROM employees e
-    LEFT JOIN user_employee_map m ON e.id = m.employee_id
-    WHERE m.employee_id IS NULL
-  `);
+  try {
+    // Bug real de seguridad: sin filtro de tenant, mostraba empleados SIN
+    // MATCH de todas las empresas.
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ?' : '';
+    const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
+    const [rows] = await db.query(`
+      SELECT e.*
+      FROM employees e
+      LEFT JOIN user_employee_map m ON e.id = m.employee_id
+      WHERE m.employee_id IS NULL
+      ${tenantClause}
+    `, tenantParams);
 
-  res.json(rows);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**
  * 💡 SUGERENCIAS POR NOMBRE
  */
 router.get('/suggestions', requirePermission('matching', 'read'), async (req, res) => {
-  const [rows] = await db.query(`
-    SELECT 
-      u.USERID,
-      u.Name as user_name,
-      e.id as employee_id,
-      e.nombre as employee_name
-    FROM users u
-    JOIN employees e
-      ON u.Name LIKE CONCAT('%', SUBSTRING_INDEX(e.nombre, ',', 1), '%')
-    WHERE u.USERID NOT IN (
-      SELECT USERID FROM user_employee_map
-    )
-    LIMIT 100
-  `);
+  try {
+    // Bug real de seguridad: sin filtro de tenant, sugeria matches contra
+    // empleados de CUALQUIER empresa, no solo la del que pide.
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ?' : '';
+    const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
+    // Bug real de datos, encontrado al escribir el test de arriba (no
+    // relacionado con tenant): users.Name y employees.nombre tienen
+    // COLLATION distinta en esta base (utf8mb4_0900_ai_ci vs
+    // utf8mb4_unicode_ci) -- MySQL rechaza comparar strings de collations
+    // distintas con LIKE ("Illegal mix of collations"). Esta ruta nunca
+    // devolvia nada, siempre tiraba 500 -- no era una funcionalidad rota a
+    // medias, estaba completamente inutilizable.
+    const [rows] = await db.query(`
+      SELECT
+        u.USERID,
+        u.Name as user_name,
+        e.id as employee_id,
+        e.nombre as employee_name
+      FROM users u
+      JOIN employees e
+        ON u.Name COLLATE utf8mb4_unicode_ci LIKE CONCAT('%', SUBSTRING_INDEX(e.nombre, ',', 1), '%')
+      WHERE u.USERID NOT IN (
+        SELECT USERID FROM user_employee_map
+      )
+      ${tenantClause}
+      LIMIT 100
+    `, tenantParams);
 
-  res.json(rows);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /**
@@ -186,23 +247,7 @@ router.post('/manual', requirePermission('matching', 'create'), async (req, res)
  */
 router.post('/manual-bulk', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const [predictions] = await db.query(`
-      SELECT 
-        u.USERID,
-        u.Badgenumber as user_badgenumber,
-        u.Name as user_name,
-        e.id as employee_id,
-        e.employee_id as emp_legajo,
-        e.nombre as employee_name,
-        'employee_id' as match_type
-      FROM users u
-      JOIN employees e 
-        ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
-      WHERE u.USERID > 10
-        AND e.activo = 1
-        AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
-    `);
-
+    const predictions = await findAutoMatchPredictions(resolveTenantId(req));
     res.json({ success: true, created: 0, matches: predictions, would_match: predictions.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -214,6 +259,22 @@ router.post('/manual-bulk', requirePermission('matching', 'read'), async (req, r
  */
 router.delete('/:user_id', requirePermission('matching', 'delete'), async (req, res) => {
   const { user_id } = req.params;
+
+  // Bug real de seguridad (el mas serio de este archivo): SIN NINGUN
+  // chequeo de tenant, un usuario de cualquier empresa podia desvincular
+  // el match de un empleado de OTRA empresa con solo conocer/adivinar su
+  // USERID (de reloj, no muy dificil de barrer) -- le rompia el
+  // presentismo a otra empresa sin que nadie lo note hasta mucho despues.
+  const effectiveTenantId = resolveTenantId(req);
+  if (effectiveTenantId !== null) {
+    const [[existing]] = await db.query(
+      `SELECT e.tenant_id FROM user_employee_map m JOIN employees e ON e.id = m.employee_id WHERE m.USERID = ?`,
+      [user_id]
+    );
+    if (!existing || existing.tenant_id !== effectiveTenantId) {
+      return res.status(404).json({ error: 'Match no encontrado' });
+    }
+  }
 
   await db.query(`
     DELETE FROM user_employee_map WHERE USERID = ?
@@ -254,6 +315,15 @@ router.get('/diagnosis/report', requirePermission('matching', 'read'), async (re
     // usuarios "basura" cargados mal y nunca usados (0 fichajes). Sin este
     // dato, un usuario real sin vincular (con fichajes reales perdidos del
     // presentismo) queda escondido entre docenas de duplicados irrelevantes.
+    // users/Checkins no tienen tenant_id propio (un usuario crudo del reloj
+    // no pertenece a ninguna empresa hasta que se lo vincula) -- la lista en
+    // si sigue siendo global a proposito (hace falta ver TODOS los
+    // pendientes para decidir cual vincular). Lo que SI era un bug real de
+    // seguridad: el "reason" delataba si el legajo coincidia con un
+    // empleado de OTRA empresa (informacion que esa empresa no deberia
+    // filtrar) -- ahora el EXISTS se limita al tenant de quien pregunta.
+    const unmatchedTenantClause = effectiveTenantId !== null ? 'AND tenant_id = ?' : '';
+    const unmatchedParams = effectiveTenantId !== null ? [effectiveTenantId, effectiveTenantId] : [];
     const [unmatchedUsers] = await db.query(`
       SELECT
         u.USERID,
@@ -261,9 +331,9 @@ router.get('/diagnosis/report', requirePermission('matching', 'read'), async (re
         u.Name,
         (SELECT COUNT(*) FROM Checkins c WHERE c.USERID = u.USERID) as checkinCount,
         CASE
-          WHEN EXISTS (SELECT 1 FROM employees WHERE CAST(employee_id AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci AND activo = 1)
+          WHEN EXISTS (SELECT 1 FROM employees WHERE CAST(employee_id AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci AND activo = 1 ${unmatchedTenantClause})
             THEN 'Existe employee_id coincidente pero sin vincular'
-          WHEN EXISTS (SELECT 1 FROM employees WHERE CAST(employee_id AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci)
+          WHEN EXISTS (SELECT 1 FROM employees WHERE CAST(employee_id AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci ${unmatchedTenantClause})
             THEN 'Existe employee_id pero empleado inactivo'
           ELSE 'No existe employee_id coincidente'
         END as reason
@@ -272,7 +342,7 @@ router.get('/diagnosis/report', requirePermission('matching', 'read'), async (re
       WHERE m.USERID IS NULL
         AND u.USERID > 10
       ORDER BY checkinCount DESC, CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci
-    `);
+    `, unmatchedParams);
 
     // 3. Empleados SIN match
     const [unmatchedEmployees] = await db.query(`
@@ -333,23 +403,7 @@ router.get('/diagnosis/report', requirePermission('matching', 'read'), async (re
  */
 router.post('/predict', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    // Obtener qué se matchearía sin guardar
-    const [predictions] = await db.query(`
-      SELECT 
-        u.USERID,
-        u.Badgenumber as user_badgenumber,
-        u.Name as user_name,
-        e.id as employee_id,
-        e.employee_id as emp_legajo,
-        e.nombre as employee_name,
-        'employee_id' as match_type
-      FROM users u
-      JOIN employees e 
-        ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
-      WHERE u.USERID > 10
-        AND e.activo = 1
-        AND u.USERID NOT IN (SELECT USERID FROM user_employee_map)
-    `);
+    const predictions = await findAutoMatchPredictions(resolveTenantId(req));
 
     res.json({
       ok: true,
