@@ -33,11 +33,19 @@ test('/api/labor-engine/attendance/:date 2026-06-30 (dia cerrado): mismos totale
   assert.equal(res.status, 200);
 
   const json = await res.json();
-  assert.equal(json.summary.total, 476);
+  // Actualizado 2026-09-08: bug real corregido -- un empleado marcado
+  // como INACTIVO (baja no cargada formalmente) contaba como "Ausente"
+  // solo por no fichar, en TODOS los dias, aunque ya no trabaje aca. Con
+  // el fix (ver attendanceService.js), los 197 empleados inactivos reales
+  // de esta base (confirmado: activo=0) ya no suman al conteo de ausentes
+  // -- 411 -> 214 (411 - 197). El resto de los estados no cambia (un
+  // inactivo sin fichar no es OnTime/Late/Excused tampoco, asi que esos
+  // conteos quedan iguales).
+  assert.equal(json.summary.total, 477);
   assert.equal(json.summary.onTime, 37);
   assert.equal(json.summary.late, 28);
   assert.equal(json.summary.lateJustified, 0);
-  assert.equal(json.summary.absent, 410);
+  assert.equal(json.summary.absent, 214);
   assert.equal(json.summary.excused, 1);
 });
 

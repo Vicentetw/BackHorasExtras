@@ -2442,7 +2442,12 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       let partialAbsence = 0;
       let overtimeMinutes = 0;
       let personalLeaveMinutes = 0;
+      let inactiveWarningDays = 0;
       const days = detailEmployeeId ? [] : null;
+      // Pedido real: un empleado inactivo (baja no cargada formalmente) no
+      // debe contarse ni mostrarse como "ausente" solo por no fichar -- ver
+      // el mismo criterio aplicado en attendanceService.js (motor diario).
+      const employeeActivo = u.activo === undefined || u.activo === null ? true : !!Number(u.activo);
 
       dateRange.forEach(date => {
         const dateSchedules = scheduleByDate[date];
@@ -2469,6 +2474,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
 
         if (checks.length > 0) {
           daysWorked++;
+          if (!employeeActivo) inactiveWarningDays++;
           const first = checks[0];
           const last = checks[checks.length - 1];
           const firstMin = timeToMinutes(extractTime(first));
@@ -2578,6 +2584,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               overtimeManualMinutes: manualMinutesThisDay,
               overtimeManuallyOmitted: isManuallyOmitted,
               overtimeOmitEntryId: omitEntryId,
+              inactiveWarning: !employeeActivo,
               lateMinutes: isLate ? lateMinutes : 0,
               reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
               eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,
@@ -2601,6 +2608,16 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               eventTypeDescripcion: leaveEvent ? (leaveEvent.eventTypeDescripcion || null) : (exclusion.eventTypeDescripcion || null),
               overtimeManualMinutes: manualMinutesExcused
             });
+          }
+        } else if (!employeeActivo) {
+          // Inactivo y SIN fichaje -- no corresponde contarlo como ausente
+          // (ya no trabaja acá, no es una ausencia real a revisar). No suma
+          // al contador "absent" ni al resumen -- pedido real.
+          const manualKeyInactive = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesInactive = manualKeyInactive ? (manualMinutesByUserDate.get(manualKeyInactive) || 0) : 0;
+          if (manualMinutesInactive > 0) overtimeMinutes += manualMinutesInactive;
+          if (days) {
+            days.push({ date, status: 'Inactive', overtimeManualMinutes: manualMinutesInactive });
           }
         } else {
           absent++;
@@ -2637,7 +2654,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         personalLeaveHours: (personalLeaveMinutes / 60).toFixed(2),
         personalLeaveLimitHours: (personalLeaveLimitMinutesForRange / 60).toFixed(2),
         overLimitHours: (Math.max(0, personalLeaveMinutes - personalLeaveLimitMinutesForRange) / 60).toFixed(2),
-        overtimeAuthorized: rowIsOvertimeAuthorized
+        overtimeAuthorized: rowIsOvertimeAuthorized,
+        inactiveWarningDays
       };
       if (days) {
         row.days = days;

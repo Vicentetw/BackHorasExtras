@@ -96,6 +96,11 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
 
     let status = 'Absent';
     let multiVisit = null;
+    // Pedido real: un empleado inactivo (baja no cargada formalmente, ya no
+    // trabaja acá) fichando SI es una señal real a revisar -- se mantiene el
+    // status normal (a horario/tarde/etc.) pero se marca con un aviso en vez
+    // de agregar un status nuevo que oculte la info real de esa marcación.
+    let inactiveWarning = false;
     if (checkinsSorted.length > 0) {
       if (workBlocks.length > 1) {
         multiVisit = evaluateMultiVisitDay({
@@ -123,8 +128,17 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       if (isHoliday) {
         status = 'WorkedHoliday';
       }
+      if (!u.active) {
+        inactiveWarning = true;
+      }
     } else if (exclusion || leaveEvent) {
       status = 'Excused';
+    } else if (!u.active) {
+      // Inactivo y SIN fichaje -- no corresponde contarlo como ausente (ya
+      // no trabaja acá, no es una ausencia real). buildSummary no cuenta
+      // este status en ningún bucket -- queda afuera de "absent" sin tener
+      // que filtrar la fila entera (sigue visible, solo que no cuenta).
+      status = 'Inactive';
     }
 
     return {
@@ -138,6 +152,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       } : null,
       name: u.name,
       status,
+      inactiveWarning,
       firstCheckin,
       lastCheckin,
       totalCheckins: checkinsSorted.length,
@@ -213,6 +228,11 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
       badgeNumber: u.Badgenumber || null,
       name: u.Name,
       tenantId: u.tenantId != null ? u.tenantId : null,
+      // Pedido real: un empleado inactivo (dado de baja, ya no trabaja acá)
+      // no debe figurar como "Ausente" solo por no fichar -- eso es
+      // esperable, no una ausencia real a revisar. Default activo=true si
+      // viniera undefined/null (mismo criterio que overtimeAuthorized).
+      active: u.activo === undefined || u.activo === null ? true : !!Number(u.activo),
       checkins: []
     });
     if (u.tenantId != null) {
