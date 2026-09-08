@@ -110,6 +110,17 @@ async function insertCheckinsBatch(records, db) {
 
 // records: array de objetos { USERID, Badgenumber, Name } -- mismo shape
 // que ya produce exportar_userinfo() en el agente Python.
+//
+// Bug real de produccion: la version anterior hacia hasta 2 consultas
+// SECUENCIALES por usuario (una SELECT + una INSERT/UPDATE) -- con un
+// lote de 500 usuarios (un sitio con bastante historial, primer
+// sincronizacion real del agente) eso son hasta 1000 idas y vueltas a la
+// base UNA POR UNA, suficiente para superar el timeout del request y
+// devolver un 500 en vez de terminar. Se resuelve con UNA sola consulta
+// para saber que ya existe (bulk) y UN solo INSERT masivo para los
+// nuevos -- las actualizaciones de nombre (caso raro: mismo Badgenumber
+// con un USERID distinto al que ya habia) siguen siendo una por una,
+// pero eso deberia ser un puñado de filas, nunca el lote entero.
 async function upsertUsersBatch(records, db) {
   if (records.length > MAX_RECORDS_PER_BATCH) {
     const err = new Error(`Máximo ${MAX_RECORDS_PER_BATCH} registros por lote`);
@@ -117,36 +128,57 @@ async function upsertUsersBatch(records, db) {
     throw err;
   }
 
-  let upserted = 0;
   let skipped = 0;
-
+  // Map en vez de array -- si el mismo Badgenumber aparece 2 veces en el
+  // MISMO lote (pasa de verdad: un reloj puede repetir un usuario), se
+  // queda con la ultima aparicion en vez de intentar insertarlo 2 veces
+  // (rompia con duplicate key antes de este fix tambien, solo que de forma
+  // menos visible al ser secuencial).
+  const validosPorBadge = new Map();
   for (const r of records) {
     if (!r.USERID || !r.Badgenumber || !r.Name) {
       skipped++;
       continue;
     }
-
-    const trimmedBadge = String(r.Badgenumber).trim();
     const userId = Number(r.USERID);
     if (!Number.isFinite(userId)) {
       skipped++;
       continue;
     }
-
-    const [existing] = await db.query('SELECT USERID FROM users WHERE TRIM(Badgenumber) = ? LIMIT 1', [trimmedBadge]);
-
-    if (existing.length > 0) {
-      if (existing[0].USERID !== userId) {
-        await db.query('UPDATE users SET Name = ? WHERE USERID = ?', [r.Name, existing[0].USERID]);
-      }
-    } else {
-      await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [userId, trimmedBadge, r.Name]);
-    }
-
-    upserted++;
+    validosPorBadge.set(String(r.Badgenumber).trim(), { userId, name: r.Name });
   }
 
-  return { upserted, skipped, total: records.length };
+  if (validosPorBadge.size === 0) {
+    return { upserted: 0, skipped, total: records.length };
+  }
+
+  const badges = [...validosPorBadge.keys()];
+  const [existingRows] = await db.query(
+    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE TRIM(Badgenumber) IN (?)`,
+    [badges]
+  );
+  const existingUserIdByBadge = new Map(existingRows.map((r) => [r.Badgenumber, r.USERID]));
+
+  const aInsertar = [];
+  const aActualizar = [];
+  for (const [badge, { userId, name }] of validosPorBadge) {
+    const existingUserId = existingUserIdByBadge.get(badge);
+    if (existingUserId === undefined) {
+      aInsertar.push([userId, badge, name]);
+    } else if (existingUserId !== userId) {
+      aActualizar.push({ existingUserId, name });
+    }
+    // Si ya existe con el MISMO USERID, no hace falta tocar nada.
+  }
+
+  if (aInsertar.length > 0) {
+    await db.query(`INSERT INTO users (USERID, Badgenumber, Name) VALUES ?`, [aInsertar]);
+  }
+  for (const { existingUserId, name } of aActualizar) {
+    await db.query('UPDATE users SET Name = ? WHERE USERID = ?', [name, existingUserId]);
+  }
+
+  return { upserted: validosPorBadge.size, skipped, total: records.length };
 }
 
 module.exports = { parseCheckTimeArgentina, insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_BATCH };
