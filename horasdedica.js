@@ -1105,6 +1105,41 @@ app.post('/config/theme', async (req, res) => {
 
 // 3. EXCLUSIONES DE USUARIOS - CRUD COMPLETO CON PAGINACIÓN
 
+// Bug real de seguridad (auditoria general): NINGUNO de los endpoints de
+// abajo chequeaba tenant -- un usuario con permiso 'exclusions:*' de
+// CUALQUIER empresa podia crear/editar/borrar una exclusion (llegada
+// tarde "justificada", o exclusion permanente de un reporte) para el
+// USERID de un empleado de OTRA empresa. Esto alimenta DIRECTO el calculo
+// de presentismo (resolveLateJustification) -- no es solo una lectura,
+// es poder fabricar o borrar una justificacion ajena.
+//
+// Dos helpers compartidos por todos: si el USERID/exclusion no tiene
+// ningun empleado vinculado, se permite (no hay dueño a quien violarle
+// nada -- pasa con USERIDs de reloj todavia sin matchear) -- solo se
+// bloquea cuando SI esta vinculado a un empleado de OTRA empresa.
+async function userBelongsToCallerTenant(userId, req) {
+  const effectiveTenantId = resolveTenantId(req);
+  if (effectiveTenantId === null) return true; // superadmin, sin restriccion
+  const [[owner]] = await db.query(
+    `SELECT e.tenant_id FROM user_employee_map m JOIN employees e ON e.id = m.employee_id WHERE m.USERID = ?`,
+    [userId]
+  );
+  return !owner || owner.tenant_id === effectiveTenantId;
+}
+
+async function exclusionBelongsToCallerTenant(exclusionId, req) {
+  const effectiveTenantId = resolveTenantId(req);
+  if (effectiveTenantId === null) return true;
+  const [[row]] = await db.query(
+    `SELECT e.tenant_id FROM userexclusions ue
+     LEFT JOIN user_employee_map m ON m.USERID = ue.userId
+     LEFT JOIN employees e ON e.id = m.employee_id
+     WHERE ue.id = ?`,
+    [exclusionId]
+  );
+  return !row || !row.tenant_id || row.tenant_id === effectiveTenantId;
+}
+
 // GET /config/user-exclusions?page=1&limit=20&search=...&status=...
 // Fase 4.6 del plan de migracion a Angular: se suma userId+excDate como
 // filtro exacto opcional -- el frontend (Presentismo/Justificaciones) lo
@@ -1236,13 +1271,16 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
     if (!user) {
       return res.status(400).json({ error: 'Usuario no encontrado' });
     }
+    if (!(await userBelongsToCallerTenant(userId, req))) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
 
     try {
       await db.query(`
         INSERT INTO \`userexclusions\` (userId, excDate, reason, type, event_type_id, excFrom, excTo)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `, [userId, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
-      
+
       res.json({ ok: true, message: 'Exclusión creada' });
     } catch (err) {
       if (err.code === 'ER_DUP_ENTRY') {
@@ -1285,6 +1323,9 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
     if (!user) {
       return res.status(400).json({ error: 'Usuario no encontrado' });
     }
+    if (!(await userBelongsToCallerTenant(userId, req))) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
 
     const dates = [];
     for (let d = new Date(`${dateFrom}T00:00:00`); d <= new Date(`${dateTo}T00:00:00`); d.setDate(d.getDate() + 1)) {
@@ -1325,6 +1366,10 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
     const { id } = req.params;
     const { reason, type, eventTypeId, excFrom, excTo } = req.body;
 
+    if (!(await exclusionBelongsToCallerTenant(id, req))) {
+      return res.status(404).json({ error: 'Exclusión no encontrada' });
+    }
+
     const [result] = await db.query(`
       UPDATE \`userexclusions\`
       SET reason = ?, type = ?, event_type_id = ?, excFrom = ?, excTo = ?
@@ -1351,7 +1396,11 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
 app.delete('/config/user-exclusions/:id', requirePermission('exclusions', 'delete'), async (req, res) => {
   try {
     const { id } = req.params;
-    
+
+    if (!(await exclusionBelongsToCallerTenant(id, req))) {
+      return res.status(404).json({ error: 'Exclusión no encontrada' });
+    }
+
     const [result] = await db.query(
       `DELETE FROM \`userexclusions\` WHERE id = ?`,
       [id]
@@ -1577,7 +1626,10 @@ app.post('/config/toggle-user-exclusion', requirePermission('exclusions', 'updat
     if (!userId || !excDate) {
       return res.status(400).json({ error: 'userId y excDate son requeridos' });
     }
-    
+    if (!(await userBelongsToCallerTenant(userId, req))) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
     if (exclude) {
       // Agregar exclusión
       try {
@@ -1624,23 +1676,38 @@ app.get('/config/excluded-users', requirePermission('exclusions', 'read'), async
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     // Build search query
-    let whereClause = '';
+    const clauses = [];
     const params = [];
     if (search) {
-      whereClause = 'WHERE (Name LIKE ? OR Badgenumber LIKE ?)';
+      clauses.push('(Name LIKE ? OR Badgenumber LIKE ?)');
       params.push(`%${search}%`, `%${search}%`);
     }
+    // Bug real de seguridad: esta lista mostraba el nombre real (via
+    // employees.nombre, cuando el USERID ya estaba vinculado) de
+    // empleados de CUALQUIER empresa -- un USERID sin vincular se sigue
+    // mostrando igual (no tiene dueño), pero uno vinculado a OTRA empresa
+    // ya no debe aparecer.
+    const effectiveTenantId = resolveTenantId(req);
+    if (effectiveTenantId !== null) {
+      clauses.push('(e.tenant_id IS NULL OR e.tenant_id = ?)');
+      params.push(effectiveTenantId);
+    }
+    const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
     // Get total count
     const [countResult] = await db.query(
-      `SELECT COUNT(*) as total FROM users ${whereClause}`,
+      `SELECT COUNT(*) as total
+       FROM users u
+       LEFT JOIN user_employee_map um ON um.USERID = u.USERID
+       LEFT JOIN employees e ON e.id = um.employee_id
+       ${whereClause}`,
       params
     );
     const total = countResult[0].total;
 
     // Get paginated results
     const [users] = await db.query(
-      `SELECT u.USERID, u.Badgenumber, COALESCE(e.nombre, u.Name) AS Name, u.isExcluded 
+      `SELECT u.USERID, u.Badgenumber, COALESCE(e.nombre, u.Name) AS Name, u.isExcluded
        FROM users u
        LEFT JOIN user_employee_map um ON um.USERID = u.USERID
        LEFT JOIN employees e ON e.id = um.employee_id
@@ -1689,6 +1756,9 @@ app.put('/config/toggle-user-exclusion-permanent/:userId', requirePermission('ex
     if (currentUser.length === 0) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
+    if (!(await userBelongsToCallerTenant(userId, req))) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
 
     // Update status
     await db.query(
@@ -1724,6 +1794,9 @@ app.delete('/config/user-exclusion/:userId', requirePermission('exclusions', 'de
     );
 
     if (user.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    if (!(await userBelongsToCallerTenant(userId, req))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
