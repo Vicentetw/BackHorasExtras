@@ -394,10 +394,21 @@ function createMotorLaboralAdminRoutes(db) {
       const templateTenantId = templateRows[0].tenant_id;
 
       const results = { assigned: [], skipped: [] };
+      const effectiveTenantId = resolveTenantId(req);
 
       for (const employeeId of employeeIds) {
         const [emp] = await db.query('SELECT id, tenant_id FROM employees WHERE id = ?', [employeeId]);
         if (emp.length === 0) {
+          results.skipped.push({ employeeId, reason: 'Empleado no encontrado' });
+          continue;
+        }
+
+        // Bug real de seguridad: sin este chequeo, un usuario podia colar en
+        // el mismo lote el id de un empleado de OTRA empresa (mientras la
+        // plantilla fuera compatible) y asignarle un horario -- se salta
+        // ese id en vez de fallar el lote entero, mismo criterio que los
+        // demas "skipped" de esta ruta.
+        if (effectiveTenantId !== null && emp[0].tenant_id && emp[0].tenant_id !== effectiveTenantId) {
           results.skipped.push({ employeeId, reason: 'Empleado no encontrado' });
           continue;
         }
@@ -445,6 +456,18 @@ function createMotorLaboralAdminRoutes(db) {
   router.get('/employees/:employeeId/calendar', requirePermission('schedules', 'read'), async (req, res) => {
     try {
       const { employeeId } = req.params;
+      // Bug real de seguridad: esta ruta no chequeaba NADA de tenant -- un
+      // usuario de una empresa podia leer el calendario de un empleado de
+      // OTRA empresa con solo adivinar/conocer su employeeId (secuencial,
+      // facil de barrer). El test existente (calendar-tenant-guard.test.js)
+      // solo cubria plantilla-vs-empleado, nunca llamador-vs-empleado.
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[emp]] = await db.query('SELECT tenant_id FROM employees WHERE id = ?', [employeeId]);
+        if (!emp || emp.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ error: 'Empleado no encontrado' });
+        }
+      }
       const [calendars] = await db.query(`
         SELECT id, employee_id, tenant_id, template_id, valid_from, valid_to, created_at, updated_at
         FROM employee_work_calendars
@@ -469,6 +492,17 @@ function createMotorLaboralAdminRoutes(db) {
 
       const [emp] = await db.query('SELECT id, tenant_id FROM employees WHERE id = ?', [employeeId]);
       if (emp.length === 0) {
+        return res.status(404).json({ error: 'Empleado no encontrado' });
+      }
+
+      // Bug real de seguridad: no habia NINGUN chequeo de que el empleado
+      // fuera de la MISMA empresa que quien hace el pedido -- un usuario
+      // podia asignarle un horario a un empleado de otra empresa con solo
+      // adivinar su employeeId. El chequeo de abajo (plantilla vs empleado)
+      // no alcanza para esto: ambos podrian pertenecer a otro tenant distinto
+      // al del que llama, y coincidir entre si sin problema.
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null && emp[0].tenant_id && emp[0].tenant_id !== effectiveTenantId) {
         return res.status(404).json({ error: 'Empleado no encontrado' });
       }
 
@@ -524,6 +558,18 @@ function createMotorLaboralAdminRoutes(db) {
   router.delete('/employees/:employeeId/calendar/:calendarId', requirePermission('schedules', 'delete'), async (req, res) => {
     try {
       const { employeeId, calendarId } = req.params;
+      // Bug real de seguridad: sin NINGUN chequeo de tenant, cualquier
+      // usuario con permiso de borrado podia eliminar la asignacion de
+      // horario de un empleado de OTRA empresa con solo adivinar
+      // employeeId/calendarId (ambos ids secuenciales, faciles de barrer).
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[emp]] = await db.query('SELECT tenant_id FROM employees WHERE id = ?', [employeeId]);
+        if (!emp || emp.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ error: 'Asignación no encontrada' });
+        }
+      }
+
       const [result] = await db.query(
         'DELETE FROM employee_work_calendars WHERE employee_id = ? AND id = ?',
         [employeeId, calendarId]
