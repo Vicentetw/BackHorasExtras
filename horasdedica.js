@@ -36,6 +36,24 @@ const publicRoutes = require('./routes/public');
 
 const app = express();
 
+// Bug real de produccion (Render, ver ERR_ERL_UNEXPECTED_X_FORWARDED_FOR):
+// Render pone la app detras de UN proxy propio, que agrega el header
+// X-Forwarded-For con la IP real del cliente -- pero por defecto Express
+// NO confia en ese header ('trust proxy' = false), asi que req.ip (y por
+// lo tanto express-rate-limit, que lo usa para identificar de quien es
+// cada request) devuelve siempre la IP INTERNA del proxy de Render, IGUAL
+// para todo el trafico entrante. Consecuencia real: los limites de
+// peticiones/minuto (apiRateLimiter 300/min, agentLimiter 30/min en
+// routes/agent.js) terminaban compartiendo el mismo cupo entre TODOS los
+// clientes (todos los tenants, todos los agentes de sincronizacion, todos
+// los navegadores), en vez de un cupo por maquina real como esta pensado.
+// 'trust proxy'=1 le dice a Express que confie en UN solo salto de proxy
+// (el de Render) -- correcto para este hosting, que tiene un unico proxy
+// de entrada; NO usar un numero mas alto ni 'true' (confiaria en
+// cualquier X-Forwarded-For que mande el cliente mismo, permitiendo
+// falsificar la IP y saltarse el rate-limit).
+app.set('trust proxy', 1);
+
 // Fase 9b: el webhook de MercadoPago se registra ANTES de express.json()
 // y de securityMiddlewares() a proposito:
 //   1) necesita el body CRUDO (sin parsear) para poder validar la firma
