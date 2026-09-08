@@ -392,6 +392,64 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
 });
 
 /**
+ * ✅❌ ACTIVAR/DESACTIVAR VARIOS EMPLEADOS A LA VEZ
+ * PATCH /api/employees/bulk-status
+ * Body: { ids: number[], activo: boolean, motivoBaja?: string }
+ *
+ * Pedido real: en el filtro "sin fichar hace N días" (jubilados/bajas no
+ * cargadas formalmente en el sistema, ver GET / con inactiveDays), poder
+ * tildar varios de la lista y marcarlos inactivos en un solo paso -- antes
+ * había que editar uno por uno con el modal completo.
+ */
+router.patch('/bulk-status', requirePermission('employees', 'update'), async (req, res) => {
+  try {
+    const { ids, activo, motivoBaja } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids debe ser un array no vacío' });
+    }
+    if (ids.length > 1000) {
+      return res.status(400).json({ error: 'Máximo 1000 empleados por lote' });
+    }
+    if (typeof activo !== 'boolean') {
+      return res.status(400).json({ error: 'activo (boolean) es requerido' });
+    }
+    const numericIds = [...new Set(ids.map(Number).filter(Number.isFinite))];
+    if (numericIds.length === 0) {
+      return res.status(400).json({ error: 'ids inválidos' });
+    }
+
+    // Mismo criterio que PUT /:id y DELETE /:id -- un empleado de otra
+    // empresa se trata como si no existiera, nunca se toca aunque su id
+    // venga en la lista (ej. un id adivinado/copiado de otra pestaña).
+    const [rows] = await db.query('SELECT id, tenant_id FROM employees WHERE id IN (?)', [numericIds]);
+    const allowedIds = rows
+      .filter((r) => !req.appUser || req.appUser.isSuperadmin || r.tenant_id === req.appUser.tenantId)
+      .map((r) => r.id);
+
+    if (allowedIds.length === 0) {
+      return res.json({ ok: true, updated: 0, skipped: numericIds.length });
+    }
+
+    if (activo) {
+      await db.query('UPDATE employees SET activo = 1 WHERE id IN (?)', [allowedIds]);
+    } else {
+      // Al desactivar en lote se registra fecha_baja (hoy) y el motivo que
+      // haya escrito el usuario -- mismos campos que ya llena el modal de
+      // edición individual, para no dejar una "baja" sin fecha/motivo.
+      await db.query(
+        'UPDATE employees SET activo = 0, fecha_baja = CURDATE(), motivo_baja = ? WHERE id IN (?)',
+        [motivoBaja || null, allowedIds]
+      );
+    }
+
+    res.json({ ok: true, updated: allowedIds.length, skipped: numericIds.length - allowedIds.length });
+  } catch (err) {
+    console.error('ERROR bulk-status employees:', err);
+    res.status(500).json({ error: 'Error actualizando empleados' });
+  }
+});
+
+/**
  * 🗑️ ELIMINAR EMPLEADO
  * DELETE /api/employees/:id
  */
