@@ -153,29 +153,58 @@ async function upsertUsersBatch(records, db) {
   }
 
   const badges = [...validosPorBadge.keys()];
-  const [existingRows] = await db.query(
+  const userIds = [...new Set([...validosPorBadge.values()].map((v) => v.userId))];
+  const [existingByBadgeRows] = await db.query(
     `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE TRIM(Badgenumber) IN (?)`,
     [badges]
   );
-  const existingUserIdByBadge = new Map(existingRows.map((r) => [r.Badgenumber, r.USERID]));
+  // Bug real de produccion: la version anterior SOLO buscaba existentes por
+  // Badgenumber -- un USERID que ya existia con OTRO badge (o sin badge,
+  // de una carga vieja) no aparecia ahi, se lo mandaba a INSERT como si
+  // fuera nuevo, y chocaba contra la PRIMARY KEY real de la tabla (USERID):
+  // "Duplicate entry '201' for key 'users.PRIMARY'". Se agrega esta segunda
+  // consulta por USERID -- el chequeo por USERID tiene prioridad (es la
+  // clave primaria de verdad; Badgenumber no tiene esa garantia).
+  const [existingByUserIdRows] = await db.query(
+    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE USERID IN (?)`,
+    [userIds]
+  );
+  const existingUserIdByBadge = new Map(existingByBadgeRows.map((r) => [r.Badgenumber, r.USERID]));
+  const existingBadgeByUserId = new Map(existingByUserIdRows.map((r) => [r.USERID, r.Badgenumber]));
 
   const aInsertar = [];
-  const aActualizar = [];
+  const aActualizar = []; // { userId, badge: string|null, name } -- badge null = no tocar Badgenumber, solo Name
   for (const [badge, { userId, name }] of validosPorBadge) {
-    const existingUserId = existingUserIdByBadge.get(badge);
-    if (existingUserId === undefined) {
-      aInsertar.push([userId, badge, name]);
-    } else if (existingUserId !== userId) {
-      aActualizar.push({ existingUserId, name });
+    const existingBadgeForUserId = existingBadgeByUserId.get(userId);
+    if (existingBadgeForUserId !== undefined) {
+      // El USERID YA EXISTE -- nunca insertar (violaria la PRIMARY KEY).
+      // Si el badge cambio (o no tenia), se actualiza junto con el nombre;
+      // si es el mismo badge, no hace falta tocar nada.
+      if (existingBadgeForUserId !== badge) {
+        aActualizar.push({ userId, badge, name });
+      }
+      continue;
     }
-    // Si ya existe con el MISMO USERID, no hace falta tocar nada.
+    const existingUserIdForBadge = existingUserIdByBadge.get(badge);
+    if (existingUserIdForBadge === undefined) {
+      aInsertar.push([userId, badge, name]);
+    } else {
+      // El badge ya existe pero con OTRO USERID -- no se toca el USERID
+      // existente (podria ser un caso de reasignacion real, no se puede
+      // decidir solo del lado del agente), solo se refresca el nombre.
+      aActualizar.push({ userId: existingUserIdForBadge, badge: null, name });
+    }
   }
 
   if (aInsertar.length > 0) {
     await db.query(`INSERT INTO users (USERID, Badgenumber, Name) VALUES ?`, [aInsertar]);
   }
-  for (const { existingUserId, name } of aActualizar) {
-    await db.query('UPDATE users SET Name = ? WHERE USERID = ?', [name, existingUserId]);
+  for (const { userId, badge, name } of aActualizar) {
+    if (badge === null) {
+      await db.query('UPDATE users SET Name = ? WHERE USERID = ?', [name, userId]);
+    } else {
+      await db.query('UPDATE users SET Badgenumber = ?, Name = ? WHERE USERID = ?', [badge, name, userId]);
+    }
   }
 
   return { upserted: validosPorBadge.size, skipped, total: records.length };

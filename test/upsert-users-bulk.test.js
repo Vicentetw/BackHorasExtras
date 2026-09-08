@@ -88,3 +88,36 @@ test('filas invalidas (falta USERID/Badgenumber/Name) se cuentan como skipped, n
   assert.equal(result.upserted, 1);
   assert.equal(result.skipped, 2);
 });
+
+// Bug real de produccion: "Duplicate entry '201' for key 'users.PRIMARY'".
+// Un USERID que YA EXISTE en la base (cargado antes con un badge distinto,
+// o sin badge -- pasa seguido con cargas viejas) llegaba en un lote nuevo
+// con OTRO badge (ej. el reloj ahora manda badge = USERID como string) --
+// la version anterior solo buscaba existentes por Badgenumber, no
+// encontraba nada con ESE badge, y mandaba el USERID a INSERT como si
+// fuera nuevo -- pero el USERID es la PRIMARY KEY real de la tabla, asi
+// que chocaba. Debe actualizar el badge/nombre de la fila existente, no
+// intentar insertarla de nuevo.
+test('un USERID que ya existe con OTRO badge (o sin badge) se actualiza, no se intenta insertar de nuevo', async () => {
+  // Precondicion insertada directo (no via upsertUsersBatch -- un badge
+  // vacio es invalido para esa funcion, se descartaria como fila
+  // invalida) para simular una carga vieja real: el USERID ya existe con
+  // un Badgenumber que no coincide con lo que va a mandar el reloj ahora.
+  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [990503, `${PREFIX}viejo`, 'Nombre viejo']);
+  const [[antes]] = await db.query('SELECT Badgenumber, Name FROM users WHERE USERID = ?', [990503]);
+  assert.equal(antes.Badgenumber, `${PREFIX}viejo`, 'precondicion: el USERID ya existe con un badge distinto al que se va a mandar despues');
+
+  const result = await upsertUsersBatch(
+    [{ USERID: 990503, Badgenumber: `${PREFIX}nuevo`, Name: 'Nombre actualizado' }],
+    db
+  );
+  assert.equal(result.upserted, 1);
+
+  const [[despues]] = await db.query('SELECT USERID, Badgenumber, Name FROM users WHERE USERID = ?', [990503]);
+  assert.equal(despues.USERID, 990503, 'el USERID no debe cambiar');
+  assert.equal(despues.Badgenumber, `${PREFIX}nuevo`, 'el badge debe actualizarse al nuevo valor');
+  assert.equal(despues.Name, 'Nombre actualizado');
+
+  const [rows] = await db.query('SELECT USERID FROM users WHERE USERID = ?', [990503]);
+  assert.equal(rows.length, 1, 'no debe haber quedado una fila duplicada');
+});
