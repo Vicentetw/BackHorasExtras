@@ -1,5 +1,18 @@
 const express = require('express');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../../appUserMiddleware');
+const { getAppSetting, setAppSetting } = require('../repositories/appSettingsRepository');
+const { parseList } = require('../services/countryFirewallService');
+const {
+  invalidateCache: invalidateFirewallCache,
+  SETTING_COUNTRIES,
+  SETTING_IPS
+} = require('../middleware/countryFirewallMiddleware');
+
+const COUNTRY_CODE_RE = /^[A-Z]{2}$/;
+// IP exacta (v4 o v6) o CIDR v4 (ver countryFirewallService.matchesCidr) --
+// validacion floja a proposito, solo para avisar de un typo obvio antes de
+// guardar, no una verificacion exhaustiva de formato IP.
+const IP_OR_CIDR_RE = /^[0-9a-fA-F:.]+(\/\d{1,3})?$/;
 
 function createMotorLaboralAdminRoutes(db) {
   const router = express.Router();
@@ -584,6 +597,88 @@ function createMotorLaboralAdminRoutes(db) {
       console.error('Motor Laboral admin delete employee calendar error:', err);
       res.status(500).json({ error: 'Error al eliminar calendario del empleado' });
     }
+  });
+
+  // Fase 19: firewall por pais/IP de /api/public -- ver
+  // countryFirewallMiddleware.js. Guardado en app_settings (global,
+  // tenant_id NULL: esto corre ANTES de que exista ningun tenant, no
+  // tiene sentido scopearlo por empresa) en vez de una tabla nueva --
+  // mismo patron ya usado para corte de HE, tope de campana, etc.
+  router.get('/system/firewall-settings', requireSuperadmin, async (req, res) => {
+    try {
+      const [countriesCsv, ipsCsv] = await Promise.all([
+        getAppSetting(SETTING_COUNTRIES, null, db),
+        getAppSetting(SETTING_IPS, null, db)
+      ]);
+      res.json({
+        allowedCountries: parseList(countriesCsv),
+        allowedIps: parseList(ipsCsv),
+        enabled: parseList(countriesCsv).length > 0
+      });
+    } catch (err) {
+      console.error('Motor Laboral admin get firewall-settings error:', err);
+      res.status(500).json({ error: 'Error al leer la configuración del firewall' });
+    }
+  });
+
+  router.put('/system/firewall-settings', requireSuperadmin, async (req, res) => {
+    try {
+      const allowedCountries = Array.isArray(req.body.allowedCountries) ? req.body.allowedCountries : [];
+      const allowedIps = Array.isArray(req.body.allowedIps) ? req.body.allowedIps : [];
+
+      const countries = allowedCountries.map((c) => String(c).trim().toUpperCase());
+      const badCountry = countries.find((c) => !COUNTRY_CODE_RE.test(c));
+      if (badCountry) {
+        return res.status(400).json({ error: `Código de país inválido: "${badCountry}" (debe ser un código ISO de 2 letras, ej. AR)` });
+      }
+
+      const ips = allowedIps.map((ip) => String(ip).trim());
+      const badIp = ips.find((ip) => !IP_OR_CIDR_RE.test(ip));
+      if (badIp) {
+        return res.status(400).json({ error: `IP o rango inválido: "${badIp}"` });
+      }
+
+      await setAppSetting(SETTING_COUNTRIES, null, countries.join(','), db);
+      await setAppSetting(SETTING_IPS, null, ips.join(','), db);
+      invalidateFirewallCache();
+
+      res.json({ allowedCountries: countries, allowedIps: ips, enabled: countries.length > 0 });
+    } catch (err) {
+      console.error('Motor Laboral admin put firewall-settings error:', err);
+      res.status(500).json({ error: 'Error al guardar la configuración del firewall' });
+    }
+  });
+
+  // Monitor liviano de conexiones/rendimiento -- pensado para un vistazo
+  // rapido desde la propia app (no reemplaza los dashboards de Render/
+  // Clever Cloud, los complementa). Los contadores del pool son API
+  // interna de mysql2 (con "_" adelante, no documentada oficialmente) --
+  // envuelto en try/catch para que un cambio de version de la libreria
+  // nunca tumbe esta ruta, en el peor caso devuelve null en poolStats.
+  router.get('/system/status', requireSuperadmin, async (req, res) => {
+    let poolStats = null;
+    try {
+      const raw = db.pool;
+      poolStats = {
+        limit: raw.config.connectionLimit,
+        total: raw._allConnections.length,
+        free: raw._freeConnections.length,
+        busy: raw._allConnections.length - raw._freeConnections.length,
+        queued: raw._connectionQueue.length
+      };
+    } catch (err) {
+      console.warn('No se pudieron leer las estadisticas del pool (API interna de mysql2 cambio):', err.message);
+    }
+
+    const mem = process.memoryUsage();
+    res.json({
+      poolStats,
+      memory: {
+        rssMb: Math.round(mem.rss / 1024 / 1024),
+        heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024)
+      },
+      uptimeSeconds: Math.round(process.uptime())
+    });
   });
 
   return router;

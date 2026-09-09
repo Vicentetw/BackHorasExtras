@@ -5,6 +5,7 @@ const { computeFreeTrialPeriod } = require('../motor-laboral/services/billingCal
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const { verifyTurnstileToken } = require('../motor-laboral/services/turnstileService');
 const { askSalesChat } = require('../motor-laboral/services/salesChatService');
+const { createCountryFirewallMiddleware } = require('../motor-laboral/middleware/countryFirewallMiddleware');
 
 // Fase 11: landing publica + alta de cliente autoservicio + chatbot de
 // ventas. UNICA superficie del sistema alcanzable sin ninguna credencial
@@ -51,6 +52,11 @@ function randomSuffix() {
 
 module.exports = function (db) {
   const router = express.Router();
+
+  // Filtro por pais/IP -- ver countryFirewallMiddleware.js. Antes que
+  // nada mas: no tiene sentido gastar el rate-limit o pegarle a
+  // Turnstile por un pedido que ya se va a rechazar igual.
+  router.use(createCountryFirewallMiddleware(db));
 
   // Alta autoservicio: arma tenant + suscripcion trial (plan por defecto,
   // 1er mes gratis) + usuario admin, TODO de una, sin que un superadmin
