@@ -27,27 +27,41 @@ const { test, before, beforeEach, afterEach, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { getAppSetting, setAppSetting } = require('../motor-laboral/repositories/appSettingsRepository');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TEST_UID = 'test-overtime-auth-mode';
 const LEGAJO = '999997';
 const USERID = 999997;
 const AUTO_DATE = '2026-08-18'; // martes, sin feriado, lejos de junio 2026
+// users/user_employee_map ya exigen tenant_id NOT NULL (migracion
+// 20260909) -- este archivo prueba a proposito el camino SIN tenant
+// (superadmin, employees.tenant_id queda NULL), pero el USERID crudo
+// necesita igual una fila real en `tenants` para satisfacer la FK.
+const DISPOSABLE_TENANT = 999990;
 
 let originalMode;
 
+// Estos tests operan como superadmin sin filtrar tenant (ver
+// getTestAuthHeaders mas abajo, isSuperadmin sin tenantId) -- resolveTenantId
+// les da tenant_id NULL, o sea la fila GLOBAL de app_settings. Usar el
+// repositorio real (en vez de INSERT/UPDATE crudo, que asumia `name` como
+// PRIMARY KEY -- dejo de serlo al agregarse tenant_id, ver
+// migrations/20260905_tenant_scope_app_settings.sql) evita volver a dejar
+// filas duplicadas sueltas.
 before(async () => {
-  const [[modeRow]] = await db.query(`SELECT value FROM app_settings WHERE name = 'overtimeAuthorizationMode'`);
-  originalMode = modeRow ? modeRow.value : 'all';
+  originalMode = (await getAppSetting('overtimeAuthorizationMode', null, db)) || 'all';
+  await db.query(
+    `INSERT INTO tenants (id, name, code) VALUES (?, 'Tenant Overtime Auth (test)', 'tenant-overtime-auth-test')
+     ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+    [DISPOSABLE_TENANT]
+  );
 });
 
 after(async () => {
-  await db.query(
-    `INSERT INTO app_settings (name, value) VALUES ('overtimeAuthorizationMode', ?)
-     ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-    [originalMode]
-  );
+  await setAppSetting('overtimeAuthorizationMode', null, originalMode, db);
   await deleteTestUser(TEST_UID);
+  await db.query('DELETE FROM tenants WHERE id = ?', [DISPOSABLE_TENANT]).catch(() => {});
   await closeDb();
 });
 
@@ -60,14 +74,14 @@ async function createDisposableEmployee() {
   );
   const [[emp]] = await db.query('SELECT id FROM employees WHERE employee_id = ?', [LEGAJO]);
   await db.query(
-    `INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, 'TEST OVERTIME AUTH')
+    `INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, 'TEST OVERTIME AUTH')
      ON DUPLICATE KEY UPDATE Name = VALUES(Name)`,
-    [USERID, LEGAJO]
+    [USERID, DISPOSABLE_TENANT, LEGAJO]
   );
   await db.query(
-    `INSERT INTO user_employee_map (USERID, employee_id) VALUES (?, ?)
+    `INSERT INTO user_employee_map (USERID, tenant_id, employee_id) VALUES (?, ?, ?)
      ON DUPLICATE KEY UPDATE employee_id = VALUES(employee_id)`,
-    [USERID, emp.id]
+    [USERID, DISPOSABLE_TENANT, emp.id]
   );
 }
 
@@ -83,7 +97,7 @@ beforeEach(createDisposableEmployee);
 afterEach(destroyDisposableEmployee);
 
 test('modo "all": el total de HE no cambia aunque el empleado tenga overtime_authorized=0', async () => {
-  await db.query(`UPDATE app_settings SET value = 'all' WHERE name = 'overtimeAuthorizationMode'`);
+  await setAppSetting('overtimeAuthorizationMode', null, 'all', db);
   await db.query(`UPDATE employees SET overtime_authorized = 0 WHERE employee_id = ?`, [LEGAJO]);
 
   const headers = await getTestAuthHeaders(TEST_UID, { isSuperadmin: true });
@@ -110,7 +124,7 @@ test('modo "all": el total de HE no cambia aunque el empleado tenga overtime_aut
 });
 
 test('modo "custom": overtime_authorized=0 no bloquea una HE manual (solo la automatica), =1 no cambia nada', async () => {
-  await db.query(`UPDATE app_settings SET value = 'custom' WHERE name = 'overtimeAuthorizationMode'`);
+  await setAppSetting('overtimeAuthorizationMode', null, 'custom', db);
   await db.query(`UPDATE employees SET overtime_authorized = 0 WHERE employee_id = ?`, [LEGAJO]);
 
   const headers = await getTestAuthHeaders(TEST_UID, { isSuperadmin: true });
@@ -137,13 +151,17 @@ test('modo "custom": overtime_authorized=0 no bloquea una HE manual (solo la aut
 });
 
 test('modo "custom": overtime_authorized=0 SI bloquea la HE automatica (detectada por fichajes)', async () => {
-  await db.query(`UPDATE app_settings SET value = 'custom' WHERE name = 'overtimeAuthorizationMode'`);
+  await setAppSetting('overtimeAuthorizationMode', null, 'custom', db);
 
   // Fichajes sinteticos: entrada normal + 2 post-corte (14:00, 16:00) --
   // dispara el heuristico clasico (2do fichaje post-corte hasta el ultimo).
   await db.query(
-    `INSERT INTO Checkins (USERID, CHECKTIME) VALUES (?, ?), (?, ?), (?, ?)`,
-    [USERID, `${AUTO_DATE} 07:30:00`, USERID, `${AUTO_DATE} 14:00:00`, USERID, `${AUTO_DATE} 16:00:00`]
+    `INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`,
+    [
+      USERID, DISPOSABLE_TENANT, `${AUTO_DATE} 07:30:00`,
+      USERID, DISPOSABLE_TENANT, `${AUTO_DATE} 14:00:00`,
+      USERID, DISPOSABLE_TENANT, `${AUTO_DATE} 16:00:00`
+    ]
   );
 
   const headers = await getTestAuthHeaders(TEST_UID, { isSuperadmin: true });

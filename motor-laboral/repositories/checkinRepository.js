@@ -7,20 +7,26 @@ function nextDayStr(dateStr) {
 async function findByDate(date, tenantId, db) {
   // Rango sargable en vez de DATE(c.CHECKTIME) = ?: envolver la columna en
   // DATE() invalida el indice y fuerza un full table scan en cada consulta.
+  // Fase 19: Checkins/users/user_employee_map ya no son unicos solo por
+  // USERID (dos empresas pueden compartir el mismo USERID crudo de reloj)
+  // -- cada JOIN que cruza estas tablas por USERID debe ademas exigir el
+  // MISMO tenant_id, sino un USERID compartido entre dos empresas
+  // devolveria filas de ambas mezcladas (o la fila de la empresa
+  // equivocada) antes de que el filtro final por tenant pueda separarlas.
   const params = [date, nextDayStr(date)];
   let query = `SELECT c.*, u.USERID, u.Badgenumber, u.Name, e.employee_id AS employeeId
      FROM Checkins c
      LEFT JOIN users u
-       ON u.USERID = c.USERID
-       OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR)
-     LEFT JOIN user_employee_map ue ON ue.USERID = u.USERID
+       ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
+       AND u.tenant_id = c.tenant_id
+     LEFT JOIN user_employee_map ue ON ue.USERID = u.USERID AND ue.tenant_id = u.tenant_id
      LEFT JOIN employees e ON e.id = ue.employee_id
      WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
        AND e.employee_id IS NOT NULL`;
 
   if (tenantId !== undefined && tenantId !== null) {
-    query += ` AND e.tenant_id = ?`;
-    params.push(tenantId);
+    query += ` AND c.tenant_id = ? AND e.tenant_id = ?`;
+    params.push(tenantId, tenantId);
   }
 
   query += ` ORDER BY c.CHECKTIME ASC`;

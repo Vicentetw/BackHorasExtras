@@ -58,14 +58,14 @@ before(async () => {
   const [empBResult] = await db.query(`INSERT INTO employees (employee_id, nombre, tenant_id, activo) VALUES (?, ?, ?, 1)`, [900701, 'Empleado Exclusion Guard B', TENANT_B]);
   empBId = empBResult.insertId;
 
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_A, '900700', 'Empleado Exclusion Guard A']);
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_B, '900701', 'Empleado Exclusion Guard B']);
-  await db.query('INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)', [USERID_A, empAId, 'manual']);
-  await db.query('INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)', [USERID_B, empBId, 'manual']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_A, TENANT_A, '900700', 'Empleado Exclusion Guard A']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_B, TENANT_B, '900701', 'Empleado Exclusion Guard B']);
+  await db.query('INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, ?)', [USERID_A, TENANT_A, empAId, 'manual']);
+  await db.query('INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, ?)', [USERID_B, TENANT_B, empBId, 'manual']);
 
   const [excResult] = await db.query(
-    `INSERT INTO userexclusions (userId, excDate, reason, type) VALUES (?, ?, ?, 'FULL_DAY')`,
-    [USERID_B, '2099-02-01', 'Exclusion de otra empresa (test)']
+    `INSERT INTO userexclusions (userId, tenant_id, excDate, reason, type) VALUES (?, ?, ?, ?, 'FULL_DAY')`,
+    [USERID_B, TENANT_B, '2099-02-01', 'Exclusion de otra empresa (test)']
   );
   existingExclusionBId = excResult.insertId;
 });

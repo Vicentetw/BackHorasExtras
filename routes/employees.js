@@ -89,13 +89,22 @@ router.get('/', requirePermission('employees', 'read'), async (req, res) => {
     // (la PK real). Un nombre igual rompia con "Column 'employee_id' in
     // where clause is ambiguous" apenas alguien filtraba por legajo (bug
     // propio encontrado escribiendo este mismo cambio).
+    // Fase 19: cada JOIN de esta cadena (Checkins -> users ->
+    // user_employee_map) exige ademas el MISMO tenant_id que Checkins --
+    // sin esto, un USERID/Badgenumber compartido con OTRA empresa
+    // (migracion 20260909, ya no son unicos globalmente) podia fusionar
+    // el ultimo fichaje de un empleado de OTRA empresa, o duplicar el
+    // grupo por employee_id si el mismo USERID crudo resolvia a mas de un
+    // vinculo (uno por tenant).
     const lastCheckinJoin = `
       LEFT JOIN (
         SELECT uem.employee_id AS emp_pk, MAX(c.CHECKTIME) AS last_checkin
         FROM Checkins c
-        LEFT JOIN users u_direct ON u_direct.USERID = c.USERID
-        LEFT JOIN users u_badge ON u_badge.Badgenumber = CAST(c.USERID AS CHAR)
-        JOIN user_employee_map uem ON uem.USERID = COALESCE(u_direct.USERID, u_badge.USERID)
+        LEFT JOIN users u_direct ON u_direct.USERID = c.USERID AND u_direct.tenant_id = c.tenant_id
+        LEFT JOIN users u_badge ON u_badge.Badgenumber = CAST(c.USERID AS CHAR) AND u_badge.tenant_id = c.tenant_id
+        JOIN user_employee_map uem
+          ON uem.USERID = COALESCE(u_direct.USERID, u_badge.USERID)
+          AND uem.tenant_id = c.tenant_id
         GROUP BY uem.employee_id
       ) lc ON lc.emp_pk = employees.id
     `;

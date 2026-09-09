@@ -43,7 +43,20 @@ const MAX_RECORDS_PER_BATCH = 5000;
 // parseo del CSV (csv-parse con columns:true) como el JSON que manda el
 // agente Python (mismos nombres de columna que ya exporta exporter.py,
 // a proposito, para no tener que transformar nada de un lado al otro).
-async function insertCheckinsBatch(records, db) {
+//
+// tenantId es OBLIGATORIO (Fase 19, migracion 20260909): Checkins.USERID
+// ya NO es unico por si solo -- dos empresas reales pueden tener un reloj
+// que numera su USERID tambien desde 1/2/3 (lo habitual). Sin tenant_id
+// en cada fila, los fichajes de una empresa quedarian mezclados con los
+// de otra bajo el mismo USERID, sin forma de separarlos despues. Los dos
+// llamadores (routes/agent.js, horasdedica2.js /import/checkins) ya
+// resuelven el tenant antes de llamar aca -- no hay un default valido.
+async function insertCheckinsBatch(records, db, tenantId) {
+  if (!tenantId) {
+    const err = new Error('tenantId es requerido para insertar fichajes');
+    err.code = 'TENANT_REQUIRED';
+    throw err;
+  }
   if (records.length > MAX_RECORDS_PER_BATCH) {
     const err = new Error(`Máximo ${MAX_RECORDS_PER_BATCH} registros por lote`);
     err.code = 'BATCH_TOO_LARGE';
@@ -60,7 +73,7 @@ async function insertCheckinsBatch(records, db) {
   const flush = async () => {
     if (batch.length === 0) return;
     try {
-      await db.query(`INSERT IGNORE INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES ?`, [batch]);
+      await db.query(`INSERT IGNORE INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN, tenant_id) VALUES ?`, [batch]);
       inserted += batch.length;
     } catch (err) {
       if (err.code === 'ER_CON_COUNT_ERROR' || err.message.includes('max_user_connections')) {
@@ -99,7 +112,7 @@ async function insertCheckinsBatch(records, db) {
 
     const machine_ip = r.MACHINE_IP ? r.MACHINE_IP.toString().trim().slice(0, 45) : null;
     const machine_sn = r.MACHINE_SN ? r.MACHINE_SN.toString().trim().slice(0, 45) : null;
-    batch.push([Number(userIdClean), checktime, machine_ip, machine_sn]);
+    batch.push([Number(userIdClean), checktime, machine_ip, machine_sn, tenantId]);
 
     if (batch.length >= batchSize) await flush();
   }
@@ -121,7 +134,17 @@ async function insertCheckinsBatch(records, db) {
 // nuevos -- las actualizaciones de nombre (caso raro: mismo Badgenumber
 // con un USERID distinto al que ya habia) siguen siendo una por una,
 // pero eso deberia ser un puñado de filas, nunca el lote entero.
-async function upsertUsersBatch(records, db) {
+// tenantId obligatorio, mismo motivo que insertCheckinsBatch: users.USERID
+// ya no es unico por si solo (PK real ahora es (tenant_id, USERID)) --
+// sin esto, un USERID que ya existe en OTRA empresa se detectaria como
+// "ya existe" y se le pisaria el nombre/legajo en vez de crear una fila
+// nueva para esta empresa.
+async function upsertUsersBatch(records, db, tenantId) {
+  if (!tenantId) {
+    const err = new Error('tenantId es requerido para sincronizar usuarios');
+    err.code = 'TENANT_REQUIRED';
+    throw err;
+  }
   if (records.length > MAX_RECORDS_PER_BATCH) {
     const err = new Error(`Máximo ${MAX_RECORDS_PER_BATCH} registros por lote`);
     err.code = 'BATCH_TOO_LARGE';
@@ -155,8 +178,8 @@ async function upsertUsersBatch(records, db) {
   const badges = [...validosPorBadge.keys()];
   const userIds = [...new Set([...validosPorBadge.values()].map((v) => v.userId))];
   const [existingByBadgeRows] = await db.query(
-    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE TRIM(Badgenumber) IN (?)`,
-    [badges]
+    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE TRIM(Badgenumber) IN (?) AND tenant_id = ?`,
+    [badges, tenantId]
   );
   // Bug real de produccion: la version anterior SOLO buscaba existentes por
   // Badgenumber -- un USERID que ya existia con OTRO badge (o sin badge,
@@ -165,9 +188,13 @@ async function upsertUsersBatch(records, db) {
   // "Duplicate entry '201' for key 'users.PRIMARY'". Se agrega esta segunda
   // consulta por USERID -- el chequeo por USERID tiene prioridad (es la
   // clave primaria de verdad; Badgenumber no tiene esa garantia).
+  // AND tenant_id = ? en las dos consultas (Fase 19): un USERID/Badgenumber
+  // que ya existe pero en OTRA empresa no cuenta como "ya existe" para
+  // esta -- debe insertarse como fila nueva de esta empresa, no pisar (ni
+  // leer como referencia) la fila de la otra.
   const [existingByUserIdRows] = await db.query(
-    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE USERID IN (?)`,
-    [userIds]
+    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE USERID IN (?) AND tenant_id = ?`,
+    [userIds, tenantId]
   );
   const existingUserIdByBadge = new Map(existingByBadgeRows.map((r) => [r.Badgenumber, r.USERID]));
   const existingBadgeByUserId = new Map(existingByUserIdRows.map((r) => [r.USERID, r.Badgenumber]));
@@ -197,13 +224,14 @@ async function upsertUsersBatch(records, db) {
   }
 
   if (aInsertar.length > 0) {
-    await db.query(`INSERT INTO users (USERID, Badgenumber, Name) VALUES ?`, [aInsertar]);
+    const aInsertarConTenant = aInsertar.map(([userId, badge, name]) => [userId, badge, name, tenantId]);
+    await db.query(`INSERT INTO users (USERID, Badgenumber, Name, tenant_id) VALUES ?`, [aInsertarConTenant]);
   }
   for (const { userId, badge, name } of aActualizar) {
     if (badge === null) {
-      await db.query('UPDATE users SET Name = ? WHERE USERID = ?', [name, userId]);
+      await db.query('UPDATE users SET Name = ? WHERE USERID = ? AND tenant_id = ?', [name, userId, tenantId]);
     } else {
-      await db.query('UPDATE users SET Badgenumber = ?, Name = ? WHERE USERID = ?', [badge, name, userId]);
+      await db.query('UPDATE users SET Badgenumber = ?, Name = ? WHERE USERID = ? AND tenant_id = ?', [badge, name, userId, tenantId]);
     }
   }
 

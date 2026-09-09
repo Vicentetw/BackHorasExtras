@@ -35,7 +35,7 @@ function createMotorLaboralRoutes({ db, attendanceService }) {
       const tenantId = resolveTenantId(req);
 
       const motorResult = await attendanceService.calculateDailyAttendance({ date, tenantId });
-      const legacyResult = await attendanceService.calculateLegacyAttendance({ date, db });
+      const legacyResult = await attendanceService.calculateLegacyAttendance({ date, db, tenantId });
 
       res.json({
         date,

@@ -287,7 +287,14 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
   };
 }
 
-async function calculateLegacyAttendance({ date, db }) {
+// Bug real encontrado en la re-auditoria de venta (Fase 19): esta funcion
+// (el modo "Legacy" de Presentismo, para comparar contra el Motor
+// Laboral) no recibia tenantId en absoluto -- ni filtraba employees por
+// empresa, ni filtraba userexclusions -- devolvia SIEMPRE la asistencia de
+// TODAS las empresas mezcladas, sin importar quien la pidiera. El llamador
+// (motor-laboral/routes/attendance.js, /attendance/:date/compare) ya
+// resuelve tenantId para el modo Motor -- ahora se lo pasa tambien aca.
+async function calculateLegacyAttendance({ date, db, tenantId }) {
   const normalizedDate = normalizeDate(date);
   if (!normalizedDate) {
     throw new Error('Fecha inválida');
@@ -336,14 +343,17 @@ async function calculateLegacyAttendance({ date, db }) {
     };
   }
 
-  const [exclusions] = await db.query(
-    `SELECT * FROM userexclusions WHERE excDate = ?`,
-    [normalizedDate]
-  );
+  const exclusionsParams = [normalizedDate];
+  let exclusionsQuery = `SELECT * FROM userexclusions WHERE excDate = ?`;
+  if (tenantId !== undefined && tenantId !== null) {
+    exclusionsQuery += ` AND tenant_id = ?`;
+    exclusionsParams.push(tenantId);
+  }
+  const [exclusions] = await db.query(exclusionsQuery, exclusionsParams);
 
-  const [rows] = await db.query(
-    `
-      SELECT 
+  const rowsParams = [normalizedDate, nextDayStr(normalizedDate)];
+  let rowsQuery = `
+      SELECT
         e.employee_id,
         e.nombre,
         u.USERID,
@@ -352,22 +362,26 @@ async function calculateLegacyAttendance({ date, db }) {
         c.CHECKTIME
       FROM employees e
 
-      LEFT JOIN user_employee_map ue 
+      LEFT JOIN user_employee_map ue
         ON ue.employee_id = e.id
 
-      LEFT JOIN users u 
-        ON u.USERID = ue.USERID
+      LEFT JOIN users u
+        ON u.USERID = ue.USERID AND u.tenant_id = ue.tenant_id
 
       LEFT JOIN Checkins c
-        ON c.USERID = u.USERID
+        ON c.USERID = u.USERID AND c.tenant_id = u.tenant_id
         AND c.CHECKTIME >= ? AND c.CHECKTIME < ?
 
-      WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)
+      WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)`;
 
-      ORDER BY e.nombre, c.CHECKTIME
-    `,
-    [normalizedDate, nextDayStr(normalizedDate)]
-  );
+  if (tenantId !== undefined && tenantId !== null) {
+    rowsQuery += ` AND e.tenant_id = ?`;
+    rowsParams.push(tenantId);
+  }
+
+  rowsQuery += ` ORDER BY e.nombre, c.CHECKTIME`;
+
+  const [rows] = await db.query(rowsQuery, rowsParams);
 
   const map = {};
   rows.forEach(r => {

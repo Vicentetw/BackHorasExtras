@@ -29,9 +29,12 @@ test('POST /config/user-exclusions/range crea un dia por fila y reporta honestam
   const headers = await getTestAuthHeaders(UID);
 
   // Precargar UN dia del medio del rango a mano, para simular "ya estaba justificado".
+  // userexclusions.tenant_id ya es NOT NULL (migracion 20260909) -- se
+  // resuelve del tenant real del USERID en vez de inventar uno.
+  const [[rawUser]] = await db.query('SELECT tenant_id FROM users WHERE USERID = ?', [TEST_USER_ID]);
   await db.query(
-    `INSERT INTO userexclusions (userId, excDate, reason, type) VALUES (?, ?, ?, 'FULL_DAY')`,
-    [TEST_USER_ID, PRELOADED_DATE, 'Cargado antes, a mano']
+    `INSERT INTO userexclusions (userId, tenant_id, excDate, reason, type) VALUES (?, ?, ?, ?, 'FULL_DAY')`,
+    [TEST_USER_ID, rawUser.tenant_id, PRELOADED_DATE, 'Cargado antes, a mano']
   );
 
   const res = await fetch(`${BASE_URL}/config/user-exclusions/range`, {

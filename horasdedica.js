@@ -378,6 +378,16 @@ app.delete('/delete/manual/:id', requirePermission('attendance', 'delete'), asyn
 // crearlos) en routes/employees.js -- mismo criterio.
 app.post('/import/checkins', requirePermission('attendance', 'create'), requireActiveSubscription, upload.single('file'), async (req, res) => {
   try {
+    // Fase 19: tenant obligatorio para insertar -- ver el comentario en
+    // checkinsIngestService.js. Un superadmin sin ?tenantId explicito no
+    // tiene un default valido (no hay forma de adivinar "de que empresa
+    // son estos fichajes"), asi que se le pide que lo especifique en vez
+    // de asumir cualquier cosa.
+    const effectiveTenantId = resolveTenantId(req);
+    if (!effectiveTenantId) {
+      return res.status(400).json({ error: 'Falta especificar la empresa (tenantId) para esta importación' });
+    }
+
     if (!req.file) {
       return res.status(400).json({ error: 'Archivo CSV requerido' });
     }
@@ -392,7 +402,7 @@ app.post('/import/checkins', requirePermission('attendance', 'create'), requireA
 
     // Insercion/dedupe extraida a checkinsIngestService.js (Fase 18) --
     // reusada TAL CUAL por el agente automatico (routes/agent.js).
-    const result = await insertCheckinsBatch(records, db);
+    const result = await insertCheckinsBatch(records, db, effectiveTenantId);
     res.json({ ok: true, ...result });
 
   } catch (err) {
@@ -417,6 +427,12 @@ app.post('/import/checkins', requirePermission('attendance', 'create'), requireA
 ================================ */
 app.post('/import/users', requirePermission('attendance', 'create'), upload.single('file'), async (req, res) => {
   try {
+    // Fase 19: mismo motivo que /import/checkins -- ver el comentario ahi.
+    const effectiveTenantId = resolveTenantId(req);
+    if (!effectiveTenantId) {
+      return res.status(400).json({ error: 'Falta especificar la empresa (tenantId) para esta importación' });
+    }
+
     if (!req.file) {
       return res.status(400).json({ error: 'Archivo CSV requerido' });
     }
@@ -431,7 +447,7 @@ app.post('/import/users', requirePermission('attendance', 'create'), upload.sing
 
     // Upsert extraido a checkinsIngestService.js (Fase 18) -- reusado TAL
     // CUAL por el agente automatico (routes/agent.js).
-    const { upserted, skipped } = await upsertUsersBatch(records, db);
+    const { upserted, skipped } = await upsertUsersBatch(records, db, effectiveTenantId);
     res.json({ ok: true, users: upserted, skipped, message: 'Importacion completada' });
 
   } catch (err) {
@@ -505,20 +521,18 @@ app.get('/debug/status', requireSuperadmin, async (req, res) => {
 ================================ */
 app.get('/users', requirePermission('exclusions', 'read'), async (req, res) => {
   try {
-    // `users` es la tabla cruda del reloj (sin tenant_id propio) -- se filtra
-    // por tenant a traves de employees (via user_employee_map), igual que
-    // /data. Un USERID sin matchear (aun no vinculado a un empleado) no tiene
-    // tenant asignado todavia, asi que se deja visible para no romper el
-    // flujo de matching -- lo que se bloquea es ver empleados YA matcheados
-    // de OTRA empresa.
+    // Fase 19: `users` ya tiene su propio tenant_id (migracion 20260909) --
+    // se filtra directo por eso en vez de indirecto via employees. Es mas
+    // simple Y mas correcto que la version anterior: antes, un USERID sin
+    // matchear quedaba visible para CUALQUIER empresa (no habia de donde
+    // sacarle un tenant_id todavia) -- ahora todo usuario crudo tiene su
+    // tenant real desde que el agente lo sincroniza, este matcheado o no.
     const effectiveTenantId = resolveTenantId(req);
-    const tenantClause = effectiveTenantId !== null ? 'WHERE (e.tenant_id = ? OR e.id IS NULL)' : '';
+    const tenantClause = effectiveTenantId !== null ? 'WHERE u.tenant_id = ?' : '';
     const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
     const [users] = await db.query(`
       SELECT u.USERID, u.Badgenumber, u.Name
       FROM users u
-      LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID
-      LEFT JOIN employees e ON e.id = uem.employee_id
       ${tenantClause}
       ORDER BY u.Name
     `, tenantParams);
@@ -769,19 +783,17 @@ app.get('/data', requirePermission('attendance', 'read'), async (req, res) => {
         e.legajo_alt as employee_legajo_alt,
         uem.match_type
       FROM users u
-      LEFT JOIN user_employee_map uem ON u.USERID = uem.USERID
+      LEFT JOIN user_employee_map uem ON u.USERID = uem.USERID AND uem.tenant_id = u.tenant_id
       LEFT JOIN employees e ON uem.employee_id = e.id
       WHERE 1=1
     `;
     const usersParams = [];
 
-    // `users`/Checkins no tienen tenant_id propio -- se filtra a traves de
-    // employees, igual que /users. Un USERID sin matchear queda visible (no
-    // tiene tenant asignado todavia); lo que se bloquea es ver el informe de
-    // horas de un empleado YA matcheado de OTRA empresa.
+    // Fase 19: users ya tiene tenant_id propio (migracion 20260909) -- se
+    // filtra directo, igual que /users.
     const effectiveTenantId = resolveTenantId(req);
     if (effectiveTenantId !== null) {
-      usersSQL += ' AND (e.tenant_id = ? OR e.id IS NULL)';
+      usersSQL += ' AND u.tenant_id = ?';
       usersParams.push(effectiveTenantId);
     }
 
@@ -921,15 +933,22 @@ app.get('/data', requirePermission('attendance', 'read'), async (req, res) => {
 // marcadores.html sin depender de que el admin escriba el número a mano.
 app.get('/config/special-users/candidates', requirePermission('settings', 'update'), async (req, res) => {
   try {
+    // Fase 19: users/specialusers ya tienen tenant_id (migracion 20260909)
+    // -- sin filtrar, esta lista de candidatos mezclaba usuarios crudos de
+    // TODAS las empresas.
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantClause = effectiveTenantId !== null ? 'AND u.tenant_id = ?' : '';
+    const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
     const [rows] = await db.query(`
       SELECT u.USERID, u.Badgenumber, u.Name,
              su.category, su.direction, su.\`function\`, su.isActive
       FROM users u
-      LEFT JOIN specialusers su ON su.userId = u.USERID
+      LEFT JOIN specialusers su ON su.userId = u.USERID AND su.tenant_id = u.tenant_id
       WHERE u.Badgenumber REGEXP '^[0-9]{1,2}$' AND u.Name = u.Badgenumber
         AND u.Badgenumber NOT IN ('1', '2') -- suelen ser el admin del reloj, no un marcador
+        ${tenantClause}
       ORDER BY CAST(u.Badgenumber AS UNSIGNED)
-    `);
+    `, tenantParams);
     res.json(rows);
   } catch (err) {
     console.error('ERROR fetching special user candidates:', err);
@@ -940,13 +959,20 @@ app.get('/config/special-users/candidates', requirePermission('settings', 'updat
 // 1. OBTENER/CREAR CONFIGURACIÓN DE USUARIOS ESPECIALES
 app.get('/config/special-users', requirePermission('settings', 'read'), async (req, res) => {
   try {
+    // Bug real de seguridad (re-auditoria de venta, Fase 19): sin filtro
+    // de tenant, esta lista (la que alimenta la pantalla de Marcadores)
+    // mostraba los marcadores configurados por TODAS las empresas.
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantClause = effectiveTenantId !== null ? 'AND su.tenant_id = ?' : '';
+    const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
     const [specialUsers] = await db.query(`
       SELECT su.*, u.Name as userName
       FROM specialusers su
-      JOIN users u ON su.userId = u.USERID
+      JOIN users u ON su.userId = u.USERID AND su.tenant_id = u.tenant_id
       WHERE su.isActive = TRUE
+      ${tenantClause}
       ORDER BY su.category, su.id
-    `);
+    `, tenantParams);
     res.json(specialUsers);
   } catch (err) {
     console.error('ERROR fetching special users:', err);
@@ -963,17 +989,26 @@ app.post('/config/special-users', requirePermission('settings', 'update'), async
   try {
     const { userId, category, direction, function: func } = req.body;
 
-    // Verificar que el usuario existe
+    // Fase 19: users.USERID ya no es unico por si solo (migracion
+    // 20260909) -- se resuelve el tenant del que pide y se busca el
+    // usuario crudo DENTRO de ese tenant, para no poder marcar como
+    // "marcador" el USERID de otra empresa que comparta el mismo numero.
+    const effectiveTenantId = resolveTenantId(req);
+    if (!effectiveTenantId) {
+      return res.status(400).json({ error: 'No se pudo determinar la empresa del usuario logueado' });
+    }
+
+    // Verificar que el usuario existe EN ESTA EMPRESA
     const [user] = await db.query(
       `SELECT
         u.USERID,
         u.Badgenumber,
         COALESCE(e.nombre, u.Name) AS Name
        FROM users u
-       LEFT JOIN user_employee_map um ON um.USERID = u.USERID
+       LEFT JOIN user_employee_map um ON um.USERID = u.USERID AND um.tenant_id = u.tenant_id
        LEFT JOIN employees e ON e.id = um.employee_id
-       WHERE u.USERID = ?`,
-      [userId]
+       WHERE u.USERID = ? AND u.tenant_id = ?`,
+      [userId, effectiveTenantId]
     );
 
     if (user.length === 0) {
@@ -985,14 +1020,14 @@ app.post('/config/special-users', requirePermission('settings', 'update'), async
     }
 
     await db.query(`
-      INSERT INTO specialusers (userId, badgeNumber, name, category, direction, \`function\`, isActive)
-      VALUES (?, ?, ?, ?, ?, ?, TRUE)
+      INSERT INTO specialusers (userId, tenant_id, badgeNumber, name, category, direction, \`function\`, isActive)
+      VALUES (?, ?, ?, ?, ?, ?, ?, TRUE)
       ON DUPLICATE KEY UPDATE
         category = VALUES(category),
         direction = VALUES(direction),
         \`function\` = VALUES(\`function\`),
         isActive = TRUE
-    `, [userId, user[0].Badgenumber, user[0].Name, category, direction || null, func]);
+    `, [userId, effectiveTenantId, user[0].Badgenumber, user[0].Name, category, direction || null, func]);
 
     res.json({ ok: true, message: 'Usuario especial configurado' });
   } catch (err) {
@@ -1009,7 +1044,15 @@ app.post('/config/special-users', requirePermission('settings', 'update'), async
 app.delete('/config/special-users/:userId', requirePermission('settings', 'delete'), async (req, res) => {
   try {
     const { userId } = req.params;
-    const [result] = await db.query('DELETE FROM specialusers WHERE userId = ?', [userId]);
+    // Fase 19: sin AND tenant_id, esto podia borrar el marcador de OTRA
+    // empresa que comparta el mismo USERID crudo (userId ya no es unico
+    // globalmente, migracion 20260909).
+    const effectiveTenantId = resolveTenantId(req);
+    const params = effectiveTenantId !== null ? [userId, effectiveTenantId] : [userId];
+    const query = effectiveTenantId !== null
+      ? 'DELETE FROM specialusers WHERE userId = ? AND tenant_id = ?'
+      : 'DELETE FROM specialusers WHERE userId = ?';
+    const [result] = await db.query(query, params);
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Usuario especial no encontrado' });
     }
@@ -1123,27 +1166,26 @@ app.post('/config/theme', async (req, res) => {
 // ningun empleado vinculado, se permite (no hay dueño a quien violarle
 // nada -- pasa con USERIDs de reloj todavia sin matchear) -- solo se
 // bloquea cuando SI esta vinculado a un empleado de OTRA empresa.
+// Fase 19: simplificado para usar users.tenant_id directo (migracion
+// 20260909) en vez de ir a buscarlo indirecto via user_employee_map ->
+// employees -- ademas de mas simple, esto CIERRA un agujero real: antes,
+// un USERID crudo que TODAVIA no estaba vinculado a ningun empleado
+// (owner undefined) pasaba el chequeo igual ("!owner" = true, sin
+// restriccion) -- ahora que users tiene su propio tenant_id (se carga
+// desde el momento en que el agente lo sincroniza, matcheado o no), se
+// puede chequear la pertenencia real siempre, este vinculado o no.
 async function userBelongsToCallerTenant(userId, req) {
   const effectiveTenantId = resolveTenantId(req);
   if (effectiveTenantId === null) return true; // superadmin, sin restriccion
-  const [[owner]] = await db.query(
-    `SELECT e.tenant_id FROM user_employee_map m JOIN employees e ON e.id = m.employee_id WHERE m.USERID = ?`,
-    [userId]
-  );
+  const [[owner]] = await db.query('SELECT tenant_id FROM users WHERE USERID = ?', [userId]);
   return !owner || owner.tenant_id === effectiveTenantId;
 }
 
 async function exclusionBelongsToCallerTenant(exclusionId, req) {
   const effectiveTenantId = resolveTenantId(req);
   if (effectiveTenantId === null) return true;
-  const [[row]] = await db.query(
-    `SELECT e.tenant_id FROM userexclusions ue
-     LEFT JOIN user_employee_map m ON m.USERID = ue.userId
-     LEFT JOIN employees e ON e.id = m.employee_id
-     WHERE ue.id = ?`,
-    [exclusionId]
-  );
-  return !row || !row.tenant_id || row.tenant_id === effectiveTenantId;
+  const [[row]] = await db.query('SELECT tenant_id FROM userexclusions WHERE id = ?', [exclusionId]);
+  return !row || row.tenant_id === effectiveTenantId;
 }
 
 // GET /config/user-exclusions?page=1&limit=20&search=...&status=...
@@ -1193,9 +1235,15 @@ app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), asyn
       where += ` ue.excDate < CURDATE()`;
     }
 
+    // Fase 19: filtra por ue.tenant_id DIRECTO (userexclusions ya tiene su
+    // propia columna, migracion 20260909) en vez de solo por e.tenant_id
+    // via el JOIN indirecto -- asi una exclusion de un USERID todavia sin
+    // matchear a ningun empleado tambien queda correctamente aislada por
+    // empresa (antes, sin match, no habia ningun tenant_id de donde
+    // filtrar y quedaba visible para cualquiera).
     const effectiveTenantId = resolveTenantId(req);
     if (effectiveTenantId !== null) {
-      where += (where ? ' AND' : 'WHERE') + ' e.tenant_id = ?';
+      where += (where ? ' AND' : 'WHERE') + ' ue.tenant_id = ?';
       params.push(effectiveTenantId);
     }
 
@@ -1203,8 +1251,8 @@ app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), asyn
     const [[{ total }]] = await db.query(`
       SELECT COUNT(*) as total
       FROM \`userexclusions\` ue
-      JOIN \`users\` u ON ue.userId = u.USERID
-      LEFT JOIN \`user_employee_map\` uem ON uem.USERID = u.USERID
+      JOIN \`users\` u ON ue.userId = u.USERID AND u.tenant_id = ue.tenant_id
+      LEFT JOIN \`user_employee_map\` uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
       LEFT JOIN \`employees\` e ON e.id = uem.employee_id
       ${where}
     `, params);
@@ -1230,8 +1278,8 @@ app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), asyn
         ue.createdAt,
         (ue.excDate >= CURDATE()) as isActive
       FROM \`userexclusions\` ue
-      JOIN \`users\` u ON ue.userId = u.USERID
-      LEFT JOIN \`user_employee_map\` uem ON uem.USERID = u.USERID
+      JOIN \`users\` u ON ue.userId = u.USERID AND u.tenant_id = ue.tenant_id
+      LEFT JOIN \`user_employee_map\` uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
       LEFT JOIN \`employees\` e ON e.id = uem.employee_id
       LEFT JOIN \`event_types\` et ON et.id = ue.event_type_id
       ${where}
@@ -1270,7 +1318,7 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
 
     // Verificar que el usuario existe
     const [[user]] = await db.query(
-      `SELECT USERID FROM \`users\` WHERE USERID = ?`,
+      `SELECT USERID, tenant_id FROM \`users\` WHERE USERID = ?`,
       [userId]
     );
 
@@ -1282,10 +1330,13 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
     }
 
     try {
+      // tenant_id sale del USUARIO CRUDO (users.tenant_id, migracion
+      // 20260909) -- es el dato real, siempre presente aunque el userId
+      // este vinculado o no todavia a un empleado.
       await db.query(`
-        INSERT INTO \`userexclusions\` (userId, excDate, reason, type, event_type_id, excFrom, excTo)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, [userId, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
+        INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type, event_type_id, excFrom, excTo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [userId, user.tenant_id, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
 
       res.json({ ok: true, message: 'Exclusión creada' });
     } catch (err) {
@@ -1325,7 +1376,7 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
       return res.status(400).json({ error: 'dateFrom no puede ser posterior a dateTo' });
     }
 
-    const [[user]] = await db.query(`SELECT USERID FROM \`users\` WHERE USERID = ?`, [userId]);
+    const [[user]] = await db.query(`SELECT USERID, tenant_id FROM \`users\` WHERE USERID = ?`, [userId]);
     if (!user) {
       return res.status(400).json({ error: 'Usuario no encontrado' });
     }
@@ -1346,9 +1397,9 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
     for (const excDate of dates) {
       try {
         await db.query(`
-          INSERT INTO \`userexclusions\` (userId, excDate, reason, type, event_type_id, excFrom, excTo)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `, [userId, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
+          INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type, event_type_id, excFrom, excTo)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [userId, user.tenant_id, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
         created++;
       } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') {
@@ -1595,22 +1646,26 @@ app.get('/config/users-with-exclusions', requirePermission('exclusions', 'read')
   try {
     const date = req.query.date || new Date().toISOString().split('T')[0];
     
+    const effectiveTenantId = resolveTenantId(req);
+    const tenantClause = effectiveTenantId !== null ? 'AND u.tenant_id = ?' : '';
+    const tenantParams = effectiveTenantId !== null ? [date, effectiveTenantId] : [date];
     const [usersWithStatus] = await db.query(`
-      SELECT 
+      SELECT
         u.USERID,
         u.Badgenumber,
         u.Name,
-        CASE 
+        CASE
           WHEN ue.id IS NOT NULL THEN true
           ELSE false
         END as isExcluded,
         ue.reason,
         ue.type
       FROM \`users\` u
-      LEFT JOIN \`userexclusions\` ue ON u.USERID = ue.userId AND ue.excDate = ?
+      LEFT JOIN \`userexclusions\` ue ON u.USERID = ue.userId AND u.tenant_id = ue.tenant_id AND ue.excDate = ?
       WHERE u.USERID > 10
+      ${tenantClause}
       ORDER BY u.Name
-    `, [date]);
+    `, tenantParams);
     
     res.json(usersWithStatus);
   } catch (err) {
@@ -1635,15 +1690,19 @@ app.post('/config/toggle-user-exclusion', requirePermission('exclusions', 'updat
     if (!(await userBelongsToCallerTenant(userId, req))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
+    const [[rawUser]] = await db.query('SELECT tenant_id FROM `users` WHERE USERID = ?', [userId]);
+    if (!rawUser) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
 
     if (exclude) {
       // Agregar exclusión
       try {
         await db.query(`
-          INSERT INTO \`userexclusions\` (userId, excDate, reason, type)
-          VALUES (?, ?, ?, ?)
-        `, [userId, excDate, reason || 'Manual exclusion', type || 'FULL_DAY']);
-        
+          INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type)
+          VALUES (?, ?, ?, ?, ?)
+        `, [userId, rawUser.tenant_id, excDate, reason || 'Manual exclusion', type || 'FULL_DAY']);
+
         res.json({ ok: true, message: 'Usuario excluido', excluded: true });
       } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') {
@@ -1652,12 +1711,13 @@ app.post('/config/toggle-user-exclusion', requirePermission('exclusions', 'updat
         throw err;
       }
     } else {
-      // Eliminar exclusión
+      // Eliminar exclusión -- Fase 19: se suma AND tenant_id, userId ya no
+      // es unico entre empresas (migracion 20260909).
       await db.query(`
         DELETE FROM \`userexclusions\`
-        WHERE userId = ? AND excDate = ?
-      `, [userId, excDate]);
-      
+        WHERE userId = ? AND excDate = ? AND tenant_id = ?
+      `, [userId, excDate, rawUser.tenant_id]);
+
       res.json({ ok: true, message: 'Usuario incluido', excluded: false });
     }
   } catch (err) {
@@ -1688,14 +1748,13 @@ app.get('/config/excluded-users', requirePermission('exclusions', 'read'), async
       clauses.push('(Name LIKE ? OR Badgenumber LIKE ?)');
       params.push(`%${search}%`, `%${search}%`);
     }
-    // Bug real de seguridad: esta lista mostraba el nombre real (via
-    // employees.nombre, cuando el USERID ya estaba vinculado) de
-    // empleados de CUALQUIER empresa -- un USERID sin vincular se sigue
-    // mostrando igual (no tiene dueño), pero uno vinculado a OTRA empresa
-    // ya no debe aparecer.
+    // Fase 19: users ya tiene tenant_id propio (migracion 20260909) -- se
+    // filtra directo por eso, que ademas cierra un agujero de la version
+    // anterior (dejaba ver un USERID sin vincular de CUALQUIER empresa,
+    // porque antes no habia de donde sacarle un tenant_id).
     const effectiveTenantId = resolveTenantId(req);
     if (effectiveTenantId !== null) {
-      clauses.push('(e.tenant_id IS NULL OR e.tenant_id = ?)');
+      clauses.push('u.tenant_id = ?');
       params.push(effectiveTenantId);
     }
     const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -1704,7 +1763,7 @@ app.get('/config/excluded-users', requirePermission('exclusions', 'read'), async
     const [countResult] = await db.query(
       `SELECT COUNT(*) as total
        FROM users u
-       LEFT JOIN user_employee_map um ON um.USERID = u.USERID
+       LEFT JOIN user_employee_map um ON um.USERID = u.USERID AND um.tenant_id = u.tenant_id
        LEFT JOIN employees e ON e.id = um.employee_id
        ${whereClause}`,
       params
@@ -1715,7 +1774,7 @@ app.get('/config/excluded-users', requirePermission('exclusions', 'read'), async
     const [users] = await db.query(
       `SELECT u.USERID, u.Badgenumber, COALESCE(e.nombre, u.Name) AS Name, u.isExcluded
        FROM users u
-       LEFT JOIN user_employee_map um ON um.USERID = u.USERID
+       LEFT JOIN user_employee_map um ON um.USERID = u.USERID AND um.tenant_id = u.tenant_id
        LEFT JOIN employees e ON e.id = um.employee_id
        ${whereClause} ORDER BY Name LIMIT ? OFFSET ?`,
       [...params, parseInt(limit), offset]
@@ -1753,23 +1812,28 @@ app.put('/config/toggle-user-exclusion-permanent/:userId', requirePermission('ex
       return res.status(400).json({ error: 'exclude debe ser true o false' });
     }
 
-    // Get current status
-    const [currentUser] = await db.query(
-      'SELECT isExcluded FROM users WHERE USERID = ?',
-      [userId]
-    );
-
-    if (currentUser.length === 0) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
     if (!(await userBelongsToCallerTenant(userId, req))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    // Update status
+    // Fase 19: USERID ya no identifica una unica fila por si solo
+    // (migracion 20260909) -- se resuelve el tenant real ANTES de tocar
+    // nada, scopeando tanto la lectura como el UPDATE por esa columna en
+    // vez de confiar en "la primera fila que traiga MySQL para ese USERID".
+    const effectiveTenantId = resolveTenantId(req);
+    const lookupQuery = effectiveTenantId !== null
+      ? 'SELECT isExcluded, tenant_id FROM users WHERE USERID = ? AND tenant_id = ?'
+      : 'SELECT isExcluded, tenant_id FROM users WHERE USERID = ?';
+    const lookupParams = effectiveTenantId !== null ? [userId, effectiveTenantId] : [userId];
+    const [currentUser] = await db.query(lookupQuery, lookupParams);
+
+    if (currentUser.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
     await db.query(
-      'UPDATE users SET isExcluded = ? WHERE USERID = ?',
-      [exclude ? 1 : 0, userId]
+      'UPDATE users SET isExcluded = ? WHERE USERID = ? AND tenant_id = ?',
+      [exclude ? 1 : 0, userId, currentUser[0].tenant_id]
     );
 
     res.json({
@@ -1793,23 +1857,28 @@ app.delete('/config/user-exclusion/:userId', requirePermission('exclusions', 'de
   try {
     const userId = parseInt(req.params.userId);
 
-    // Check if user exists
-    const [user] = await db.query(
-      'SELECT USERID FROM users WHERE USERID = ?',
-      [userId]
-    );
-
-    if (user.length === 0) {
+    if (!(await userBelongsToCallerTenant(userId, req))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
-    if (!(await userBelongsToCallerTenant(userId, req))) {
+
+    // Fase 19: mismo criterio que toggle-user-exclusion-permanent -- se
+    // resuelve el tenant real antes de tocar nada (USERID ya no identifica
+    // una unica fila por si solo, migracion 20260909).
+    const effectiveTenantId = resolveTenantId(req);
+    const lookupQuery = effectiveTenantId !== null
+      ? 'SELECT USERID, tenant_id FROM users WHERE USERID = ? AND tenant_id = ?'
+      : 'SELECT USERID, tenant_id FROM users WHERE USERID = ?';
+    const lookupParams = effectiveTenantId !== null ? [userId, effectiveTenantId] : [userId];
+    const [user] = await db.query(lookupQuery, lookupParams);
+
+    if (user.length === 0) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
     // Remove exclusion
     await db.query(
-      'UPDATE users SET isExcluded = 0 WHERE USERID = ?',
-      [userId]
+      'UPDATE users SET isExcluded = 0 WHERE USERID = ? AND tenant_id = ?',
+      [userId, user[0].tenant_id]
     );
 
     res.json({ ok: true, message: 'Exclusión removida' });
@@ -1906,25 +1975,36 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     const { date } = req.params; // YYYY-MM-DD
     const tolerance = req.query.tolerance || 10; // minutos
     const scheduleTime = req.query.scheduleTime || '07:00'; // HH:mm
-    
+    // Fase 19: este endpoint ("Legacy" en el selector de Presentismo, solo
+    // para comparar contra el Motor Laboral) NUNCA filtraba por tenant --
+    // devolvia SIEMPRE la asistencia de TODAS las empresas mezcladas, sin
+    // importar quien la pidiera. Mismo criterio que el resto del sistema:
+    // null = superadmin sin ?tenantId, sin restriccion.
+    const effectiveTenantId = resolveTenantId(req);
+
     console.log(`📅 REQUEST /attendance/${date}`);
     console.log(`   tolerance: ${tolerance}, scheduleTime: ${scheduleTime}`);
-    
+
     // PASO 1: Obtener todos los usuarios (excepto ficticios y excluidos)
     let users = [];
     try {
-      const [usersResult] = await db.query(`
-        SELECT 
-          u.USERID, 
-          u.Badgenumber, 
+      const usersParams = [];
+      let usersQuery = `
+        SELECT
+          u.USERID,
+          u.Badgenumber,
           COALESCE(e.nombre, u.Name) AS Name
         FROM \`users\` u
-        LEFT JOIN \`user_employee_map\` um ON um.USERID = u.USERID
+        LEFT JOIN \`user_employee_map\` um ON um.USERID = u.USERID AND um.tenant_id = u.tenant_id
         LEFT JOIN \`employees\` e ON e.id = um.employee_id
         WHERE u.USERID > 10
-          AND u.isExcluded = 0
-        ORDER BY Name
-      `);
+          AND u.isExcluded = 0`;
+      if (effectiveTenantId !== null) {
+        usersQuery += ` AND u.tenant_id = ?`;
+        usersParams.push(effectiveTenantId);
+      }
+      usersQuery += ` ORDER BY Name`;
+      const [usersResult] = await db.query(usersQuery, usersParams);
       users = usersResult || [];
       console.log(`✓ Usuarios desde tabla users: ${users.length}`);
     } catch (e) {
@@ -1935,16 +2015,21 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     // PASO 1B: Obtener empleados importados que no tienen user mapeado
     let importedEmployees = [];
     try {
-      const [employeesResult] = await db.query(`
+      const importedParams = [];
+      let importedQuery = `
         SELECT e.id, e.employee_id, e.nombre, e.activo
         FROM \`employees\` e
         WHERE e.activo = 1
           AND NOT EXISTS (
-            SELECT 1 FROM \`user_employee_map\` uem 
+            SELECT 1 FROM \`user_employee_map\` uem
             WHERE uem.employee_id = e.id
-          )
-        ORDER BY e.nombre
-      `);
+          )`;
+      if (effectiveTenantId !== null) {
+        importedQuery += ` AND e.tenant_id = ?`;
+        importedParams.push(effectiveTenantId);
+      }
+      importedQuery += ` ORDER BY e.nombre`;
+      const [employeesResult] = await db.query(importedQuery, importedParams);
       importedEmployees = employeesResult || [];
       console.log(`✓ Empleados importados (sin mapear): ${importedEmployees.length}`);
       
@@ -2026,13 +2111,18 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     let checkins = [];
     try {
       // Join Checkins con users para obtener los fichajes con el Badgenumber correcto
-      const [checkinsResult] = await db.query(`
+      const checkinsParams = [date, nextDayStr(date)];
+      let checkinsQuery = `
         SELECT u.USERID, c.CHECKTIME
         FROM \`Checkins\` c
-        LEFT JOIN \`users\` u ON CAST(c.USERID AS CHAR) = CAST(u.Badgenumber AS CHAR)
-        WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
-        ORDER BY u.USERID, c.CHECKTIME
-      `, [date, nextDayStr(date)]);
+        LEFT JOIN \`users\` u ON CAST(c.USERID AS CHAR) = CAST(u.Badgenumber AS CHAR) AND u.tenant_id = c.tenant_id
+        WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?`;
+      if (effectiveTenantId !== null) {
+        checkinsQuery += ` AND c.tenant_id = ?`;
+        checkinsParams.push(effectiveTenantId);
+      }
+      checkinsQuery += ` ORDER BY u.USERID, c.CHECKTIME`;
+      const [checkinsResult] = await db.query(checkinsQuery, checkinsParams);
       checkins = checkinsResult || [];
       console.log(`✓ Fichajes (matched by Badgenumber): ${checkins.length}`);
     } catch (e) {
@@ -2043,11 +2133,16 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     // PASO 4: Obtener exclusiones del día
     let exclusions = [];
     try {
-      const [exclusionsResult] = await db.query(`
+      const exclusionsParams = [date];
+      let exclusionsQuery = `
         SELECT userId, reason, type, excFrom, excTo
         FROM \`userexclusions\`
-        WHERE excDate = ?
-      `, [date]);
+        WHERE excDate = ?`;
+      if (effectiveTenantId !== null) {
+        exclusionsQuery += ` AND tenant_id = ?`;
+        exclusionsParams.push(effectiveTenantId);
+      }
+      const [exclusionsResult] = await db.query(exclusionsQuery, exclusionsParams);
       exclusions = exclusionsResult || [];
       console.log(`✓ Exclusiones: ${exclusions.length}`);
     } catch (e) {
@@ -2329,19 +2424,31 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     exclusiveEndDate.setDate(exclusiveEndDate.getDate() + 1);
     const exclusiveEndDateStr = formatLocalDate(exclusiveEndDate);
 
-    const [checkins] = await db.query(`
+    // Fase 19: se suma tenant_id a cada JOIN de esta cadena (Checkins ->
+    // users -> user_employee_map, migracion 20260909) -- este es EL
+    // endpoint principal de Presentismo/Horas Extra. Sin esto, un USERID
+    // compartido con OTRA empresa (numeracion de reloj por defecto,
+    // habitual entre dos empresas distintas) podia atribuirle en silencio
+    // el fichaje de esa otra empresa a un empleado real de esta.
+    const checkinsRangeParams = [from, exclusiveEndDateStr];
+    let checkinsRangeQuery = `
       SELECT DATE(c.CHECKTIME) AS date,
              c.CHECKTIME,
              e.employee_id AS employeeId,
              u.USERID AS userId
       FROM Checkins c
       LEFT JOIN users u
-        ON u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR)
-      LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID
+        ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
+        AND u.tenant_id = c.tenant_id
+      LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
       LEFT JOIN employees e ON e.id = uem.employee_id
-      WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
-      ORDER BY employeeId, c.CHECKTIME
-    `, [from, exclusiveEndDateStr]);
+      WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?`;
+    if (tenantId !== null) {
+      checkinsRangeQuery += ` AND c.tenant_id = ?`;
+      checkinsRangeParams.push(tenantId);
+    }
+    checkinsRangeQuery += ` ORDER BY employeeId, c.CHECKTIME`;
+    const [checkins] = await db.query(checkinsRangeQuery, checkinsRangeParams);
 
     const checkinsByEmployee = {};
     checkins.forEach(c => {
@@ -2353,12 +2460,17 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       checkinsByEmployee[employeeId][date].push(c.CHECKTIME);
     });
 
-    const [exclusions] = await db.query(`
+    const exclusionsRangeParams = [from, formatLocalDate(effectiveEndDate)];
+    let exclusionsRangeQuery = `
       SELECT ue.userId, ue.excDate, ue.type, ue.reason, ue.excFrom, ue.excTo, et.code AS eventTypeCode, et.descripcion AS eventTypeDescripcion
       FROM userexclusions ue
       LEFT JOIN event_types et ON et.id = ue.event_type_id
-      WHERE ue.excDate BETWEEN ? AND ?
-    `, [from, formatLocalDate(effectiveEndDate)]);
+      WHERE ue.excDate BETWEEN ? AND ?`;
+    if (tenantId !== null) {
+      exclusionsRangeQuery += ` AND ue.tenant_id = ?`;
+      exclusionsRangeParams.push(tenantId);
+    }
+    const [exclusions] = await db.query(exclusionsRangeQuery, exclusionsRangeParams);
     const exclusionsMap = new Map(exclusions.map(e => [`${e.userId}_${e.excDate}`, e]));
 
     // Licencias multi-día (vacaciones, enfermedad, etc.) cargadas en employee_events:
@@ -2465,7 +2577,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
 
     const possibleJustificationByEmployeeDate = new Map();
     if (detailEmployeeId) {
-      const particularMarkerMap = await fetchMarkerMap('PARTICULAR');
+      const particularMarkerMap = await fetchMarkerMap('PARTICULAR', tenantId);
       const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
       for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
         const { orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs });
@@ -2490,7 +2602,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     // la deteccion aparte.
     const heIntervalsByEmployeeDate = new Map(); // `${employeeId}|${date}` -> {timeOut, timeIn}
     {
-      const heMarkerMap = await fetchMarkerMap('HE');
+      const heMarkerMap = await fetchMarkerMap('HE', tenantId);
       if (Object.keys(heMarkerMap).length > 0) {
         const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
         for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
@@ -2771,7 +2883,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
 // La lógica de detección vive en motor-laboral/services/movementsCalculations.js
 // (compartida entre este endpoint y /campana-range) para no duplicarla.
 
-async function fetchMovementCheckins(fromDate, toDateExclusive) {
+async function fetchMovementCheckins(fromDate, toDateExclusive, tenantId) {
   // El join por badge (ademas de por USERID) es necesario porque no todos
   // los relojes graban Checkins.USERID igual: algunos graban el USERID
   // interno, otros graban directamente el numero de legajo/badge -- mismo
@@ -2779,16 +2891,29 @@ async function fetchMovementCheckins(fromDate, toDateExclusive) {
   // cualquier empleado cuyo reloj haga esto quedan invisibles para el motor
   // de salidas (se tratan como ruido) aunque sí se calculen bien las horas
   // normales -- caso real: PERROTTA Valentina, legajo 1011, 07/07/2026.
-  const [rows] = await db.query(`
+  //
+  // Fase 19: tenant_id en cada JOIN (users/Checkins/user_employee_map ya
+  // no son unicos solo por USERID, migracion 20260909) -- el filtrado
+  // final por employeeById.has(...) en /movements-range ya evitaba que
+  // esto se viera en la respuesta, pero un legajo coincidente entre dos
+  // empresas (ej. las dos usan "1000") podia igual atribuirle mal un
+  // movimiento a la empresa equivocada antes de llegar a esta version.
+  const params = [fromDate, toDateExclusive];
+  let query = `
     SELECT c.CHECKTIME AS checktime, c.USERID AS rawUserId, e.employee_id AS employeeId
     FROM Checkins c
     LEFT JOIN users u
-      ON u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR)
-    LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID
+      ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
+      AND u.tenant_id = c.tenant_id
+    LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
     LEFT JOIN employees e ON e.id = uem.employee_id
-    WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
-    ORDER BY c.CHECKTIME
-  `, [fromDate, toDateExclusive]);
+    WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?`;
+  if (tenantId !== undefined && tenantId !== null) {
+    query += ` AND c.tenant_id = ?`;
+    params.push(tenantId);
+  }
+  query += ` ORDER BY c.CHECKTIME`;
+  const [rows] = await db.query(query, params);
   return rows.map(r => ({
     // db.js usa dateStrings:true -- CHECKTIME llega como 'YYYY-MM-DD HH:MM:SS',
     // no como Date. El motor de detección compara/formatea fechas, así que se
@@ -2799,12 +2924,19 @@ async function fetchMovementCheckins(fromDate, toDateExclusive) {
   }));
 }
 
-async function fetchMarkerMap(category) {
+async function fetchMarkerMap(category, tenantId) {
   const params = [];
   let query = `SELECT userId, category, direction FROM specialusers WHERE isActive = TRUE AND direction IS NOT NULL`;
   if (category) {
     query += ` AND category = ?`;
     params.push(category);
+  }
+  // Fase 19: sin esto, el mapa de marcadores (badge 9/10) de OTRA empresa
+  // se mezclaba con el propio -- un USERID de marcador coincidente entre
+  // dos empresas hubiera abierto/cerrado eventos con el criterio equivocado.
+  if (tenantId !== undefined && tenantId !== null) {
+    query += ` AND tenant_id = ?`;
+    params.push(tenantId);
   }
   const [rows] = await db.query(query, params);
   const markerMap = {};
@@ -2833,9 +2965,9 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
     }
     const employeeById = new Map(employees.map(e => [String(e.employeeId), e]));
 
-    const markerMap = await fetchMarkerMap(category);
+    const markerMap = await fetchMarkerMap(category, tenantId);
     const exclusiveEnd = nextDayStr(to);
-    const checkins = await fetchMovementCheckins(from, exclusiveEnd);
+    const checkins = await fetchMovementCheckins(from, exclusiveEnd, tenantId);
 
     // Particular/Oficial son "del día": una salida sin regreso se cierra al
     // fin de ESE horario, nunca con un fichaje de un día distinto. Por eso la
@@ -2982,7 +3114,7 @@ app.get('/campana-range', requirePermission('attendance', 'read'), async (req, r
     }
     const employeeById = new Map(employees.map(e => [String(e.employeeId), e]));
 
-    const markerMap = await fetchMarkerMap('CAMPANA');
+    const markerMap = await fetchMarkerMap('CAMPANA', tenantId);
 
     // Una salida a campaña puede haber arrancado antes del "from" pedido --
     // se busca hasta CAMPANA_LOOKBACK_DAYS atrás para no perder el
@@ -2993,7 +3125,7 @@ app.get('/campana-range', requirePermission('attendance', 'read'), async (req, r
     const lookbackFromStr = formatLocalDate(lookbackFromDate);
     const exclusiveEnd = nextDayStr(to);
 
-    const checkins = await fetchMovementCheckins(lookbackFromStr, exclusiveEnd);
+    const checkins = await fetchMovementCheckins(lookbackFromStr, exclusiveEnd, tenantId);
     const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
     const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs });
 

@@ -56,15 +56,15 @@ before(async () => {
   );
   empInactiveId = empInactiveRes.insertId;
 
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_ACTIVE, String(USERID_ACTIVE), 'Empleado Activo Test']);
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_INACTIVE, String(USERID_INACTIVE), 'Empleado Inactivo Test']);
-  await db.query('INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)', [USERID_ACTIVE, empActiveId, 'manual']);
-  await db.query('INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)', [USERID_INACTIVE, empInactiveId, 'manual']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_ACTIVE, TENANT, String(USERID_ACTIVE), 'Empleado Activo Test']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_INACTIVE, TENANT, String(USERID_INACTIVE), 'Empleado Inactivo Test']);
+  await db.query('INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, ?)', [USERID_ACTIVE, TENANT, empActiveId, 'manual']);
+  await db.query('INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, ?)', [USERID_INACTIVE, TENANT, empInactiveId, 'manual']);
 
   // El inactivo SI fichó ese día -- el caso que debe disparar el aviso.
   await db.query(
-    'INSERT INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES (?, ?, NULL, NULL)',
-    [USERID_INACTIVE, `${TEST_DATE} 07:05:00`]
+    'INSERT INTO Checkins (USERID, tenant_id, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES (?, ?, ?, NULL, NULL)',
+    [USERID_INACTIVE, TENANT, `${TEST_DATE} 07:05:00`]
   );
   // El activo NO fichó ese día -- debe seguir contando como ausente de verdad.
 });
@@ -102,8 +102,8 @@ test('motor diario: inactivo sin fichaje NO es Absent (status Inactive, sin avis
     assert.equal(json.summary.absent, 1, 'el inactivo sin fichar no debe sumarse al resumen de ausentes (solo el activo debe contar)');
   } finally {
     await db.query(
-      'INSERT INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES (?, ?, NULL, NULL)',
-      [USERID_INACTIVE, `${TEST_DATE} 07:05:00`]
+      'INSERT INTO Checkins (USERID, tenant_id, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES (?, ?, ?, NULL, NULL)',
+      [USERID_INACTIVE, TENANT, `${TEST_DATE} 07:05:00`]
     );
   }
 });

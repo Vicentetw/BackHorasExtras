@@ -60,14 +60,14 @@ before(async () => {
   empBUnmatchedId = empBUnmatchedResult.insertId;
 
   // Sin vincular todavia -- badge = legajo, para que /auto|/predict|/manual-bulk los prediga.
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_UNMATCHED_A, '900600', 'Empleado Guard A']);
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_UNMATCHED_B, '900601', 'Empleado Guard B']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_UNMATCHED_A, TENANT_A, '900600', 'Empleado Guard A']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_UNMATCHED_B, TENANT_B, '900601', 'Empleado Guard B']);
 
   // Ya vinculados -- para GET / y DELETE.
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_MATCHED_A, 'badgeA', 'Ya Vinculado A']);
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_MATCHED_B, 'badgeB', 'Ya Vinculado B']);
-  await db.query('INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)', [USERID_MATCHED_A, empAId, 'manual']);
-  await db.query('INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)', [USERID_MATCHED_B, empBId, 'manual']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_MATCHED_A, TENANT_A, 'badgeA', 'Ya Vinculado A']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_MATCHED_B, TENANT_B, 'badgeB', 'Ya Vinculado B']);
+  await db.query('INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, ?)', [USERID_MATCHED_A, TENANT_A, empAId, 'manual']);
+  await db.query('INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, ?)', [USERID_MATCHED_B, TENANT_B, empBId, 'manual']);
 });
 
 after(async () => {
@@ -109,14 +109,19 @@ for (const path of ['/api/matching/auto', '/api/matching/manual-bulk', '/api/mat
   });
 }
 
-test('GET /api/matching/diagnosis/report: el "reason" no delata un legajo coincidente de otra empresa', async () => {
+// Fase 19: antes users/Checkins no tenian tenant_id propio, asi que la
+// lista de "usuarios sin match" era global a proposito (solo se tapaba el
+// "reason", que si delataba coincidencias entre empresas). Con la
+// migracion 20260909 (users.tenant_id real) ya no hace falta esa
+// concesion -- un USERID crudo de OTRA empresa directamente no aparece.
+test('GET /api/matching/diagnosis/report: no muestra usuarios crudos de OTRA empresa', async () => {
   const res = await fetch(`${BASE_URL}/api/matching/diagnosis/report`, { headers: headersA });
   const json = await res.json();
   const rowB = json.data.unmatchedUsers.find((u) => u.USERID === USERID_UNMATCHED_B);
-  assert.ok(rowB, 'el usuario crudo del reloj sigue siendo visible (lista global a proposito)');
-  assert.equal(rowB.reason, 'No existe employee_id coincidente', 'no debe delatar que ese legajo coincide con un empleado de OTRA empresa');
+  assert.equal(rowB, undefined, 'el usuario crudo de OTRA empresa ya no debe aparecer en absoluto');
 
   const rowA = json.data.unmatchedUsers.find((u) => u.USERID === USERID_UNMATCHED_A);
+  assert.ok(rowA, 'su PROPIO usuario sin match si debe seguir apareciendo');
   assert.match(rowA.reason, /coincidente/, 'para su PROPIO empleado si debe detectar la coincidencia');
 });
 

@@ -10,7 +10,7 @@ async function findAll({ tenantId }, db) {
        COALESCE(e.activo, 1) AS activo
      FROM employees e
      LEFT JOIN user_employee_map ue ON ue.employee_id = e.id
-     LEFT JOIN users u ON u.USERID = ue.USERID
+     LEFT JOIN users u ON u.USERID = ue.USERID AND u.tenant_id = ue.tenant_id
      WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)`;
 
   if (tenantId !== undefined && tenantId !== null) {

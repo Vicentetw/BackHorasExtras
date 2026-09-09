@@ -54,20 +54,20 @@ before(async () => {
   empOldId = await mkEmployee(2);
   empNeverId = await mkEmployee(3); // nunca fichó -- sin fila en users/Checkins/user_employee_map
 
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_RECENT, String(USERID_RECENT), 'Recent Fichaje']);
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [USERID_OLD, String(USERID_OLD), 'Old Fichaje']);
-  await db.query('INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)', [USERID_RECENT, empRecentId, 'manual']);
-  await db.query('INSERT INTO user_employee_map (USERID, employee_id, match_type) VALUES (?, ?, ?)', [USERID_OLD, empOldId, 'manual']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_RECENT, TENANT, String(USERID_RECENT), 'Recent Fichaje']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [USERID_OLD, TENANT, String(USERID_OLD), 'Old Fichaje']);
+  await db.query('INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, ?)', [USERID_RECENT, TENANT, empRecentId, 'manual']);
+  await db.query('INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, ?)', [USERID_OLD, TENANT, empOldId, 'manual']);
 
   // Recent: fichó hace 5 días -- NO debe aparecer en inactiveDays=30.
   await db.query(
-    'INSERT INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES (?, DATE_SUB(NOW(), INTERVAL 5 DAY), NULL, NULL)',
-    [USERID_RECENT]
+    'INSERT INTO Checkins (USERID, tenant_id, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES (?, ?, DATE_SUB(NOW(), INTERVAL 5 DAY), NULL, NULL)',
+    [USERID_RECENT, TENANT]
   );
   // Old: último fichaje hace 200 días -- SI debe aparecer en inactiveDays=30.
   await db.query(
-    'INSERT INTO Checkins (USERID, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES (?, DATE_SUB(NOW(), INTERVAL 200 DAY), NULL, NULL)',
-    [USERID_OLD]
+    'INSERT INTO Checkins (USERID, tenant_id, CHECKTIME, MACHINE_IP, MACHINE_SN) VALUES (?, ?, DATE_SUB(NOW(), INTERVAL 200 DAY), NULL, NULL)',
+    [USERID_OLD, TENANT]
   );
 });
 

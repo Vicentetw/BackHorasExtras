@@ -83,7 +83,7 @@ module.exports = function (db) {
   // -- el agente manda el mismo shape que ya arma para el CSV, sin transformar nada.
   router.post('/checkins', requireActiveSubscriptionAgent, validateRecordsBody, async (req, res) => {
     try {
-      const result = await insertCheckinsBatch(req.body.records, db);
+      const result = await insertCheckinsBatch(req.body.records, db, req.agentTenantId);
       // Pedido real: saber "hasta cuando esta actualizado" cada reloj
       // puntual, no solo la empresa entera -- se registra por separado,
       // un problema con esto (ej. un reloj sin MACHINE_IP) no debe hacer
@@ -109,7 +109,7 @@ module.exports = function (db) {
   // POST /api/agent/users -- body: { records: [{ USERID, Badgenumber, Name }, ...] }
   router.post('/users', validateRecordsBody, async (req, res) => {
     try {
-      const result = await upsertUsersBatch(req.body.records, db);
+      const result = await upsertUsersBatch(req.body.records, db, req.agentTenantId);
       res.json({ ok: true, ...result });
     } catch (err) {
       if (err.code === 'BATCH_TOO_LARGE') {

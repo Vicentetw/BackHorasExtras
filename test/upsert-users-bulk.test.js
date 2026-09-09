@@ -14,10 +14,23 @@ const { upsertUsersBatch } = require('../motor-laboral/services/checkinsIngestSe
 
 // Badges descartables propios, con un prefijo bien identificable.
 const PREFIX = 'bulk-test-';
+// upsertUsersBatch ahora exige tenantId (migracion 20260909: users.USERID
+// dejo de ser unico por si solo) -- tenant descartable propio, con FK real
+// hacia `tenants`.
+const TENANT_ID = 999989;
+
+before(async () => {
+  await db.query(
+    `INSERT INTO tenants (id, name, code) VALUES (?, 'Tenant Upsert Bulk (test)', 'tenant-upsert-bulk-test')
+     ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+    [TENANT_ID]
+  );
+});
 
 after(async () => {
   await db.query(`DELETE FROM users WHERE Badgenumber LIKE ?`, [`${PREFIX}%`]);
   await db.query(`DELETE FROM users WHERE USERID BETWEEN 990000 AND 990600`);
+  await db.query('DELETE FROM tenants WHERE id = ?', [TENANT_ID]).catch(() => {});
   // Bug propio (no del fix real): sin esto, el pool de mysql2 mantiene
   // vivo el proceso -- todos los tests pasan pero `node --test` se
   // queda "colgado" esperando a que el proceso termine solo, hasta que
@@ -33,7 +46,7 @@ test('inserta usuarios nuevos en un solo lote grande (simula un sitio con mucho 
     Name: `Empleado Bulk ${i}`,
   }));
 
-  const result = await upsertUsersBatch(records, db);
+  const result = await upsertUsersBatch(records, db, TENANT_ID);
   assert.equal(result.upserted, 500);
   assert.equal(result.skipped, 0);
 
@@ -45,14 +58,14 @@ test('un badge que ya existe con el MISMO USERID no se toca', async () => {
   const [[before]] = await db.query(`SELECT Name FROM users WHERE Badgenumber = ?`, [`${PREFIX}0`]);
   assert.equal(before.Name, 'Empleado Bulk 0');
 
-  await upsertUsersBatch([{ USERID: 990000, Badgenumber: `${PREFIX}0`, Name: 'Nombre que NO debería guardarse' }], db);
+  await upsertUsersBatch([{ USERID: 990000, Badgenumber: `${PREFIX}0`, Name: 'Nombre que NO debería guardarse' }], db, TENANT_ID);
 
   const [[after_]] = await db.query(`SELECT Name FROM users WHERE Badgenumber = ?`, [`${PREFIX}0`]);
   assert.equal(after_.Name, 'Empleado Bulk 0', 'mismo USERID -- no deberia actualizar el nombre');
 });
 
 test('un badge que ya existe con OTRO USERID actualiza el nombre (sin tocar el USERID)', async () => {
-  await upsertUsersBatch([{ USERID: 999999, Badgenumber: `${PREFIX}0`, Name: 'Nombre Corregido' }], db);
+  await upsertUsersBatch([{ USERID: 999999, Badgenumber: `${PREFIX}0`, Name: 'Nombre Corregido' }], db, TENANT_ID);
 
   const [[row]] = await db.query(`SELECT USERID, Name FROM users WHERE Badgenumber = ?`, [`${PREFIX}0`]);
   assert.equal(row.USERID, 990000, 'el USERID original no debe cambiar');
@@ -68,7 +81,8 @@ test('un badge duplicado DENTRO del mismo lote no rompe -- se queda con la ultim
       { USERID: 990500, Badgenumber: `${PREFIX}dup`, Name: 'Primera vez' },
       { USERID: 990500, Badgenumber: `${PREFIX}dup`, Name: 'Segunda vez (esta debe quedar)' },
     ],
-    db
+    db,
+    TENANT_ID
   );
   assert.equal(result.upserted, 1);
 
@@ -83,7 +97,8 @@ test('filas invalidas (falta USERID/Badgenumber/Name) se cuentan como skipped, n
       { USERID: null, Badgenumber: `${PREFIX}invalido1`, Name: 'Sin USERID' },
       { USERID: 990502, Badgenumber: '', Name: 'Sin badge' },
     ],
-    db
+    db,
+    TENANT_ID
   );
   assert.equal(result.upserted, 1);
   assert.equal(result.skipped, 2);
@@ -103,13 +118,14 @@ test('un USERID que ya existe con OTRO badge (o sin badge) se actualiza, no se i
   // vacio es invalido para esa funcion, se descartaria como fila
   // invalida) para simular una carga vieja real: el USERID ya existe con
   // un Badgenumber que no coincide con lo que va a mandar el reloj ahora.
-  await db.query('INSERT INTO users (USERID, Badgenumber, Name) VALUES (?, ?, ?)', [990503, `${PREFIX}viejo`, 'Nombre viejo']);
+  await db.query('INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)', [990503, TENANT_ID, `${PREFIX}viejo`, 'Nombre viejo']);
   const [[antes]] = await db.query('SELECT Badgenumber, Name FROM users WHERE USERID = ?', [990503]);
   assert.equal(antes.Badgenumber, `${PREFIX}viejo`, 'precondicion: el USERID ya existe con un badge distinto al que se va a mandar despues');
 
   const result = await upsertUsersBatch(
     [{ USERID: 990503, Badgenumber: `${PREFIX}nuevo`, Name: 'Nombre actualizado' }],
-    db
+    db,
+    TENANT_ID
   );
   assert.equal(result.upserted, 1);
 
