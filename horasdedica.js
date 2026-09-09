@@ -4,7 +4,6 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
-const mysql = require('mysql2/promise');
 const { parse } = require('csv-parse/sync');
 const { securityMiddlewares, apiKeyWarning } = require('./security');
 const { resolveTenantId, requirePermission, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
@@ -113,17 +112,24 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 /* ===============================
    MySQL – Clever Cloud
 ================================ */
-const db = mysql.createPool({
-  host: process.env.MYSQL_ADDON_HOST,
-  user: process.env.MYSQL_ADDON_USER,
-  password: process.env.MYSQL_ADDON_PASSWORD,
-  database: process.env.MYSQL_ADDON_DB,
-  port: process.env.MYSQL_ADDON_PORT || 3306,
-  waitForConnections: true,
-  dateStrings: true,
-  connectionLimit: 10,
-  queueLimit: 0
-});
+// Bug real de produccion (reportado: "entro solo y Clever Cloud me
+// bloquea por maximo 5 conexiones"): este archivo tenia su PROPIO pool
+// (connectionLimit:10) totalmente separado del pool compartido de
+// './db' (connectionLimit:5) que ya usan appUserMiddleware.js y varios
+// routes/*.js (employees, matching, import, etc.). Los dos pools viven
+// en el MISMO proceso de Node pero Clever Cloud no sabe que son "el
+// mismo programa" -- para el servidor de MySQL son simplemente hasta
+// 15 conexiones simultaneas pedidas por un solo usuario, contra un
+// limite real de 5 (max_user_connections). Como appUserMiddleware corre
+// en CADA request autenticado y despues la ruta en si vuelve a pedir
+// conexion (a veces del otro pool), una sola persona cargando una
+// pantalla que dispara varios pedidos en paralelo (ej. Presentismo:
+// attendance-range + banner de sincronizacion + lista de empleados a la
+// vez) ya alcanza para pedir mas de 5 conexiones reales al mismo
+// tiempo -- sin ningun otro usuario ni el agente de sincronizacion de
+// por medio. Arreglo de raiz: un unico pool compartido para todo el
+// proceso (ver './db', que ya tiene el limite real de Clever Cloud).
+const db = require('./db');
 
 // Registrar holidays después de db
 app.use('/api/holidays', holidaysRoutes(db));
