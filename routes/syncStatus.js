@@ -9,14 +9,20 @@ const agentSyncStatusRepository = require('../motor-laboral/repositories/agentSy
 module.exports = function (db) {
   const router = express.Router();
 
-  // Un usuario normal ve la de su propia empresa; superadmin puede pedir
-  // la de cualquiera via ?tenantId= (ej. para diagnosticar un reclamo).
+  // Un usuario normal ve la de su propia empresa. El superadmin: la de una
+  // empresa puntual si pasa ?tenantId= (para diagnosticar un reclamo), o
+  // la de TODAS si no -- antes, sin ?tenantId=, no veia ninguna (no
+  // pertenece a ninguna empresa), y en la practica es el que administra
+  // la unica empresa real.
   router.get('/', async (req, res) => {
     try {
-      let tenantId = req.appUser?.tenantId;
-      if (req.appUser?.isSuperadmin && req.query.tenantId) {
-        tenantId = Number(req.query.tenantId);
+      if (req.appUser?.isSuperadmin) {
+        const rows = req.query.tenantId
+          ? await agentSyncStatusRepository.getSyncStatusForTenant(Number(req.query.tenantId), db)
+          : await agentSyncStatusRepository.getAllSyncStatus(db);
+        return res.json(rows);
       }
+      const tenantId = req.appUser?.tenantId;
       if (tenantId == null) return res.json([]);
       const rows = await agentSyncStatusRepository.getSyncStatusForTenant(tenantId, db);
       res.json(rows);

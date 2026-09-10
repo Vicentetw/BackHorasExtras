@@ -40,4 +40,15 @@ async function getSyncStatusForTenant(tenantId, db) {
   return rows;
 }
 
-module.exports = { upsertSyncStatus, getSyncStatusForTenant };
+// El superadmin no pertenece a ninguna empresa (tenant_id NULL) -- sin
+// esto, no veia NUNCA el estado de sincronizacion de ningun reloj. Como
+// operador de la plataforma tiene sentido que vea el de todas (hoy, una).
+async function getAllSyncStatus(db) {
+  const [rows] = await db.query(
+    `SELECT tenant_id, machine_ip, machine_sn, last_synced_at, last_checktime, fichajes_ultima_subida
+     FROM agent_sync_status ORDER BY last_synced_at DESC`
+  );
+  return rows;
+}
+
+module.exports = { upsertSyncStatus, getSyncStatusForTenant, getAllSyncStatus };
