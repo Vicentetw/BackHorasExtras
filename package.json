@@ -4,7 +4,7 @@
   "description": "",
   "main": "db.js",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test --test-force-exit"
   },
   "keywords": [],
   "author": "",
