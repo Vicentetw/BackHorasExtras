@@ -14,7 +14,7 @@ function createLaborEngineRoutes(db) {
   const repositories = {
     schedule: {
       findByDate: (date, tenantId) => scheduleRepository.findByDate(date, tenantId, db),
-      findAssignedScheduleMapForDate: (date, employeeIds) => scheduleRepository.findAssignedScheduleMapForDate(date, employeeIds, db),
+      findAssignedScheduleMapForDate: (date, employeeIds, tenantId) => scheduleRepository.findAssignedScheduleMapForDate(date, employeeIds, db, tenantId),
       findByTemplateId: (date, templateId) => scheduleRepository.findByTemplateId(date, templateId, db)
     },
     holiday: {

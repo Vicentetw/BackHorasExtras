@@ -246,7 +246,7 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
   // ENTERO para todos los empleados por culpa de uno solo. Mismo filtro que
   // ya tiene /attendance-range (horasdedica2.js) para este mismo campo.
   const employeeIds = Array.from(usersMap.keys()).map(id => Number(id)).filter(id => !Number.isNaN(id));
-  const assignedScheduleMap = await repositories.schedule.findAssignedScheduleMapForDate(normalizedDate, employeeIds);
+  const assignedScheduleMap = await repositories.schedule.findAssignedScheduleMapForDate(normalizedDate, employeeIds, tenantId);
 
   const tenantScheduleMap = {};
   if (!templateId) {

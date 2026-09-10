@@ -2368,7 +2368,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     }
 
     const assignedCalendarRowsByEmployee = await scheduleRepository.findAssignedCalendarRowsForRange(
-      from, formatLocalDate(effectiveEndDate), employeeIds, db
+      from, formatLocalDate(effectiveEndDate), employeeIds, db, tenantId
     );
 
     const involvedTemplateIds = [

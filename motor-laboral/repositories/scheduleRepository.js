@@ -38,7 +38,7 @@ function buildScheduleFromBlocks(template, blocks, date) {
   };
 }
 
-async function findAssignedScheduleMapForDate(date, employeeIds, db) {
+async function findAssignedScheduleMapForDate(date, employeeIds, db, tenantId) {
   // Defensa extra ademas del filtro que ya hace el caller (attendanceService.js):
   // un solo NaN colado en la lista (empleado con employee_id nulo/vacio) hace
   // que MySQL tire "Unknown column 'NaN'" al armar el IN (?) y tumba el motor
@@ -46,17 +46,24 @@ async function findAssignedScheduleMapForDate(date, employeeIds, db) {
   const safeIds = (employeeIds || []).filter((id) => typeof id === 'number' && !Number.isNaN(id));
   if (!safeIds.length) return {};
 
+  // Fase 20: el legajo (e.employee_id) ya no es unico global -- si no se
+  // filtra por tenant, un legajo compartido entre dos empresas puede traer
+  // el calendario de la empresa EQUIVOCADA (el map se keyea por legajo).
+  // tenantId null (superadmin, calculo cross-empresa) queda como antes.
+  const tenantClause = tenantId != null ? 'AND e.tenant_id = ?' : '';
+  const params = tenantId != null ? [safeIds, tenantId, date, date] : [safeIds, date, date];
   const [rows] = await db.query(
     `SELECT e.employee_id AS employeeId, t.*
      FROM employee_work_calendars c
      JOIN employees e ON e.id = c.employee_id
      JOIN work_schedule_templates t ON t.id = c.template_id
      WHERE e.employee_id IN (?)
+       ${tenantClause}
        AND c.valid_from <= ?
        AND (c.valid_to IS NULL OR c.valid_to >= ?)
        AND t.active = 1
      ORDER BY e.employee_id ASC, c.valid_from DESC`,
-    [safeIds, date, date]
+    params
   );
 
   const map = {};
@@ -72,20 +79,25 @@ async function findAssignedScheduleMapForDate(date, employeeIds, db) {
 // se solapan con el rango [fromDate, toDate], en vez de una consulta por día.
 // Devuelve las filas crudas (con valid_from/valid_to) agrupadas por employeeId,
 // para que el llamador resuelva día por día en memoria cuál aplica.
-async function findAssignedCalendarRowsForRange(fromDate, toDate, employeeIds, db) {
+async function findAssignedCalendarRowsForRange(fromDate, toDate, employeeIds, db, tenantId) {
   if (!employeeIds || !employeeIds.length) return {};
 
+  // Fase 20: mismo motivo que findAssignedScheduleMapForDate -- legajo ya
+  // no es unico global, se filtra por tenant salvo en el caso superadmin.
+  const tenantClause = tenantId != null ? 'AND e.tenant_id = ?' : '';
+  const params = tenantId != null ? [employeeIds, tenantId, toDate, fromDate] : [employeeIds, toDate, fromDate];
   const [rows] = await db.query(
     `SELECT e.employee_id AS employeeId, c.valid_from, c.valid_to, t.*
      FROM employee_work_calendars c
      JOIN employees e ON e.id = c.employee_id
      JOIN work_schedule_templates t ON t.id = c.template_id
      WHERE e.employee_id IN (?)
+       ${tenantClause}
        AND c.valid_from <= ?
        AND (c.valid_to IS NULL OR c.valid_to >= ?)
        AND t.active = 1
      ORDER BY e.employee_id ASC, c.valid_from DESC`,
-    [employeeIds, toDate, fromDate]
+    params
   );
 
   const byEmployee = {};

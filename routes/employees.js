@@ -235,10 +235,14 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
 
     const normalizedDocumento = documento ? String(documento).trim() : null;
 
-    // Verificar si ya existe employee_id
+    // Fase 20: el legajo (employee_id) y el documento son unicos POR EMPRESA,
+    // no globalmente (migracion 20260910_employees_legajo_por_tenant.sql) --
+    // dos empresas distintas pueden tener un empleado con el legajo "1000" o
+    // hasta el mismo DNI (una persona que trabaja en dos lados). El chequeo
+    // de "ya existe" se limita al tenant de esta alta.
     const [existing] = await db.query(
-      'SELECT id FROM employees WHERE employee_id = ?',
-      [employee_id]
+      'SELECT id FROM employees WHERE employee_id = ? AND tenant_id <=> ?',
+      [employee_id, effectiveTenantId]
     );
 
     if (existing.length > 0) {
@@ -249,8 +253,8 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
 
     if (normalizedDocumento) {
       const [duplicateDocumento] = await db.query(
-        'SELECT id FROM employees WHERE TRIM(documento) = ? LIMIT 1',
-        [normalizedDocumento]
+        'SELECT id FROM employees WHERE TRIM(documento) = ? AND tenant_id <=> ? LIMIT 1',
+        [normalizedDocumento, effectiveTenantId]
       );
       if (duplicateDocumento.length > 0) {
         return res.status(409).json({
@@ -360,9 +364,12 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
     // Verificar que no haya conflicto de legajo
     const normalizedDocumento = documento ? String(documento).trim() : null;
 
+    // Fase 20: legajo y documento unicos POR EMPRESA (ver el comentario en
+    // el alta) -- el chequeo de conflicto se limita al tenant destino del
+    // empleado, no a toda la tabla.
     const [conflict] = await db.query(
-      'SELECT id FROM employees WHERE employee_id = ? AND id != ?',
-      [employee_id, id]
+      'SELECT id FROM employees WHERE employee_id = ? AND tenant_id <=> ? AND id != ?',
+      [employee_id, effectiveTenantId, id]
     );
 
     if (conflict.length > 0) {
@@ -373,8 +380,8 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
 
     if (normalizedDocumento) {
       const [duplicateDocumento] = await db.query(
-        'SELECT id FROM employees WHERE TRIM(documento) = ? AND id != ? LIMIT 1',
-        [normalizedDocumento, id]
+        'SELECT id FROM employees WHERE TRIM(documento) = ? AND tenant_id <=> ? AND id != ? LIMIT 1',
+        [normalizedDocumento, effectiveTenantId, id]
       );
       if (duplicateDocumento.length > 0) {
         return res.status(409).json({

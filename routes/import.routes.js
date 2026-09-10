@@ -235,9 +235,11 @@ router.post('/employees/confirm/:batchId', requirePermission('employees', 'creat
     // saltear igual) y se rechaza el batch COMPLETO si se pasaria del tope
     // -- nada de "importar los primeros 5 y cortar a mitad de la lista".
     if (effectiveTenantId != null) {
+      // Fase 20: el legajo es unico POR EMPRESA, no global -- "ya existe"
+      // se mira solo dentro de este tenant.
       const [existingRows] = await db.query(
-        `SELECT employee_id FROM employees WHERE employee_id IN (?)`,
-        [stagingRows.map((r) => r.employee_id)]
+        `SELECT employee_id FROM employees WHERE employee_id IN (?) AND tenant_id <=> ?`,
+        [stagingRows.map((r) => r.employee_id), effectiveTenantId]
       );
       const existingIds = new Set(existingRows.map((r) => r.employee_id));
       const newCount = stagingRows.filter((r) => !existingIds.has(r.employee_id)).length;
@@ -257,10 +259,11 @@ router.post('/employees/confirm/:batchId', requirePermission('employees', 'creat
     for (const row of stagingRows) {
       console.log('Procesando empleado:', row.employee_id, row.nombre);
       
-      // Verificar si ya existe
+      // Verificar si ya existe (en ESTA empresa -- Fase 20, legajo unico
+      // por tenant, no global).
       const [existing] = await db.query(
-        'SELECT id FROM employees WHERE employee_id = ?',
-        [row.employee_id]
+        'SELECT id FROM employees WHERE employee_id = ? AND tenant_id <=> ?',
+        [row.employee_id, effectiveTenantId]
       );
       
       console.log('Empleado existente:', existing.length);

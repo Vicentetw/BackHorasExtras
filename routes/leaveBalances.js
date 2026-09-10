@@ -15,12 +15,16 @@ module.exports = function (db) {
       const { legajo } = req.params;
       const year = Number(req.query.year) || new Date().getFullYear();
 
-      const [[employee]] = await db.query(
-        `SELECT id, tenant_id, fecha_alta FROM employees WHERE employee_id = ?`,
-        [legajo]
-      );
+      // Fase 20: el legajo es unico POR EMPRESA, no global -- se resuelve
+      // el empleado ya filtrando por el tenant de quien pide, para no caer
+      // en la fila de OTRA empresa que comparta el mismo legajo (daba un
+      // 404 falso: el propio tenant SI tenia ese legajo).
       const effectiveTenantId = resolveTenantId(req);
-      if (!employee || (effectiveTenantId !== null && employee.tenant_id !== effectiveTenantId)) {
+      const [[employee]] = await db.query(
+        `SELECT id, tenant_id, fecha_alta FROM employees WHERE employee_id = ? AND (? IS NULL OR tenant_id = ?)`,
+        [legajo, effectiveTenantId, effectiveTenantId]
+      );
+      if (!employee) {
         return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
       }
       if (!employee.fecha_alta) {
@@ -138,12 +142,14 @@ module.exports = function (db) {
     try {
       const { legajo, year } = req.params;
 
-      const [[employee]] = await db.query(
-        `SELECT id, tenant_id FROM employees WHERE employee_id = ?`,
-        [legajo]
-      );
+      // Fase 20: legajo unico por empresa -- se resuelve ya filtrando por
+      // el tenant de quien pide (ver el mismo patron en /suggest/:legajo).
       const effectiveTenantId = resolveTenantId(req);
-      if (!employee || (effectiveTenantId !== null && employee.tenant_id !== effectiveTenantId)) {
+      const [[employee]] = await db.query(
+        `SELECT id, tenant_id FROM employees WHERE employee_id = ? AND (? IS NULL OR tenant_id = ?)`,
+        [legajo, effectiveTenantId, effectiveTenantId]
+      );
+      if (!employee) {
         return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
       }
       const employeeId = employee.id;
