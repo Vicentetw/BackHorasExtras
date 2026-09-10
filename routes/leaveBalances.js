@@ -220,6 +220,11 @@ module.exports = function (db) {
          FROM employees e
          LEFT JOIN employee_leave_balances b ON b.employee_id = e.id AND b.year = ?
          WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)
+           -- Pedido real: no listar inactivos / bajas en Vacaciones. activo
+           -- NULL (filas viejas) se cuenta como activo, igual criterio que
+           -- el motor de asistencia (u.activo == null ? true).
+           AND (e.activo = 1 OR e.activo IS NULL)
+           AND e.fecha_baja IS NULL
            ${tenantClause}
          ORDER BY e.nombre ASC`,
         [year, year, ...tenantParams]
