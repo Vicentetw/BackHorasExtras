@@ -77,8 +77,19 @@ app.use(express.json({ limit: '1mb' }));
 // Fase 18: /api/agent tampoco tiene sesion de Firebase (agente desatendido)
 // -- se identifica con su propia clave (x-agent-key), verificada dentro de
 // routes/agent.js, no con un login humano.
-securityMiddlewares(app, cors, { publicPaths: ['/api/public', '/api/agent'] });
+// Fase 20: /health -- endpoint publico, sin login, sin base de datos,
+// respuesta inmediata. Lo usa el frontend (app.ts / CurrentUserService)
+// como sonda de "¿el servidor de Render ya despertó?": con el plan
+// gratuito, si estuvo ~15 min sin uso, el primer pedido tarda 30-60s en
+// contestar mientras arranca. Con esto el front puede mostrar una
+// pantalla de "despertando..." y reintentar, en vez de fallar y mandar a
+// "No tenés permiso". Tambien sirve para monitoreo de uptime.
+securityMiddlewares(app, cors, { publicPaths: ['/api/public', '/api/agent', '/health'] });
 apiKeyWarning();
+
+app.get('/health', (req, res) => {
+  res.json({ ok: true, ts: Date.now() });
+});
 
 // Middleware para loguear todas las requests
 app.use((req, res, next) => {
