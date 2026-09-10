@@ -4,7 +4,7 @@
   "description": "",
   "main": "db.js",
   "scripts": {
-    "test": "node --test --test-force-exit"
+    "test": "node --test --test-force-exit --test-concurrency=1"
   },
   "keywords": [],
   "author": "",
