@@ -178,6 +178,7 @@ function parseCheckTime(value) {
 // parseCheckTimeArgentina se movio a motor-laboral/services/checkinsIngestService.js
 // (Fase 18 -- agente de sincronizacion de relojes, reusada tambien desde
 // routes/agent.js). Se sigue importando arriba, no se reimplementa aca.
+
 // Normalizo la fecha para que no de error agregar en forma manual
 // IMPORTANTE: Las fechas vienen del cliente en hora local (Argentina UTC-3)
 // NO deben ser convertidas a UTC, se guardan directamente como vienen
@@ -2315,6 +2316,25 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       return res.json({ from, to, data: [] });
     }
 
+    // Turnos que cruzan medianoche ("sereno", 22:00-06:00, etc.): para que
+    // el PRIMER y el ULTIMO dia del rango pedido tambien queden bien
+    // resueltos (ver attendanceCalc.reassignOvernightCheckins mas abajo)
+    // hace falta un dia de margen de cada lado. "previousDayStr" es el dia
+    // ANTERIOR a "from" -- solo se necesita su SCHEDULE (para saber si ESE
+    // dia cruzaba medianoche y asi limpiarle la madrugada al primer dia
+    // pedido), no sus fichajes. "nextDayAfterRangeStr" es el dia SIGUIENTE
+    // a effectiveEndDate -- de ese hace falta sus FICHAJES (para poder
+    // encontrarle una salida real al ultimo dia pedido, si tambien cruza
+    // medianoche). Ninguno de los dos se expone como un dia propio del
+    // resultado, solo se usan puertas adentro para no cortar un turno a la
+    // mitad justo en el borde del rango consultado.
+    const dayBeforeRange = new Date(startDate);
+    dayBeforeRange.setDate(dayBeforeRange.getDate() - 1);
+    const previousDayStr = formatLocalDate(dayBeforeRange);
+    const dayAfterRange = new Date(effectiveEndDate);
+    dayAfterRange.setDate(dayAfterRange.getDate() + 1);
+    const nextDayAfterRangeStr = formatLocalDate(dayAfterRange);
+
     const tenantId = resolveTenantId(req);
     const personalLeaveLimitValue = await getAppSetting('personalLeaveMonthlyLimitMinutes', tenantId, db);
     const personalLeaveMonthlyLimitMinutes = personalLeaveLimitValue ? Number(personalLeaveLimitValue) : 0;
@@ -2378,8 +2398,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       csRows.forEach(row => { companyScheduleByDate[row.scheduleDate] = row; });
     }
 
+    // Arranca en previousDayStr (no "from") para poder resolver el
+    // schedule del dia anterior al rango pedido -- ver comentario de
+    // reassignOvernightCheckins mas abajo.
     const assignedCalendarRowsByEmployee = await scheduleRepository.findAssignedCalendarRowsForRange(
-      from, formatLocalDate(effectiveEndDate), employeeIds, db, tenantId
+      previousDayStr, formatLocalDate(effectiveEndDate), employeeIds, db, tenantId
     );
 
     const involvedTemplateIds = [
@@ -2396,7 +2419,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     };
 
     const scheduleByDate = {};
-    for (const date of dateRange) {
+    for (const date of [previousDayStr, ...dateRange]) {
       const assignedScheduleMap = {};
       for (const employeeId of Object.keys(assignedCalendarRowsByEmployee)) {
         const rows = assignedCalendarRowsByEmployee[employeeId];
@@ -2430,9 +2453,15 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     // BETWEEN ...: envolver la columna en DATE() invalida cualquier indice y
     // fuerza un full table scan -- confirmado con EXPLAIN contra produccion
     // (129043 filas escaneadas para traer un solo mes). El limite superior es
-    // exclusivo: el dia siguiente al ultimo del rango, a medianoche.
+    // exclusivo: DOS dias despues del ultimo del rango (no uno) -- el dia
+    // extra (nextDayAfterRangeStr) trae los fichajes de la madrugada
+    // siguiente, necesarios para poder encontrarle una salida real al
+    // ultimo dia pedido si su turno cruza medianoche (ver
+    // reassignOvernightCheckins mas abajo). Esos fichajes de mas nunca se
+    // exponen como un dia propio -- dateRange.forEach, unas lineas mas
+    // abajo, solo recorre los dias pedidos.
     const exclusiveEndDate = new Date(effectiveEndDate);
-    exclusiveEndDate.setDate(exclusiveEndDate.getDate() + 1);
+    exclusiveEndDate.setDate(exclusiveEndDate.getDate() + 2);
     const exclusiveEndDateStr = formatLocalDate(exclusiveEndDate);
 
     // Fase 19: se suma tenant_id a cada JOIN de esta cadena (Checkins ->
@@ -2635,7 +2664,28 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
 
     employees.forEach(u => {
       const employeeId = String(u.employeeId);
-      const checksByDate = checkinsByEmployee[employeeId] || {};
+      // Turnos que cruzan medianoche ("sereno"): antes de calcular nada,
+      // se corrigen los fichajes crudos de este empleado -- una marca de
+      // madrugada que en realidad es la SALIDA del turno de ayer se saca
+      // del dia de hoy (donde el reloj la registro) y se le suma al dia de
+      // ayer (al que realmente pertenece). Sin esto, esa marca se toma
+      // como si fuera la entrada de hoy, y una entrada de madrugada nunca
+      // puede llegar tarde respecto de un turno que arranca de noche -- una
+      // llegada tarde real quedaba invisible siempre (bug real, prueba de
+      // estres pre-venta). El resto del calculo de mas abajo (entrada,
+      // tardanza, dias trabajados) no cambia en nada -- sigue leyendo
+      // "checksByDate[date]" exactamente igual que antes, ya con los
+      // fichajes bien atribuidos.
+      const getEmployeeScheduleForDate = (date) => {
+        const dateSchedules = scheduleByDate[date];
+        if (!dateSchedules) return null;
+        return getScheduleEntry(date, dateSchedules.assignedScheduleMap, dateSchedules.tenantScheduleMap, employeeId, u.tenantId);
+      };
+      const checksByDate = attendanceCalc.reassignOvernightCheckins(
+        checkinsByEmployee[employeeId] || {},
+        getEmployeeScheduleForDate,
+        [previousDayStr, ...dateRange, nextDayAfterRangeStr]
+      );
       let daysWorked = 0;
       let absent = 0;
       let late = 0;
@@ -2803,7 +2853,14 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
               overtimeManualMinutes: manualMinutesThisDay,
               overtimeManuallyOmitted: isManuallyOmitted,
+              // Pedido real: poder tildar/destildar "Omitido" directo desde
+              // el detalle (sin abrir el dialogo de HE manual) -- hace falta
+              // el id de la entrada 'omit' para poder borrarla al destildar.
               overtimeOmitEntryId: omitEntryId,
+              // Pedido real: un empleado inactivo QUE FICHÓ es una señal real
+              // a revisar (¿se reactivó sin avisar? ¿ficharon con su
+              // credencial por error?) -- se mantiene el status normal
+              // calculado arriba, solo se agrega el aviso.
               inactiveWarning: !employeeActivo,
               lateMinutes: isLate ? lateMinutes : 0,
               reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
@@ -2875,6 +2932,9 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         personalLeaveLimitHours: (personalLeaveLimitMinutesForRange / 60).toFixed(2),
         overLimitHours: (Math.max(0, personalLeaveMinutes - personalLeaveLimitMinutesForRange) / 60).toFixed(2),
         overtimeAuthorized: rowIsOvertimeAuthorized,
+        // Pedido real: empleado inactivo (baja no cargada) que igual fichó
+        // en el período -- señal real a revisar, visible en el listado
+        // general sin tener que abrir el detalle día por día de cada uno.
         inactiveWarningDays
       };
       if (days) {

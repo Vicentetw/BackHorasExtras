@@ -3,7 +3,8 @@ const {
   getEntranceReference,
   resolveToleranceMinutes,
   resolveLateJustification,
-  evaluateMultiVisitDay
+  evaluateMultiVisitDay,
+  stripOvernightCarryover
 } = require('./attendanceCalculations');
 
 function isDefaultWorkday(dateString) {
@@ -22,6 +23,12 @@ function nextDayStr(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const next = new Date(y, m - 1, d + 1);
   return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`;
+}
+
+function previousDayStr(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const prev = new Date(y, m - 1, d - 1);
+  return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`;
 }
 
 function buildLegacySchedule({ date, tenantSchedule }) {
@@ -69,7 +76,32 @@ function getScheduleEntry(schedule, assignedScheduleMap, tenantScheduleMap, empl
   return schedule;
 }
 
-function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents = []) {
+// Variante sin fallback al schedule "general" del dia -- se usa SOLO para
+// resolver el schedule de AYER (ver mas abajo, turnos que cruzan
+// medianoche): si el empleado no tiene una asignacion explicita ni un
+// schedule de tenant para ayer, se prefiere null (no filtrar nada, mismo
+// comportamiento que antes de este fix) en vez de asumir el default
+// general -- evita falsos positivos de "cruza medianoche" sobre un
+// fallback generico que no necesariamente aplica.
+function getScheduleEntryOrNull(assignedScheduleMap, tenantScheduleMap, employeeId, employeeTenantId) {
+  if (assignedScheduleMap && assignedScheduleMap[employeeId]) {
+    return assignedScheduleMap[employeeId];
+  }
+  if (tenantScheduleMap && employeeTenantId != null && tenantScheduleMap[employeeTenantId]) {
+    return tenantScheduleMap[employeeTenantId];
+  }
+  return null;
+}
+
+// Turnos que cruzan medianoche ("sereno", 22:00-06:00, etc.): una marca de
+// madrugada de HOY puede en realidad ser la SALIDA del turno de AYER, si
+// ayer cruzaba medianoche -- sin esto, se toma como si fuera la entrada de
+// hoy, y una entrada de madrugada nunca puede llegar tarde respecto de un
+// turno que arranca de noche (bug real, prueba de estres pre-venta, ver el
+// mismo fix en /attendance-range de horasdedica2.js). assignedScheduleMapYesterday/
+// tenantScheduleMapYesterday: mismo shape que sus pares de "hoy", pero
+// resueltos para el dia anterior -- ver calculateDailyAttendance.
+function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents = [], assignedScheduleMapYesterday = null, tenantScheduleMapYesterday = null) {
   checkins.forEach(c => {
     const entry = usersMap.get(String(c.employeeId));
     if (entry) {
@@ -80,7 +112,9 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
   return Array.from(usersMap.values()).map(u => {
     const exclusion = exclusions.find(e => e.userId === u.userId);
     const leaveEvent = leaveEvents.find(ev => String(ev.legajo) === String(u.employeeId));
-    const checkinsSorted = u.checkins.slice().sort();
+    const yesterdaySchedule = getScheduleEntryOrNull(assignedScheduleMapYesterday, tenantScheduleMapYesterday, u.employeeId, u.tenantId);
+    const { checks: checksSinCarryover } = stripOvernightCarryover(u.checkins, yesterdaySchedule);
+    const checkinsSorted = checksSinCarryover.slice().sort();
     const firstCheckin = checkinsSorted[0] || null;
     const lastCheckin = checkinsSorted[checkinsSorted.length - 1] || null;
 
@@ -261,7 +295,26 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
     }
   }
 
-  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents);
+  // Turnos que cruzan medianoche ("sereno"): solo hace falta el SCHEDULE de
+  // ayer (para saber si cruzaba medianoche), no sus fichajes -- ver
+  // getScheduleEntryOrNull/buildAttendance mas arriba. Mismo patron que
+  // assignedScheduleMap/tenantScheduleMap de arriba, para el dia anterior.
+  const yesterdayStr = previousDayStr(normalizedDate);
+  const assignedScheduleMapYesterday = await repositories.schedule.findAssignedScheduleMapForDate(yesterdayStr, employeeIds, tenantId);
+  const tenantScheduleMapYesterday = {};
+  if (!templateId) {
+    for (const tid of tenantIds) {
+      const rows = await repositories.schedule.findByDate(yesterdayStr, tid);
+      const tenantScheduleYesterday = Array.isArray(rows) ? rows[0] : rows;
+      if (tenantScheduleYesterday) {
+        tenantScheduleMapYesterday[tid] = tenantScheduleYesterday.source === 'new' || tenantScheduleYesterday.source === 'motor'
+          ? buildMotorSchedule({ date: yesterdayStr, tenantSchedule: tenantScheduleYesterday })
+          : buildLegacySchedule({ date: yesterdayStr, tenantSchedule: tenantScheduleYesterday });
+      }
+    }
+  }
+
+  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday);
   const summary = buildSummary(attendance);
   const anyMotorSchedule = attendance.some(a => a.schedule.source === 'motor');
   const usedMotorSchedule = schedule.source === 'motor' || anyMotorSchedule;

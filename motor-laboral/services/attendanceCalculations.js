@@ -15,6 +15,94 @@ function timeToMinutes(timeStr) {
   return h * 60 + m;
 }
 
+// ==========================
+// Turnos que cruzan medianoche ("sereno", guardias 22:00-06:00, etc.)
+// ==========================
+// Bug real confirmado (prueba de estres pre-venta, sept 2026): los fichajes
+// se agrupaban por DIA CALENDARIO de CHECKTIME. Para un turno 22:00-06:00,
+// la salida de una noche (ej. 06:05) cae en el MISMO dia calendario que la
+// entrada de la noche siguiente (ej. 22:35) -- ese dia queda con DOS marcas,
+// y el motor toma la primera CRONOLOGICA (06:05, la salida de la noche
+// anterior) como si fuera la entrada de hoy. Una "entrada" de madrugada
+// nunca puede llegar tarde respecto de un turno que arranca de noche -- una
+// llegada tarde real a un turno de sereno quedaba invisible SIEMPRE, no como
+// caso de borde. La columna shift_blocks.crosses_midnight ya existia en la
+// base y en el admin de plantillas, pero ningun calculo la usaba.
+//
+// Solucion: antes de calcular el estado de un dia D, se saca de sus
+// fichajes cualquier marca de madrugada que en realidad sea la SALIDA del
+// turno de D-1 (si el turno de D-1 cruza medianoche) -- esa marca se
+// reasigna al dia D-1 (para que tenga una salida correcta) y se excluye del
+// calculo de entrada/tardanza de D. Dicho de otra forma: cada marca queda
+// atribuida a la JORNADA DE TRABAJO a la que realmente pertenece, no al
+// dia calendario en el que cayo el reloj.
+const OVERNIGHT_CARRYOVER_MARGIN_MINUTES = 240; // 4hs de margen despues del fin de turno -- una salida demorada sigue siendo "de anoche", no una entrada nueva.
+
+function findCrossingWorkBlock(schedule) {
+  if (!schedule || !Array.isArray(schedule.blocks)) return null;
+  return schedule.blocks.find((b) => b.block_type === 'WORK' && Number(b.crosses_midnight) === 1) || null;
+}
+
+function extractTimeHHMM(checkTimeStr) {
+  const part = checkTimeStr && checkTimeStr.split(' ')[1];
+  return part ? part.substring(0, 5) : null;
+}
+
+// checksOfDay: string[] 'YYYY-MM-DD HH:MM:SS' (fichajes YA atribuidos al dia
+// calendario D, sin ordenar o ya ordenados -- da igual, se re-ordena por
+// las dudas). previousDaySchedule: el schedule de D-1 para ESTE empleado (o
+// null/undefined si no se pudo resolver -- en ese caso no se filtra nada,
+// mismo comportamiento que antes de este fix). Devuelve { checks, carryover }:
+// "checks" es lo que le queda a D (ya sin la salida de D-1, ordenado),
+// "carryover" son las marcas que en realidad son la salida de D-1.
+function stripOvernightCarryover(checksOfDay, previousDaySchedule) {
+  const sorted = (checksOfDay || []).slice().sort();
+  const crossingBlock = findCrossingWorkBlock(previousDaySchedule);
+  if (!crossingBlock) {
+    return { checks: sorted, carryover: [] };
+  }
+
+  const cutoffMinutes = timeToMinutes(crossingBlock.end_time) + OVERNIGHT_CARRYOVER_MARGIN_MINUTES;
+  const carryover = [];
+  const checks = [];
+  for (const c of sorted) {
+    const minutes = timeToMinutes(extractTimeHHMM(c));
+    (minutes <= cutoffMinutes ? carryover : checks).push(c);
+  }
+  return { checks, carryover };
+}
+
+// Aplica stripOvernightCarryover dia por dia, en orden, sobre TODOS los
+// fichajes de un mismo empleado -- la salida que se le saca a un dia se
+// suma a la jornada anterior (para que le quede una salida real), y asi en
+// cadena. checksByDate: { 'YYYY-MM-DD': string[] }. getScheduleForDate:
+// (dateStr) => schedule de ese dia para este empleado, o null si no se
+// puede resolver. datesAscendingWithPadding: TODAS las fechas consecutivas
+// a procesar, SIN huecos, incluyendo (si estan disponibles) un dia extra
+// antes del rango pedido (para saber si ESE dia cruzaba medianoche y asi
+// limpiar el primer dia del rango) y un dia extra despues (para poder
+// encontrarle la salida real al ultimo dia del rango, si tambien cruza
+// medianoche) -- ninguno de los dos dias de margen se devuelve como
+// resultado propio, solo se usan para limpiar los dias del medio.
+function reassignOvernightCheckins(checksByDate, getScheduleForDate, datesAscendingWithPadding) {
+  const adjusted = {};
+  for (const d of datesAscendingWithPadding) {
+    adjusted[d] = (checksByDate[d] || []).slice();
+  }
+
+  for (let i = 1; i < datesAscendingWithPadding.length; i++) {
+    const today = datesAscendingWithPadding[i];
+    const yesterday = datesAscendingWithPadding[i - 1];
+    const previousDaySchedule = getScheduleForDate(yesterday);
+    const { checks, carryover } = stripOvernightCarryover(adjusted[today], previousDaySchedule);
+    if (carryover.length > 0) {
+      adjusted[today] = checks;
+      adjusted[yesterday] = adjusted[yesterday].concat(carryover);
+    }
+  }
+  return adjusted;
+}
+
 function getEntranceReference(schedule) {
   if (schedule.source === 'motor' && schedule.blocks && schedule.blocks.length > 0) {
     const workBlocks = schedule.blocks.filter(b => b.block_type === 'WORK');
@@ -113,5 +201,9 @@ module.exports = {
   getEntranceReference,
   resolveToleranceMinutes,
   resolveLateJustification,
-  evaluateMultiVisitDay
+  evaluateMultiVisitDay,
+  findCrossingWorkBlock,
+  stripOvernightCarryover,
+  reassignOvernightCheckins,
+  OVERNIGHT_CARRYOVER_MARGIN_MINUTES
 };
