@@ -1,17 +1,9 @@
 const express = require('express');
 const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
+const eventTypeCountModeRepository = require('../motor-laboral/repositories/eventTypeCountModeRepository');
 
 module.exports = function (db) {
   const router = express.Router();
-
-  function diffDaysInclusive(fechaDesde, fechaHasta) {
-    const [y1, m1, d1] = fechaDesde.split('-').map(Number);
-    const [y2, m2, d2] = fechaHasta.split('-').map(Number);
-    const start = new Date(y1, m1 - 1, d1);
-    const end = new Date(y2, m2 - 1, d2);
-    const diffMs = end.getTime() - start.getTime();
-    return Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1;
-  }
 
   // ==========================
   // 1. LISTAR EVENTOS (licencias multi-día)
@@ -54,7 +46,48 @@ module.exports = function (db) {
   });
 
   // ==========================
-  // 2. CREAR EVENTO
+  // 2. PREVIEW DE DIAS (calculo en vivo, ANTES de guardar)
+  // GET /api/employee-events/preview-dias?eventTypeId=&from=&to=
+  //
+  // El dialogo de Licencias (frontend) antes calculaba los dias el mismo
+  // ahi nomas (dias corridos siempre, a ciegas de feriados) y mandaba ese
+  // numero ya hecho -- el backend casi nunca llegaba a calcularlo el.
+  // Ahora que la modalidad (corridos/habiles) depende del motivo y puede
+  // tener vigencias con fecha, SOLO el backend tiene todo lo necesario
+  // (motor-laboral/services/leaveDaysCalculations.js + los feriados de la
+  // tabla holidays) -- este endpoint es lo que el dialogo llama en vivo
+  // mientras el usuario elige motivo/fechas, para mostrar el numero real
+  // antes de guardar. POST/PUT de abajo usan la MISMA funcion si no les
+  // mandan `dias` a mano -- nunca hay dos calculos que puedan divergir.
+  // ==========================
+  router.get('/preview-dias', requirePermission('leaves', 'read'), async (req, res) => {
+    try {
+      const { eventTypeId, from, to } = req.query;
+      if (!eventTypeId || !from || !to) {
+        return res.status(400).json({ success: false, error: 'eventTypeId, from y to son requeridos' });
+      }
+      if (from > to) {
+        return res.status(400).json({ success: false, error: 'La fecha "desde" no puede ser posterior a "hasta"' });
+      }
+
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[eventType]] = await db.query('SELECT tenant_id FROM event_types WHERE id = ?', [eventTypeId]);
+        if (!eventType || eventType.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Motivo no encontrado' });
+        }
+      }
+
+      const dias = await eventTypeCountModeRepository.computeDiasLicencia(eventTypeId, from, to, db);
+      res.json({ success: true, dias });
+    } catch (err) {
+      console.error('ERROR previewing dias:', err);
+      res.status(500).json({ success: false, error: 'Error calculando los días' });
+    }
+  });
+
+  // ==========================
+  // 3. CREAR EVENTO
   // ==========================
   router.post('/', requirePermission('leaves', 'create'), async (req, res) => {
     try {
@@ -74,7 +107,7 @@ module.exports = function (db) {
 
       const computedDias = dias !== undefined && dias !== null && dias !== ''
         ? Number(dias)
-        : diffDaysInclusive(fechaDesde, fechaHasta);
+        : await eventTypeCountModeRepository.computeDiasLicencia(eventTypeId, fechaDesde, fechaHasta, db);
 
       const [result] = await db.query(
         `INSERT INTO employee_events (employee_id, event_type_id, fecha_desde, fecha_hasta, dias, observaciones)
@@ -90,7 +123,7 @@ module.exports = function (db) {
   });
 
   // ==========================
-  // 3. ACTUALIZAR EVENTO
+  // 4. ACTUALIZAR EVENTO
   // ==========================
   router.put('/:id', requirePermission('leaves', 'update'), async (req, res) => {
     try {
@@ -114,7 +147,7 @@ module.exports = function (db) {
 
       const computedDias = dias !== undefined && dias !== null && dias !== ''
         ? Number(dias)
-        : diffDaysInclusive(fechaDesde, fechaHasta);
+        : await eventTypeCountModeRepository.computeDiasLicencia(eventTypeId, fechaDesde, fechaHasta, db);
 
       const [result] = await db.query(
         `UPDATE employee_events
@@ -135,7 +168,7 @@ module.exports = function (db) {
   });
 
   // ==========================
-  // 4. ELIMINAR EVENTO
+  // 5. ELIMINAR EVENTO
   // ==========================
   router.delete('/:id', requirePermission('leaves', 'delete'), async (req, res) => {
     try {

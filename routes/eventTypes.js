@@ -1,5 +1,8 @@
 const express = require('express');
 const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const eventTypeCountModeRepository = require('../motor-laboral/repositories/eventTypeCountModeRepository');
+
+const MODOS_VALIDOS = ['corridos', 'habiles'];
 
 module.exports = function (db) {
   const router = express.Router();
@@ -121,6 +124,67 @@ module.exports = function (db) {
     } catch (err) {
       console.error('ERROR deactivating event type:', err);
       res.status(500).json({ success: false, error: 'Error deactivating event type' });
+    }
+  });
+
+  // Chequea que el motivo exista y (si no es superadmin) sea de la empresa
+  // de quien pide -- mismo patron que PUT/DELETE de arriba.
+  async function findEventTypeOrNull(id, effectiveTenantId) {
+    const [[row]] = await db.query('SELECT id, tenant_id FROM event_types WHERE id = ?', [id]);
+    if (!row) return null;
+    if (effectiveTenantId !== null && row.tenant_id !== effectiveTenantId) return null;
+    return row;
+  }
+
+  // ==========================
+  // 5. HISTORIAL DE VIGENCIAS (corridos/habiles) DE UN MOTIVO
+  // GET /api/event-types/:id/count-modes
+  // ==========================
+  router.get('/:id/count-modes', requirePermission('exclusions', 'read'), async (req, res) => {
+    try {
+      const eventType = await findEventTypeOrNull(req.params.id, resolveTenantId(req));
+      if (!eventType) return res.status(404).json({ success: false, error: 'Motivo no encontrado' });
+
+      const modos = await eventTypeCountModeRepository.findByEventType(req.params.id, db);
+      res.json({ success: true, modos });
+    } catch (err) {
+      console.error('ERROR fetching event type count modes:', err);
+      res.status(500).json({ success: false, error: 'Error fetching count modes' });
+    }
+  });
+
+  // ==========================
+  // 6. AGREGAR UNA VIGENCIA NUEVA (cambio de modalidad desde tal fecha)
+  // POST /api/event-types/:id/count-modes  Body: { modo, vigenteDesde }
+  // Pedido real: esto lo decide el admin de la empresa (una paritaria que
+  // cambia la norma de un motivo), no cualquiera que pueda cargar
+  // licencias -- mismo permiso que ya protege el resto de la
+  // configuracion sensible de la empresa (horarios, tema, limites).
+  // ==========================
+  router.post('/:id/count-modes', requirePermission('settings', 'update'), async (req, res) => {
+    try {
+      const { modo, vigenteDesde } = req.body;
+      if (!MODOS_VALIDOS.includes(modo)) {
+        return res.status(400).json({ success: false, error: `modo debe ser uno de: ${MODOS_VALIDOS.join(', ')}` });
+      }
+      if (!vigenteDesde || Number.isNaN(new Date(`${vigenteDesde}T00:00:00`).getTime())) {
+        return res.status(400).json({ success: false, error: 'vigenteDesde (YYYY-MM-DD) es requerido' });
+      }
+
+      const eventType = await findEventTypeOrNull(req.params.id, resolveTenantId(req));
+      if (!eventType) return res.status(404).json({ success: false, error: 'Motivo no encontrado' });
+
+      const id = await eventTypeCountModeRepository.create(
+        { eventTypeId: req.params.id, modo, vigenteDesde, createdBy: req.appUser ? req.appUser.id : null },
+        db
+      );
+      res.json({ success: true, id });
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ success: false, error: 'Ya hay una vigencia cargada con esa misma fecha para este motivo' });
+      }
+      console.error('ERROR creating event type count mode:', err);
+      res.status(500).json({ success: false, error: 'Error creating count mode' });
     }
   });
 
