@@ -2665,7 +2665,25 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const manualMinutesNonWork = manualKeyNonWork ? (manualMinutesByUserDate.get(manualKeyNonWork) || 0) : 0;
           if (manualMinutesNonWork > 0) overtimeMinutes += manualMinutesNonWork;
           if (days) {
-            days.push({ date, status: 'NonWorkDay', overtimeManualMinutes: manualMinutesNonWork });
+            // Bug real reportado: un fin de semana DENTRO de unas vacaciones
+            // (ej. 05/01 a 27/01, un sabado/domingo en el medio) volvia
+            // 'NonWorkDay' a secas -- en el calendario se veia como un
+            // "agujero" gris en medio del bloque de vacaciones, porque este
+            // return temprano nunca llegaba a mirar leaveEventMap (esa
+            // consulta esta un poco mas abajo, solo para el caso
+            // isWorkDay). El status/conteo NO cambia (ese dia sigue sin
+            // costarle nada a la empresa, no se suma a "excused" ni a
+            // ningun otro contador) -- solo se le agrega el motivo de la
+            // licencia si corresponde, para que Presentismo lo pueda pintar
+            // como parte del mismo bloque en vez de un no-laborable suelto.
+            const leaveEventNonWork = leaveEventMap.get(`${employeeId}_${date}`);
+            days.push({
+              date,
+              status: 'NonWorkDay',
+              overtimeManualMinutes: manualMinutesNonWork,
+              eventTypeCode: leaveEventNonWork ? (leaveEventNonWork.eventTypeCode || null) : undefined,
+              eventTypeDescripcion: leaveEventNonWork ? (leaveEventNonWork.eventTypeDescripcion || null) : undefined,
+            });
           }
           return;
         }
