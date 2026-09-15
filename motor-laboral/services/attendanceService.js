@@ -165,6 +165,16 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       if (!u.active) {
         inactiveWarning = true;
       }
+    } else if (isHoliday) {
+      // Bug real reportado: sin esta rama, un feriado sin fichajes caia
+      // directo al 'Absent' inicial de la linea 131 -- isHoliday recien se
+      // consultaba DENTRO del bloque "hubo fichajes" (para marcar
+      // 'WorkedHoliday'), nunca en el caso "no hubo fichajes". Mismo
+      // criterio de prioridad que ya usan /attendance-range y el motor
+      // legacy de un solo dia (feriado antes que exclusion/licencia/
+      // inactivo): un feriado de toda la empresa pesa mas que cualquier
+      // otro motivo individual.
+      status = 'HolidayAbsent';
     } else if (exclusion || leaveEvent) {
       status = 'Excused';
     } else if (!u.active) {
