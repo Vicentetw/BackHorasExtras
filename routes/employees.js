@@ -109,6 +109,19 @@ router.get('/', requirePermission('employees', 'read'), async (req, res) => {
       ) lc ON lc.emp_pk = employees.id
     `;
 
+    // Pedido real: indicador "Sin horario" en /empleados -- mismo criterio
+    // de performance que lastCheckinJoin de arriba (agregado UNA vez, no
+    // una subconsulta correlacionada por fila). "Activo hoy" = alguna fila
+    // de employee_work_calendars con valid_from <= hoy y (sin fecha de
+    // corte, o corte todavia no llegado).
+    const activeScheduleJoin = `
+      LEFT JOIN (
+        SELECT DISTINCT employee_id AS ewc_emp_pk
+        FROM employee_work_calendars
+        WHERE valid_from <= CURDATE() AND (valid_to IS NULL OR valid_to >= CURDATE())
+      ) ewc ON ewc.ewc_emp_pk = employees.id
+    `;
+
     // ?inactiveDays=30 -- empleados sin ningun fichaje en los ultimos N dias
     // (incluye a los que nunca fichajaron). Nuevo (Fase 6.4): filtro para
     // detectar jubilados/bajas no cargadas formalmente todavia -- alguien
@@ -147,9 +160,10 @@ router.get('/', requirePermission('employees', 'read'), async (req, res) => {
     }
 
     // Obtener empleados paginados
+    const selectCols = 'employees.*, lc.last_checkin, (ewc.ewc_emp_pk IS NOT NULL) AS hasActiveSchedule';
     const querySql = limit === null
-      ? `SELECT employees.*, lc.last_checkin FROM employees ${lastCheckinJoin} ${where} ORDER BY ${orderBy}`
-      : `SELECT employees.*, lc.last_checkin FROM employees ${lastCheckinJoin} ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
+      ? `SELECT ${selectCols} FROM employees ${lastCheckinJoin} ${activeScheduleJoin} ${where} ORDER BY ${orderBy}`
+      : `SELECT ${selectCols} FROM employees ${lastCheckinJoin} ${activeScheduleJoin} ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
 
     const queryParams = limit === null
       ? params
@@ -193,6 +207,8 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
       zona_id,  // Changed from zona to zona_id
       tenant_id,
       zona_real_id,
+      ciudad_id,
+      sucursal_id,
       fecha_alta,
       fecha_baja,
       activo,
@@ -209,6 +225,16 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
         error: 'employee_id y nombre son requeridos'
       });
     }
+
+    // Pedido real: todo empleado debe tener ciudad y sucursal (ver
+    // migrations/20260917_ciudades_sucursales.sql). NO se bloquea el alta
+    // por API sin ellas a proposito -- el import masivo hace un POST por
+    // fila sin UI para elegirlas (ver import-dialog.ts), y bloquear ahi
+    // tumbaria el import entero fila por fila. La obligatoriedad se aplica
+    // en el dialogo manual (employee-dialog.ts, que SI las exige antes de
+    // llamar aca) y con visibilidad: el listado marca "Sin Ciudad/Sucursal"
+    // para cualquier empleado que haya quedado sin completarlas, vengan de
+    // donde vengan.
 
     // El tenant_id nunca lo decide el cliente: un usuario normal solo puede
     // crear empleados para su propia empresa. Solo el superadmin puede
@@ -266,8 +292,8 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
     // Insertar
     const [result] = await db.query(
       `INSERT INTO employees
-       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, payroll_regime, exclude_from_report, legajo_alt, tenant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, ciudad_id, sucursal_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, payroll_regime, exclude_from_report, legajo_alt, tenant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         employee_id,
         nombre,
@@ -276,6 +302,8 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
         direccion || null,
         zona_id || null,  // Changed from zona to zona_id
         zona_real_id || null,
+        ciudad_id || null,
+        sucursal_id || null,
         fecha_alta || null,
         fecha_baja || null,
         activo !== undefined ? activo : true,
@@ -317,6 +345,8 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
       direccion,
       zona_id,  // Changed from zona to zona_id
       zona_real_id,
+      ciudad_id,
+      sucursal_id,
       fecha_alta,
       fecha_baja,
       activo,
@@ -394,7 +424,7 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
     await db.query(
       `UPDATE employees SET
        employee_id = ?, nombre = ?, documento = ?, tipo_documento = ?,
-       direccion = ?, zona_id = ?, zona_real_id = ?, fecha_alta = ?,
+       direccion = ?, zona_id = ?, zona_real_id = ?, ciudad_id = ?, sucursal_id = ?, fecha_alta = ?,
        fecha_baja = ?, activo = ?, motivo_baja = ?, overtime_authorized = ?, payroll_regime = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?,
        category_id = ?
        WHERE id = ?`,
@@ -406,6 +436,8 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
         direccion || null,
         zona_id || null,  // Changed from zona to zona_id
         zona_real_id || null,
+        ciudad_id || null,
+        sucursal_id || null,
         fecha_alta || null,
         fecha_baja || null,
         activo !== undefined ? activo : true,
