@@ -522,6 +522,55 @@ router.patch('/bulk-status', requirePermission('employees', 'update'), async (re
 });
 
 /**
+ * 📍 ASIGNAR CIUDAD Y SUCURSAL A VARIOS EMPLEADOS A LA VEZ
+ * PATCH /api/employees/bulk-location
+ * Body: { ids: number[], ciudad_id, sucursal_id }
+ *
+ * Pedido real: completar ciudad/sucursal de a uno con el modal es lento
+ * para el "backlog" de empleados viejos sin estos datos -- mismo patron
+ * que bulk-status/bulkSetCategoria. A diferencia del horario
+ * (employee_work_calendars, con historial de vigencias), ciudad/sucursal
+ * es un valor plano en employees -- REEMPLAZA lo que ya tuviera cada
+ * empleado seleccionado, no se acumula ni se pregunta si ya tenia otra.
+ */
+router.patch('/bulk-location', requirePermission('employees', 'update'), async (req, res) => {
+  try {
+    const { ids, ciudad_id, sucursal_id } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids debe ser un array no vacío' });
+    }
+    if (ids.length > 1000) {
+      return res.status(400).json({ error: 'Máximo 1000 empleados por lote' });
+    }
+    if (!ciudad_id || !sucursal_id) {
+      return res.status(400).json({ error: 'ciudad_id y sucursal_id son requeridos' });
+    }
+    const numericIds = [...new Set(ids.map(Number).filter(Number.isFinite))];
+    if (numericIds.length === 0) {
+      return res.status(400).json({ error: 'ids inválidos' });
+    }
+
+    // Mismo criterio que bulk-status -- un empleado de otra empresa se
+    // trata como si no existiera, nunca se toca aunque su id venga en la lista.
+    const [rows] = await db.query('SELECT id, tenant_id FROM employees WHERE id IN (?)', [numericIds]);
+    const allowedIds = rows
+      .filter((r) => !req.appUser || req.appUser.isSuperadmin || r.tenant_id === req.appUser.tenantId)
+      .map((r) => r.id);
+
+    if (allowedIds.length === 0) {
+      return res.json({ ok: true, updated: 0, skipped: numericIds.length });
+    }
+
+    await db.query('UPDATE employees SET ciudad_id = ?, sucursal_id = ? WHERE id IN (?)', [ciudad_id, sucursal_id, allowedIds]);
+
+    res.json({ ok: true, updated: allowedIds.length, skipped: numericIds.length - allowedIds.length });
+  } catch (err) {
+    console.error('ERROR bulk-location employees:', err);
+    res.status(500).json({ error: 'Error actualizando ciudad/sucursal' });
+  }
+});
+
+/**
  * 🗑️ ELIMINAR EMPLEADO
  * DELETE /api/employees/:id
  */
