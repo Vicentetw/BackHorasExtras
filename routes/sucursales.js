@@ -15,7 +15,9 @@ module.exports = function (db) {
       let sql = includeInactive === 'true' ? 'SELECT * FROM sucursales WHERE 1=1' : 'SELECT * FROM sucursales WHERE active = 1';
       const params = [];
       if (effectiveTenantId !== null) {
-        sql += ' AND tenant_id = ?';
+        // tenant_id IS NULL = sucursal global (bajo una ciudad global) --
+        // visible ademas de las propias de la empresa. Mismo criterio que ciudades.
+        sql += ' AND (tenant_id = ? OR tenant_id IS NULL)';
         params.push(effectiveTenantId);
       }
       if (ciudadId) {
@@ -32,11 +34,14 @@ module.exports = function (db) {
     }
   });
 
-  // Chequea que la ciudad exista y (si no es superadmin) sea de la empresa de quien pide.
+  // Chequea que la ciudad exista y sea de la empresa de quien pide, O sea
+  // una ciudad global (tenant_id NULL, cargada por un superadmin) -- una
+  // sucursal de una empresa puntual puede vivir bajo una ciudad global sin
+  // problema, no hace falta que la ciudad tambien sea de esa empresa.
   async function findCiudadOrNull(db, ciudadId, effectiveTenantId) {
     const [[row]] = await db.query('SELECT id, tenant_id FROM ciudades WHERE id = ?', [ciudadId]);
     if (!row) return null;
-    if (effectiveTenantId !== null && row.tenant_id !== effectiveTenantId) return null;
+    if (effectiveTenantId !== null && row.tenant_id !== null && row.tenant_id !== effectiveTenantId) return null;
     return row;
   }
 

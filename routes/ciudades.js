@@ -11,7 +11,10 @@ module.exports = function (db) {
     try {
       const { includeInactive } = req.query;
       const effectiveTenantId = resolveTenantId(req);
-      const tenantClause = effectiveTenantId !== null ? ' AND tenant_id = ?' : '';
+      // tenant_id IS NULL = ciudad global (la carga un superadmin sin
+      // empresa seleccionada, ver POST de abajo) -- visible para todos,
+      // ademas de las propias de la empresa. Mismo criterio que holidays.
+      const tenantClause = effectiveTenantId !== null ? ' AND (tenant_id = ? OR tenant_id IS NULL)' : '';
       const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
       const sql = includeInactive === 'true'
         ? `SELECT * FROM ciudades WHERE 1=1${tenantClause} ORDER BY nombre ASC`
