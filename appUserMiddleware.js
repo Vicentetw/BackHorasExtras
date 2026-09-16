@@ -105,6 +105,24 @@ function requirePermission(moduleName, action) {
   };
 }
 
+// Igual que requirePermission, pero deja pasar si el usuario tiene
+// CUALQUIERA de los permisos dados -- para un recurso compartido entre
+// features con permisos propios (ej. ciudades: las usan tanto Empleados
+// como Feriados, un rol con solo "holidays:*" tiene que poder gestionarlas
+// igual sin necesitar "employees:*"). Recibe pares [modulo, accion].
+function requireAnyPermission(pairs) {
+  const permissions = pairs.map(([moduleName, action]) => `${moduleName}:${action}`);
+  return (req, res, next) => {
+    if (!req.appUser) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    if (req.appUser.isSuperadmin || permissions.some((p) => req.appUser.permissions.has(p))) {
+      return next();
+    }
+    return res.status(403).json({ error: `Falta alguno de estos permisos: ${permissions.join(', ')}` });
+  };
+}
+
 // Fragmento de WHERE para filtrar por tenant. El superadmin no filtra
 // (ve todas las empresas). Uso: `AND ${tenantFilter(req, 'e.tenant_id').sql}`
 // con los params en el mismo orden en el array de la query.
@@ -173,6 +191,7 @@ function requireActiveSubscription(req, res, next) {
 module.exports = {
   appUserMiddleware,
   requirePermission,
+  requireAnyPermission,
   requireSuperadmin,
   requireActiveSubscription,
   tenantFilter,

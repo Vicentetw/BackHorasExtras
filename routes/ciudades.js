@@ -1,5 +1,14 @@
 const express = require('express');
-const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const { requireAnyPermission, resolveTenantId } = require('../appUserMiddleware');
+
+// Ciudades las consume tanto Empleados como Feriados -- un rol con
+// permisos de Feriados pero no de Empleados (o viceversa) tiene que poder
+// gestionarlas igual desde donde le toque trabajar. requirePermission
+// exigiria los DOS a la vez; requireAnyPermission alcanza con cualquiera.
+const canRead = requireAnyPermission([['employees', 'read'], ['holidays', 'read']]);
+const canCreate = requireAnyPermission([['employees', 'create'], ['holidays', 'create']]);
+const canUpdate = requireAnyPermission([['employees', 'update'], ['holidays', 'update']]);
+const canDelete = requireAnyPermission([['employees', 'delete'], ['holidays', 'delete']]);
 
 module.exports = function (db) {
   const router = express.Router();
@@ -7,7 +16,7 @@ module.exports = function (db) {
   // ==========================
   // 1. LISTAR CIUDADES
   // ==========================
-  router.get('/', requirePermission('employees', 'read'), async (req, res) => {
+  router.get('/', canRead, async (req, res) => {
     try {
       const { includeInactive } = req.query;
       const effectiveTenantId = resolveTenantId(req);
@@ -30,7 +39,7 @@ module.exports = function (db) {
   // ==========================
   // 2. CREAR CIUDAD
   // ==========================
-  router.post('/', requirePermission('employees', 'create'), async (req, res) => {
+  router.post('/', canCreate, async (req, res) => {
     try {
       const { nombre } = req.body;
       if (!nombre || !nombre.trim()) {
@@ -59,7 +68,7 @@ module.exports = function (db) {
   // ==========================
   // 3. RENOMBRAR / ACTUALIZAR CIUDAD
   // ==========================
-  router.put('/:id', requirePermission('employees', 'update'), async (req, res) => {
+  router.put('/:id', canUpdate, async (req, res) => {
     try {
       const { id } = req.params;
       const { nombre, active } = req.body;
@@ -95,9 +104,31 @@ module.exports = function (db) {
   });
 
   // ==========================
-  // 4. DESACTIVAR CIUDAD (soft delete -- no rompe sucursales/empleados ya asignados)
+  // 4. USO ACTUAL DE LA CIUDAD (para avisar antes de desactivarla)
   // ==========================
-  router.delete('/:id', requirePermission('employees', 'delete'), async (req, res) => {
+  // Pedido real: "quitar" una ciudad no avisaba en que condiciones se podia
+  // hacer -- si ya tenia empleados, sucursales o feriados asignados, el
+  // admin no tenia forma de saberlo antes de confirmar. El soft-delete en
+  // si nunca rompe nada (las filas ya asignadas conservan el id, ver DELETE
+  // mas abajo) -- esto es solo para que la confirmacion en el frontend
+  // muestre numeros reales en vez de una advertencia generica.
+  router.get('/:id/usage', canRead, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const [[{ employees }]] = await db.query('SELECT COUNT(*) AS employees FROM employees WHERE ciudad_id = ?', [id]);
+      const [[{ sucursales }]] = await db.query('SELECT COUNT(*) AS sucursales FROM sucursales WHERE ciudad_id = ?', [id]);
+      const [[{ holidays }]] = await db.query('SELECT COUNT(*) AS holidays FROM holidays WHERE ciudad_id = ?', [id]);
+      res.json({ success: true, usage: { employees, sucursales, holidays } });
+    } catch (err) {
+      console.error('ERROR fetching ciudad usage:', err);
+      res.status(500).json({ success: false, error: 'Error fetching ciudad usage' });
+    }
+  });
+
+  // ==========================
+  // 5. DESACTIVAR CIUDAD (soft delete -- no rompe sucursales/empleados/feriados ya asignados)
+  // ==========================
+  router.delete('/:id', canDelete, async (req, res) => {
     try {
       const { id } = req.params;
 

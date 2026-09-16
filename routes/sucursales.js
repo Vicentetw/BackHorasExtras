@@ -1,5 +1,12 @@
 const express = require('express');
-const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const { requirePermission, requireAnyPermission, resolveTenantId } = require('../appUserMiddleware');
+
+// Leer sucursales tambien hace falta desde el dialogo compartido de
+// Ciudades/Sucursales cuando se abre desde Feriados (ciudades es un
+// recurso compartido, ver routes/ciudades.js) -- la escritura (alta/baja/
+// rename) se queda solo en Empleados, una sucursal no tiene relacion con
+// feriados hoy.
+const canRead = requireAnyPermission([['employees', 'read'], ['holidays', 'read']]);
 
 module.exports = function (db) {
   const router = express.Router();
@@ -7,30 +14,52 @@ module.exports = function (db) {
   // ==========================
   // 1. LISTAR SUCURSALES (opcionalmente filtradas por ciudad)
   // ==========================
-  router.get('/', requirePermission('employees', 'read'), async (req, res) => {
+  router.get('/', canRead, async (req, res) => {
     try {
       const { includeInactive, ciudadId } = req.query;
       const effectiveTenantId = resolveTenantId(req);
 
-      let sql = includeInactive === 'true' ? 'SELECT * FROM sucursales WHERE 1=1' : 'SELECT * FROM sucursales WHERE active = 1';
+      // Bug real: si se desactivaba la ciudad, sus sucursales (todavia con
+      // active=1 en su propia fila) seguian apareciendo como elegibles en
+      // cualquier picker -- quedaba la ciudad "apagada" pero sus sedes
+      // seleccionables igual. El JOIN exige que la ciudad TAMBIEN este
+      // activa para el listado por defecto; includeInactive sigue trayendo
+      // todo (se usa para mostrar el nombre de asignaciones ya existentes).
+      let sql = includeInactive === 'true'
+        ? 'SELECT s.* FROM sucursales s WHERE 1=1'
+        : 'SELECT s.* FROM sucursales s JOIN ciudades c ON c.id = s.ciudad_id WHERE s.active = 1 AND c.active = 1';
       const params = [];
       if (effectiveTenantId !== null) {
         // tenant_id IS NULL = sucursal global (bajo una ciudad global) --
         // visible ademas de las propias de la empresa. Mismo criterio que ciudades.
-        sql += ' AND (tenant_id = ? OR tenant_id IS NULL)';
+        sql += ' AND (s.tenant_id = ? OR s.tenant_id IS NULL)';
         params.push(effectiveTenantId);
       }
       if (ciudadId) {
-        sql += ' AND ciudad_id = ?';
+        sql += ' AND s.ciudad_id = ?';
         params.push(ciudadId);
       }
-      sql += ' ORDER BY nombre ASC';
+      sql += ' ORDER BY s.nombre ASC';
 
       const [rows] = await db.query(sql, params);
       res.json({ success: true, sucursales: rows });
     } catch (err) {
       console.error('ERROR fetching sucursales:', err);
       res.status(500).json({ success: false, error: 'Error fetching sucursales' });
+    }
+  });
+
+  // ==========================
+  // 1B. USO ACTUAL DE LA SUCURSAL (para avisar antes de desactivarla)
+  // ==========================
+  router.get('/:id/usage', canRead, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const [[{ employees }]] = await db.query('SELECT COUNT(*) AS employees FROM employees WHERE sucursal_id = ?', [id]);
+      res.json({ success: true, usage: { employees } });
+    } catch (err) {
+      console.error('ERROR fetching sucursal usage:', err);
+      res.status(500).json({ success: false, error: 'Error fetching sucursal usage' });
     }
   });
 
