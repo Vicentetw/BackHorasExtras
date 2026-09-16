@@ -387,6 +387,33 @@ app.delete('/delete/manual/:id', requirePermission('attendance', 'delete'), asyn
   }
 });
 
+// Pedido real: "que no puedan subir cualquier archivo" -- el input del
+// frontend ya filtraba por accept=".csv", pero eso es solo una sugerencia
+// del navegador, no un chequeo real (se salta con cualquier cliente que no
+// sea ese formulario puntual). Valida ACA, del lado del servidor: la
+// extension del nombre de archivo, y que la PRIMERA linea (encabezado)
+// tenga las columnas que hacen falta -- lo mismo protege tanto de un
+// vistazo de "subi el .xlsx en vez del .csv" como de "subi el archivo de
+// usuarios donde iba el de fichajes". No es un chequeo de seguridad (nada
+// de esto se ejecuta ni se guarda en disco, ver `multer.memoryStorage()`
+// mas arriba) -- es para agarrar el error humano mas comun con un mensaje
+// claro en vez de un 500 generico sin explicar nada.
+function validateCsvFile(file, requiredColumns) {
+  if (!/\.csv$/i.test(file.originalname || '')) {
+    return `El archivo debe ser un .csv (recibido: "${file.originalname || 'sin nombre'}")`;
+  }
+  const text = file.buffer.toString('utf8');
+  // ﻿: algunos editores/planillas guardan un CSV con BOM -- sin sacarlo,
+  // la PRIMERA columna del encabezado nunca matchea (queda "﻿USERID").
+  const firstLine = (text.split(/\r?\n/)[0] || '').replace(/^﻿/, '');
+  const headerCols = firstLine.split(';').map((h) => h.trim());
+  const missing = requiredColumns.filter((c) => !headerCols.includes(c));
+  if (missing.length > 0) {
+    return `El archivo no tiene las columnas esperadas (${missing.join(', ')}) -- ¿es el archivo correcto?`;
+  }
+  return null;
+}
+
 /* ===============================
    IMPORT CHECKINS
 ================================ */
@@ -409,6 +436,11 @@ app.post('/import/checkins', requirePermission('attendance', 'create'), requireA
       return res.status(400).json({ error: 'Archivo CSV requerido' });
     }
 
+    const fileError = validateCsvFile(req.file, ['USERID', 'CHECKTIME']);
+    if (fileError) {
+      return res.status(400).json({ error: fileError });
+    }
+
     const csv = req.file.buffer.toString('utf8');
     const records = parse(csv, {
       columns: true,
@@ -416,6 +448,10 @@ app.post('/import/checkins', requirePermission('attendance', 'create'), requireA
       skip_empty_lines: true,
       trim: true
     });
+
+    if (records.length === 0) {
+      return res.status(400).json({ error: 'El archivo no tiene ninguna fila de datos' });
+    }
 
     // Insercion/dedupe extraida a checkinsIngestService.js (Fase 18) --
     // reusada TAL CUAL por el agente automatico (routes/agent.js). Tope
@@ -469,6 +505,11 @@ app.post('/import/users', requirePermission('attendance', 'create'), upload.sing
       return res.status(400).json({ error: 'Archivo CSV requerido' });
     }
 
+    const fileError = validateCsvFile(req.file, ['USERID', 'Badgenumber', 'Name']);
+    if (fileError) {
+      return res.status(400).json({ error: fileError });
+    }
+
     const csv = req.file.buffer.toString('utf8');
     const records = parse(csv, {
       columns: true,
@@ -476,6 +517,10 @@ app.post('/import/users', requirePermission('attendance', 'create'), upload.sing
       skip_empty_lines: true,
       trim: true
     });
+
+    if (records.length === 0) {
+      return res.status(400).json({ error: 'El archivo no tiene ninguna fila de datos' });
+    }
 
     // Upsert extraido a checkinsIngestService.js (Fase 18) -- reusado TAL
     // CUAL por el agente automatico (routes/agent.js). Mismo tope alto que
