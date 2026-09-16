@@ -23,7 +23,7 @@ const billingRoutes = require('./routes/billing');
 const agentRoutes = require('./routes/agent');
 const agentKeysRoutes = require('./routes/agentKeys');
 const syncStatusRoutes = require('./routes/syncStatus');
-const { insertCheckinsBatch, upsertUsersBatch } = require('./motor-laboral/services/checkinsIngestService');
+const { insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_MANUAL_IMPORT } = require('./motor-laboral/services/checkinsIngestService');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
 const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
 const userRepository = require('./motor-laboral/repositories/userRepository');
@@ -418,14 +418,29 @@ app.post('/import/checkins', requirePermission('attendance', 'create'), requireA
     });
 
     // Insercion/dedupe extraida a checkinsIngestService.js (Fase 18) --
-    // reusada TAL CUAL por el agente automatico (routes/agent.js).
-    const result = await insertCheckinsBatch(records, db, effectiveTenantId);
+    // reusada TAL CUAL por el agente automatico (routes/agent.js). Tope
+    // mucho mas alto que el del agente (MAX_RECORDS_PER_MANUAL_IMPORT, no
+    // MAX_RECORDS_PER_BATCH) -- ver el comentario en checkinsIngestService.js:
+    // CHECKINOUT.csv puede acumular "muchos meses de fichajes" (el upload ya
+    // acepta hasta 50MB), el tope chico del agente era para un payload JSON
+    // de una clave automatica, no para esta subida manual autenticada.
+    const result = await insertCheckinsBatch(records, db, effectiveTenantId, MAX_RECORDS_PER_MANUAL_IMPORT);
     res.json({ ok: true, ...result });
 
   } catch (err) {
     if (err.code === 'DB_BUSY' || err.code === 'DB_UNREACHABLE') {
       console.error('IMPORT CHECKINS:', err.message);
       return res.status(503).json({ error: err.message });
+    }
+    // Bug real reportado: BATCH_TOO_LARGE y TENANT_REQUIRED caian antes en
+    // el 500 generico de mas abajo ("Import checkins failed", sin decir
+    // por que) -- se contemplan explicitamente para que el mensaje real
+    // (ej. "Máximo 500000 registros por lote") le llegue al usuario.
+    if (err.code === 'BATCH_TOO_LARGE') {
+      return res.status(413).json({ error: err.message });
+    }
+    if (err.code === 'TENANT_REQUIRED') {
+      return res.status(400).json({ error: err.message });
     }
     console.error('IMPORT CHECKINS FATAL:', err);
     if (err.code === 'ECONNREFUSED') {
@@ -463,11 +478,18 @@ app.post('/import/users', requirePermission('attendance', 'create'), upload.sing
     });
 
     // Upsert extraido a checkinsIngestService.js (Fase 18) -- reusado TAL
-    // CUAL por el agente automatico (routes/agent.js).
-    const { upserted, skipped } = await upsertUsersBatch(records, db, effectiveTenantId);
+    // CUAL por el agente automatico (routes/agent.js). Mismo tope alto que
+    // /import/checkins -- ver el comentario ahi.
+    const { upserted, skipped } = await upsertUsersBatch(records, db, effectiveTenantId, MAX_RECORDS_PER_MANUAL_IMPORT);
     res.json({ ok: true, users: upserted, skipped, message: 'Importacion completada' });
 
   } catch (err) {
+    if (err.code === 'BATCH_TOO_LARGE') {
+      return res.status(413).json({ error: err.message });
+    }
+    if (err.code === 'TENANT_REQUIRED') {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('IMPORT USERS ERROR:', err);
     if (err.code === 'ECONNREFUSED') {
       return res.status(503).json({

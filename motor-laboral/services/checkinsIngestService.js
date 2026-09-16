@@ -30,13 +30,25 @@ function parseCheckTimeArgentina(value) {
   return null;
 }
 
-// Limite duro por request -- tanto para el CSV manual (un archivo enorme
-// ya tenia su propio limite de tamaño de subida) como, sobre todo, para el
-// agente automatico: un payload JSON sin este tope podria usarse para un
-// DoS (mandar millones de filas de una sola vez). El agente real manda
-// como mucho unos pocos miles de fichajes por corrida -- 5000 da margen de
-// sobra sin abrir esa puerta.
+// Limite duro por request para el agente automatico: un payload JSON sin
+// este tope podria usarse para un DoS (mandar millones de filas de una
+// sola vez con una sola clave de agente). El agente real manda como mucho
+// unos pocos miles de fichajes por corrida -- 5000 da margen de sobra sin
+// abrir esa puerta.
 const MAX_RECORDS_PER_BATCH = 5000;
+
+// Bug real reportado: la subida manual de CHECKINOUT.csv (horasdedica2.js
+// /import/checkins) usaba este MISMO tope de 5000 y fallaba con un 500
+// generico ("Import checkins failed", el codigo BATCH_TOO_LARGE no estaba
+// contemplado en ese catch) apenas el archivo tenia mas de unos pocos
+// miles de fichajes -- algo esperable con "muchos meses de fichajes" (el
+// upload ya acepta hasta 50MB, ver el comentario de `multer` en
+// horasdedica2.js). El riesgo de DoS que justifica el tope del agente no
+// aplica igual aca: es una subida autenticada (permiso attendance:create,
+// no una clave de agente) via multipart ya acotado a 50MB, no un JSON
+// arbitrario -- se le da un techo mucho mas alto, solo como resguardo de
+// memoria ante un archivo realmente patologico, no como limite de uso normal.
+const MAX_RECORDS_PER_MANUAL_IMPORT = 500000;
 
 // records: array de objetos con AL MENOS USERID/CHECKTIME (string), y
 // opcionalmente MACHINE_IP/MACHINE_SN -- mismo shape que produce tanto el
@@ -51,14 +63,14 @@ const MAX_RECORDS_PER_BATCH = 5000;
 // de otra bajo el mismo USERID, sin forma de separarlos despues. Los dos
 // llamadores (routes/agent.js, horasdedica2.js /import/checkins) ya
 // resuelven el tenant antes de llamar aca -- no hay un default valido.
-async function insertCheckinsBatch(records, db, tenantId) {
+async function insertCheckinsBatch(records, db, tenantId, maxRecords = MAX_RECORDS_PER_BATCH) {
   if (!tenantId) {
     const err = new Error('tenantId es requerido para insertar fichajes');
     err.code = 'TENANT_REQUIRED';
     throw err;
   }
-  if (records.length > MAX_RECORDS_PER_BATCH) {
-    const err = new Error(`Máximo ${MAX_RECORDS_PER_BATCH} registros por lote`);
+  if (records.length > maxRecords) {
+    const err = new Error(`Máximo ${maxRecords} registros por lote`);
     err.code = 'BATCH_TOO_LARGE';
     throw err;
   }
@@ -139,14 +151,14 @@ async function insertCheckinsBatch(records, db, tenantId) {
 // sin esto, un USERID que ya existe en OTRA empresa se detectaria como
 // "ya existe" y se le pisaria el nombre/legajo en vez de crear una fila
 // nueva para esta empresa.
-async function upsertUsersBatch(records, db, tenantId) {
+async function upsertUsersBatch(records, db, tenantId, maxRecords = MAX_RECORDS_PER_BATCH) {
   if (!tenantId) {
     const err = new Error('tenantId es requerido para sincronizar usuarios');
     err.code = 'TENANT_REQUIRED';
     throw err;
   }
-  if (records.length > MAX_RECORDS_PER_BATCH) {
-    const err = new Error(`Máximo ${MAX_RECORDS_PER_BATCH} registros por lote`);
+  if (records.length > maxRecords) {
+    const err = new Error(`Máximo ${maxRecords} registros por lote`);
     err.code = 'BATCH_TOO_LARGE';
     throw err;
   }
@@ -238,4 +250,4 @@ async function upsertUsersBatch(records, db, tenantId) {
   return { upserted: validosPorBadge.size, skipped, total: records.length };
 }
 
-module.exports = { parseCheckTimeArgentina, insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_BATCH };
+module.exports = { parseCheckTimeArgentina, insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_BATCH, MAX_RECORDS_PER_MANUAL_IMPORT };
