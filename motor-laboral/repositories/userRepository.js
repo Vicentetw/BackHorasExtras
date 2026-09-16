@@ -1,11 +1,12 @@
 async function findAll({ tenantId }, db) {
   const params = [];
-  let query = `SELECT 
+  let query = `SELECT
        e.employee_id AS employeeId,
        COALESCE(u.USERID, NULL) AS USERID,
        COALESCE(u.Badgenumber, e.employee_id) AS Badgenumber,
        COALESCE(e.nombre, u.Name) AS Name,
        e.tenant_id AS tenantId,
+       e.ciudad_id AS ciudadId,
        COALESCE(e.overtime_authorized, 1) AS overtimeAuthorized,
        COALESCE(e.activo, 1) AS activo
      FROM employees e

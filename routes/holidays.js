@@ -12,6 +12,33 @@ module.exports = function (db) {
     return dateStr.split('T')[0]; // YYYY-MM-DD
   }
 
+  // Mismo criterio que sucursales.js: la ciudad tiene que existir y ser de
+  // la empresa de quien pide, O ser una ciudad global (tenant_id NULL,
+  // cargada por un superadmin) -- un feriado de una empresa puntual puede
+  // acotarse a una ciudad global sin problema.
+  async function findCiudadOrNull(ciudadId, effectiveTenantId) {
+    const [[row]] = await db.query('SELECT id, tenant_id FROM ciudades WHERE id = ?', [ciudadId]);
+    if (!row) return null;
+    if (effectiveTenantId !== null && row.tenant_id !== null && row.tenant_id !== effectiveTenantId) return null;
+    return row;
+  }
+
+  // NULL no es comparable de forma confiable en un unique key de MySQL (dos
+  // filas con ciudad_id IS NULL no colisionan entre si) -- se valida el
+  // duplicado (mismo tenant+fecha+ciudad) a mano antes de insertar/
+  // actualizar, con <=> (null-safe equal) para que NULL SI compare igual a
+  // NULL aca.
+  async function findDuplicate(tenantId, date, ciudadId, excludeId) {
+    const params = [tenantId, date, ciudadId ?? null];
+    let sql = 'SELECT id FROM holidays WHERE tenant_id <=> ? AND date = ? AND ciudad_id <=> ?';
+    if (excludeId) {
+      sql += ' AND id != ?';
+      params.push(excludeId);
+    }
+    const [rows] = await db.query(sql, params);
+    return rows.length > 0;
+  }
+
   // ==========================
   // 1. LISTAR FERIADOS (con filtros)
   // ==========================
@@ -19,7 +46,10 @@ module.exports = function (db) {
     try {
       const { year, month, type } = req.query;
 
-      let sql = 'SELECT * FROM holidays WHERE 1=1';
+      let sql = `SELECT h.*, c.nombre AS ciudad_nombre
+                  FROM holidays h
+                  LEFT JOIN ciudades c ON c.id = h.ciudad_id
+                  WHERE 1=1`;
       const params = [];
 
       // Ya no hace fallback a tenant_id IS NULL -- la migracion de la Fase A
@@ -29,26 +59,26 @@ module.exports = function (db) {
       // por default.
       const effectiveTenantId = resolveTenantId(req);
       if (effectiveTenantId !== null) {
-        sql += ' AND tenant_id = ?';
+        sql += ' AND h.tenant_id = ?';
         params.push(effectiveTenantId);
       }
 
       if (year) {
-        sql += ' AND year = ?';
+        sql += ' AND h.year = ?';
         params.push(parseInt(year));
       }
 
       if (month) {
-        sql += ' AND MONTH(date) = ?';
+        sql += ' AND MONTH(h.date) = ?';
         params.push(parseInt(month));
       }
 
       if (type) {
-        sql += ' AND type = ?';
+        sql += ' AND h.type = ?';
         params.push(type);
       }
 
-      sql += ' ORDER BY date ASC';
+      sql += ' ORDER BY h.date ASC';
 
       const [rows] = await db.query(sql, params);
 
@@ -100,6 +130,7 @@ module.exports = function (db) {
   router.post('/', requirePermission('holidays', 'create'), async (req, res) => {
     try {
       const { date, name, description, type, reason, isWorkDay, recurring } = req.body;
+      const ciudadId = req.body.ciudad_id ?? req.body.ciudadId ?? null;
 
       if (!date || !name) {
         return res.status(400).json({ success: false, error: 'Date and name are required' });
@@ -113,11 +144,24 @@ module.exports = function (db) {
         ? req.appUser.tenantId
         : (req.body.tenant_id ?? req.body.tenantId ?? null);
 
+      const effectiveTenantId = resolveTenantId(req);
+      if (ciudadId) {
+        const ciudad = await findCiudadOrNull(ciudadId, effectiveTenantId);
+        if (!ciudad) {
+          return res.status(404).json({ success: false, error: 'Ciudad no encontrada' });
+        }
+      }
+
+      if (await findDuplicate(tenantId, date, ciudadId)) {
+        return res.status(409).json({ success: false, error: 'Ya existe un feriado para esa fecha y ese alcance (empresa/ciudad)' });
+      }
+
       const [result] = await db.query(
-        `INSERT INTO holidays (tenant_id, date, year, name, description, type, reason, isWorkDay, recurring)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO holidays (tenant_id, ciudad_id, date, year, name, description, type, reason, isWorkDay, recurring)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           tenantId,
+          ciudadId,
           date,
           year,
           name,
@@ -150,28 +194,38 @@ module.exports = function (db) {
     try {
       const { id } = req.params;
       const { date, name, description, type, reason, isWorkDay, recurring } = req.body;
+      const ciudadId = req.body.ciudad_id ?? req.body.ciudadId ?? null;
 
       if (!date || !name) {
         return res.status(400).json({ success: false, error: 'Date and name are required' });
       }
 
+      const [[existing]] = await db.query('SELECT tenant_id FROM holidays WHERE id = ?', [id]);
       const effectiveTenantId = resolveTenantId(req);
-      if (effectiveTenantId !== null) {
+      if (!existing || (effectiveTenantId !== null && existing.tenant_id !== effectiveTenantId)) {
         // Un usuario normal solo edita SUS propios feriados -- los globales
         // (tenant_id NULL, ej. feriados nacionales) son de solo lectura para
         // el, edicion reservada al superadmin.
-        const [[existing]] = await db.query('SELECT tenant_id FROM holidays WHERE id = ?', [id]);
-        if (!existing || existing.tenant_id !== effectiveTenantId) {
-          return res.status(404).json({ success: false, error: 'Holiday not found' });
+        return res.status(404).json({ success: false, error: 'Holiday not found' });
+      }
+
+      if (ciudadId) {
+        const ciudad = await findCiudadOrNull(ciudadId, effectiveTenantId);
+        if (!ciudad) {
+          return res.status(404).json({ success: false, error: 'Ciudad no encontrada' });
         }
+      }
+
+      if (await findDuplicate(existing.tenant_id, date, ciudadId, id)) {
+        return res.status(409).json({ success: false, error: 'Ya existe un feriado para esa fecha y ese alcance (empresa/ciudad)' });
       }
 
       const year = new Date(date).getFullYear();
 
       await db.query(
         `UPDATE holidays SET
-          date = ?, year = ?, name = ?, description = ?, type = ?, 
-          reason = ?, isWorkDay = ?, recurring = ?
+          date = ?, year = ?, name = ?, description = ?, type = ?,
+          reason = ?, isWorkDay = ?, recurring = ?, ciudad_id = ?
          WHERE id = ?`,
         [
           date,
@@ -182,6 +236,7 @@ module.exports = function (db) {
           reason || null,
           isWorkDay !== undefined ? (isWorkDay ? 1 : 0) : 0,
           recurring !== undefined ? (recurring ? 1 : 0) : 0,
+          ciudadId,
           id
         ]
       );

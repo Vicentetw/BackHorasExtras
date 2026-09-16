@@ -32,6 +32,7 @@ const attendanceCalc = require('./motor-laboral/services/attendanceCalculations'
 const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
+const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
 const mercadopagoWebhookRoutes = require('./routes/mercadopagoWebhook');
 const publicRoutes = require('./routes/public');
 
@@ -2009,7 +2010,8 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
         SELECT
           u.USERID,
           u.Badgenumber,
-          COALESCE(e.nombre, u.Name) AS Name
+          COALESCE(e.nombre, u.Name) AS Name,
+          e.ciudad_id AS ciudad_id
         FROM \`users\` u
         LEFT JOIN \`user_employee_map\` um ON um.USERID = u.USERID AND um.tenant_id = u.tenant_id
         LEFT JOIN \`employees\` e ON e.id = um.employee_id
@@ -2033,7 +2035,7 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     try {
       const importedParams = [];
       let importedQuery = `
-        SELECT e.id, e.employee_id, e.nombre, e.activo
+        SELECT e.id, e.employee_id, e.nombre, e.activo, e.ciudad_id
         FROM \`employees\` e
         WHERE e.activo = 1
           AND NOT EXISTS (
@@ -2056,6 +2058,7 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
           USERID: -emp.id, // ID negativo para identificar como empleado importado
           Badgenumber: emp.employee_id,
           Name: emp.nombre,
+          ciudad_id: emp.ciudad_id,
           isImported: true
         });
       });
@@ -2090,23 +2093,32 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
       console.error(`⚠️ Error fetching schedule: ${e.message}`);
     }
 
-    // PASO 2B: Consultar holidays para el día, incluyendo recurrentes
+    // PASO 2B: Consultar holidays para el día, incluyendo recurrentes.
+    // Fase 21: se suma el filtro por tenant_id (bug real -- esta consulta
+    // nunca lo tuvo, una empresa veia el feriado de otra) y el feriado ya
+    // puede venir acotado a una ciudad puntual (holiday.ciudad_id) -- ver
+    // holidayAppliesToEmployee mas abajo, evaluado por empleado.
     let holidays = [];
     try {
+      const holidayParams = [date, date];
+      let holidayTenantClause = '';
+      if (effectiveTenantId !== null) {
+        holidayTenantClause = ' AND (tenant_id = ? OR tenant_id IS NULL)';
+        holidayParams.push(effectiveTenantId);
+      }
       const [holidayRows] = await db.query(
         `SELECT *
          FROM \`holidays\`
-         WHERE date = ?
-           OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') = DATE_FORMAT(?, '%m-%d'))`,
-        [date, date]
+         WHERE (date = ? OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') = DATE_FORMAT(?, '%m-%d')))${holidayTenantClause}`,
+        holidayParams
       );
       holidays = holidayRows || [];
-      if (holidays.length > 0) {
-        const holidayNotWork = holidays.some(h => h.isWorkDay == 0);
-        if (holidayNotWork) {
-          schedule.isWorkDay = false;
-          console.log(`⚠️ Día marcado como no laborable por holidays`);
-        }
+      // Solo un feriado SIN ciudad (toda la empresa) apaga el dia entero --
+      // uno acotado a una ciudad se evalua por empleado, no aca.
+      const companyWideHolidayNotWork = holidays.some(h => isNonWorkHoliday(h) && h.ciudad_id == null);
+      if (companyWideHolidayNotWork) {
+        schedule.isWorkDay = false;
+        console.log(`⚠️ Día marcado como no laborable por holidays`);
       }
     } catch (e) {
       console.error(`⚠️ Error fetching holidays: ${e.message}`);
@@ -2114,15 +2126,13 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
 
     // IMPORTANTE: Incluso si no es un día laboral (feriado), procesamos los fichajes.
     // Esto es para capturar a personas que trabajan en feriados (médicos, policías, etc.)
-    const isHolidayWorkDay = !schedule.isWorkDay && holidays.length > 0;
-    
     const entranceTime = extractTime(schedule.timeEntrance) || scheduleTime;
     const entranceMinutes = timeToMinutes(entranceTime);
     const toleranceMinutes = parseInt(tolerance);
-    
+
     console.log(`✓ Entrance: ${entranceTime}, Tolerance: ${toleranceMinutes}min`);
-    if (isHolidayWorkDay) {
-      console.log(`⚠️ HOLIDAY WORKDAY: ${holidays.map(h => h.name).join(', ')} - procesando fichas normalmente`);
+    if (holidays.some(h => isNonWorkHoliday(h))) {
+      console.log(`⚠️ HOLIDAY: ${holidays.map(h => h.name).join(', ')} - procesando fichas por empleado segun su ciudad`);
     }
     let checkins = [];
     try {
@@ -2195,6 +2205,9 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
       let status = 'Absent';
       let firstCheckin = null;
       let lastCheckin = null;
+      // Feriado por ciudad (Fase 21): uno sin ciudad_id aplica a todo el
+      // mundo, uno con ciudad_id solo pesa para los empleados de ESA ciudad.
+      const userHolidayApplies = holidays.some(h => isNonWorkHoliday(h) && holidayAppliesToEmployee(h, u.ciudad_id));
       let workedOnHoliday = false;
 
       if (userCheckins.length > 0) {
@@ -2217,16 +2230,17 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
         status = !isLate ? 'OnTime' : (justified ? 'LateJustified' : 'Late');
 
         // Marcar si trabajó en feriado
-        if (isHolidayWorkDay) {
+        if (userHolidayApplies) {
           workedOnHoliday = true;
+          status = 'WorkedHoliday';
         }
       } else if (userExclusion || userLeave) {
         status = 'Excused';
-      } else if (isHolidayWorkDay) {
+      } else if (userHolidayApplies) {
         // En un feriado sin fichajes: mostrar como "Feriado" en lugar de "Ausente"
         status = 'HolidayAbsent';
       }
-      
+
       return {
         userId: u.USERID,
         badgeNumber: u.Badgenumber,
@@ -2262,7 +2276,7 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
         tolerance: toleranceMinutes
       },
       holidays: holidays,
-      isHolidayWorkDay: isHolidayWorkDay,
+      isHolidayWorkDay: holidays.some(h => isNonWorkHoliday(h)),
       summary: summary,
       attendance: attendance
     });
@@ -2360,22 +2374,37 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         .filter(tid => tid !== undefined && tid !== null)
     ));
 
+    // Fase 21: se suma el filtro por tenant_id (bug real -- esta consulta
+    // nunca lo tuvo, una empresa veia el feriado de otra) y ciudad_id (para
+    // poder acotar un feriado a una ciudad puntual). Los Maps pasan a
+    // guardar un ARRAY de filas por fecha (antes una sola) -- puede haber
+    // mas de un feriado el mismo dia (uno de toda la empresa + uno de una
+    // ciudad puntual, o dos ciudades distintas que coinciden en fecha).
     const monthDays = Array.from(new Set(dateRange.map(d => d.slice(5))));
+    const holidayRangeParams = [from, formatLocalDate(effectiveEndDate), monthDays];
+    let holidayRangeTenantClause = '';
+    if (tenantId !== null) {
+      holidayRangeTenantClause = ' AND (tenant_id = ? OR tenant_id IS NULL)';
+      holidayRangeParams.push(tenantId);
+    }
     const [holidayRows] = await db.query(
-      `SELECT date, isWorkDay, recurring
+      `SELECT date, isWorkDay, recurring, ciudad_id
        FROM holidays
-       WHERE date BETWEEN ? AND ?
-         OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') IN (?))`,
-      [from, formatLocalDate(effectiveEndDate), monthDays]
+       WHERE (date BETWEEN ? AND ?
+         OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') IN (?)))${holidayRangeTenantClause}`,
+      holidayRangeParams
     );
 
     const holidayByDate = new Map();
     const recurringHolidayByMonthDay = new Map();
     holidayRows.forEach(h => {
       if (h.recurring) {
-        recurringHolidayByMonthDay.set(h.date.slice(5), h);
+        const key = h.date.slice(5);
+        if (!recurringHolidayByMonthDay.has(key)) recurringHolidayByMonthDay.set(key, []);
+        recurringHolidayByMonthDay.get(key).push(h);
       } else {
-        holidayByDate.set(h.date, h);
+        if (!holidayByDate.has(h.date)) holidayByDate.set(h.date, []);
+        holidayByDate.get(h.date).push(h);
       }
     });
 
@@ -2578,16 +2607,14 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       };
     };
 
-    const getHolidayOverride = (date) => {
-      const holiday = holidayByDate.get(date);
-      if (holiday) {
-        return holiday.isWorkDay == 1 ? true : false;
-      }
-      const recurringHoliday = recurringHolidayByMonthDay.get(date.slice(5));
-      if (recurringHoliday) {
-        return recurringHoliday.isWorkDay == 1 ? true : false;
-      }
-      return null;
+    // Todas las filas de holidays que caen en esta fecha (exactas +
+    // recurrentes) -- sin filtrar todavia por empleado, eso lo hace el
+    // llamador con holidayAppliesToEmployee (ciudad_id de cada fila vs. la
+    // del empleado).
+    const getHolidaysForDate = (date) => {
+      const exact = holidayByDate.get(date) || [];
+      const recurring = recurringHolidayByMonthDay.get(date.slice(5)) || [];
+      return exact.concat(recurring);
     };
 
     const extractTime = (datetimeStr) => {
@@ -2708,10 +2735,19 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       dateRange.forEach(date => {
         const dateSchedules = scheduleByDate[date];
         const schedule = getScheduleEntry(date, dateSchedules.assignedScheduleMap, dateSchedules.tenantScheduleMap, employeeId, u.tenantId);
-        const holidayOverride = getHolidayOverride(date);
-        const isWorkDay = holidayOverride !== null ? holidayOverride : schedule.isWorkDay == 1;
+        const checks = checksByDate[date] || [];
+        // Feriado por ciudad (Fase 21): solo cuentan las filas de holidays
+        // que aplican a ESTE empleado (toda la empresa, o su propia ciudad
+        // -- ver holidayScope.js). Si varias aplican y alguna dice "no
+        // laborable", esa gana (mas conservador que forzar a trabajar).
+        const matchingHolidays = getHolidaysForDate(date).filter(h => holidayAppliesToEmployee(h, u.ciudadId));
+        const holidayNonWorkApplies = matchingHolidays.some(h => isNonWorkHoliday(h));
+        const holidayForcesWork = matchingHolidays.length > 0 && !holidayNonWorkApplies;
+        const isWorkDay = matchingHolidays.length > 0 ? holidayForcesWork : schedule.isWorkDay == 1;
 
-        if (!isWorkDay) {
+        if (!isWorkDay && !holidayNonWorkApplies) {
+          // Dia libre normal segun el horario del empleado (fin de semana,
+          // etc, SIN feriado de por medio) -- identico a como era antes.
           // Una HE manual puede cargarse para un dia no laborable (trabajo
           // en un fin de semana, por ejemplo) -- se respeta igual, no se
           // pierde solo porque el dia no era de horario normal.
@@ -2742,7 +2778,32 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           return;
         }
 
-        const checks = checksByDate[date] || [];
+        if (holidayNonWorkApplies) {
+          // Bug real (Fase 21): un feriado que aplicaba a este empleado
+          // caia siempre en "NonWorkDay" generico -- el calendario
+          // mensual/anual nunca distinguia "trabajo el feriado" de "no fue",
+          // a diferencia del motor diario (que ya usa WorkedHoliday/
+          // HolidayAbsent). Los CONTADORES numericos (daysWorked, late,
+          // overtimeMinutes calculado, absent) siguen exactamente igual que
+          // antes para un feriado -- solo cuenta la HE manual, igual que ya
+          // pasaba -- esto corrige unicamente lo que se PINTA en el
+          // calendario de detalle.
+          const manualKeyHoliday = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesHoliday = manualKeyHoliday ? (manualMinutesByUserDate.get(manualKeyHoliday) || 0) : 0;
+          if (manualMinutesHoliday > 0) overtimeMinutes += manualMinutesHoliday;
+          if (days) {
+            days.push({
+              date,
+              status: checks.length > 0 ? 'WorkedHoliday' : 'HolidayAbsent',
+              firstCheckin: checks.length > 0 ? extractTime(checks[0]) : undefined,
+              lastCheckin: checks.length > 0 ? extractTime(checks[checks.length - 1]) : undefined,
+              totalCheckins: checks.length,
+              overtimeManualMinutes: manualMinutesHoliday
+            });
+          }
+          return;
+        }
+
         const exclusion = u.USERID ? exclusionsMap.get(`${u.USERID}_${date}`) : null;
         const leaveEvent = leaveEventMap.get(`${employeeId}_${date}`);
 

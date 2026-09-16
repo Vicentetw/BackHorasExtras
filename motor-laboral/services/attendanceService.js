@@ -6,6 +6,7 @@ const {
   evaluateMultiVisitDay,
   stripOvernightCarryover
 } = require('./attendanceCalculations');
+const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./holidayScope');
 
 function isDefaultWorkday(dateString) {
   const dayOfWeek = getLocalDayOfWeek(dateString);
@@ -101,7 +102,7 @@ function getScheduleEntryOrNull(assignedScheduleMap, tenantScheduleMap, employee
 // mismo fix en /attendance-range de horasdedica2.js). assignedScheduleMapYesterday/
 // tenantScheduleMapYesterday: mismo shape que sus pares de "hoy", pero
 // resueltos para el dia anterior -- ver calculateDailyAttendance.
-function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents = [], assignedScheduleMapYesterday = null, tenantScheduleMapYesterday = null) {
+function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents = [], assignedScheduleMapYesterday = null, tenantScheduleMapYesterday = null) {
   checkins.forEach(c => {
     const entry = usersMap.get(String(c.employeeId));
     if (entry) {
@@ -127,6 +128,12 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
     // para este dia -- el caso de un solo bloque sigue exactamente igual que
     // siempre (ver evaluateMultiVisitDay en attendanceCalculations.js).
     const workBlocks = (userSchedule.blocks || []).filter(b => b.block_type === 'WORK');
+
+    // Feriado por ciudad (Fase 21): un feriado sin ciudad_id aplica a todo
+    // el mundo (comportamiento historico); uno con ciudad_id solo pesa para
+    // los empleados de ESA ciudad -- un sereno de otra ciudad ese mismo dia
+    // tiene un dia normal, ni WorkedHoliday ni HolidayAbsent.
+    const isHoliday = (holidayRows || []).some(h => isNonWorkHoliday(h) && holidayAppliesToEmployee(h, u.ciudadId));
 
     let status = 'Absent';
     let multiVisit = null;
@@ -252,9 +259,16 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
     : buildLegacySchedule({ date: normalizedDate, tenantSchedule });
 
   const holidayRows = await repositories.holiday.findByDate(normalizedDate, tenantId);
-  const isHoliday = Array.isArray(holidayRows) ? holidayRows.some(h => h.isWorkDay === 0) : false;
+  // Solo un feriado SIN ciudad (toda la empresa) apaga el dia a nivel
+  // "schedule" general -- uno acotado a una ciudad no debe marcar el dia
+  // entero como no laborable para las demas ciudades. El chequeo por
+  // empleado (WorkedHoliday/HolidayAbsent) se hace mas abajo, en
+  // buildAttendance, con holidayRows completo.
+  const companyWideHoliday = Array.isArray(holidayRows)
+    ? holidayRows.some(h => isNonWorkHoliday(h) && h.ciudad_id == null)
+    : false;
 
-  if (isHoliday) {
+  if (companyWideHoliday) {
     schedule.isWorkDay = false;
   }
 
@@ -272,6 +286,7 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
       badgeNumber: u.Badgenumber || null,
       name: u.Name,
       tenantId: u.tenantId != null ? u.tenantId : null,
+      ciudadId: u.ciudadId != null ? u.ciudadId : null,
       // Pedido real: un empleado inactivo (dado de baja, ya no trabaja acá)
       // no debe figurar como "Ausente" solo por no fichar -- eso es
       // esperable, no una ausencia real a revisar. Default activo=true si
@@ -324,7 +339,7 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
     }
   }
 
-  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, isHoliday, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday);
+  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday);
   const summary = buildSummary(attendance);
   const anyMotorSchedule = attendance.some(a => a.schedule.source === 'motor');
   const usedMotorSchedule = schedule.source === 'motor' || anyMotorSchedule;
@@ -374,18 +389,28 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
     isWorkDay: isDefaultWorkday(normalizedDate)
   };
 
+  // Bug real (Fase 21, mismo hallazgo que ya se corrigio en holidayRepository
+  // para el motor diario): esta consulta nunca filtraba por tenant_id -- una
+  // empresa veia el feriado de otra. tenant_id = ? OR tenant_id IS NULL
+  // preserva el feriado GLOBAL (solo lo carga un superadmin).
+  const holidayParams = [normalizedDate, normalizedDate];
+  let holidayTenantClause = '';
+  if (tenantId !== undefined && tenantId !== null) {
+    holidayTenantClause = ' AND (tenant_id = ? OR tenant_id IS NULL)';
+    holidayParams.push(tenantId);
+  }
   const [holidayRows] = await db.query(
     `SELECT * FROM holidays
-     WHERE date = ?
-        OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') = DATE_FORMAT(?, '%m-%d'))`,
-    [normalizedDate, normalizedDate]
+     WHERE (date = ? OR (recurring = 1 AND DATE_FORMAT(date, '%m-%d') = DATE_FORMAT(?, '%m-%d')))${holidayTenantClause}`,
+    holidayParams
   );
 
-  if (holidayRows.length > 0) {
-    const holidayNotWork = holidayRows.some(h => h.isWorkDay == 0);
-    if (holidayNotWork) {
-      config.isWorkDay = false;
-    }
+  // Solo un feriado SIN ciudad (toda la empresa) corta temprano con el dia
+  // entero no laborable, exactamente como siempre. Uno acotado a una ciudad
+  // no apaga el dia para todos -- se evalua por empleado mas abajo.
+  const companyWideHolidayOff = holidayRows.some(h => isNonWorkHoliday(h) && h.ciudad_id == null);
+  if (companyWideHolidayOff) {
+    config.isWorkDay = false;
   }
 
   if (!config.isWorkDay) {
@@ -419,6 +444,7 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
       SELECT
         e.employee_id,
         e.nombre,
+        e.ciudad_id,
         u.USERID,
         u.Badgenumber,
         u.Name,
@@ -453,6 +479,7 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
         userId: r.USERID,
         badgeNumber: r.Badgenumber,
         name: r.nombre,
+        ciudadId: r.ciudad_id != null ? r.ciudad_id : null,
         checkins: []
       };
     }
@@ -465,6 +492,11 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
   const attendance = Object.values(map).map(u => {
     const exclusion = exclusions.find(e => e.userId === u.userId);
     const checkins = u.checkins || [];
+    // Feriado acotado a una ciudad (companyWideHolidayOff ya se manejo arriba
+    // con el corte temprano de todo el dia): solo pesa para los empleados de
+    // ESA ciudad. Misma prioridad que el motor diario -- un feriado pesa mas
+    // que una exclusion individual.
+    const isHolidayForEmployee = holidayRows.some(h => isNonWorkHoliday(h) && holidayAppliesToEmployee(h, u.ciudadId));
 
     let status = 'Absent';
     let firstCheckin = null;
@@ -482,6 +514,14 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
       const entranceMinutes = Number(config.timeEntrance.split(':')[0]) * 60 + Number(config.timeEntrance.split(':')[1]);
       const toleranceMin = 10;
       status = firstMinutes <= entranceMinutes + toleranceMin ? 'OnTime' : 'Late';
+    }
+
+    // Feriado acotado a una ciudad (el caso sin ciudad ya se resolvio arriba
+    // con el corte temprano de todo el dia): pesa mas que cualquier otro
+    // motivo individual, exclusion incluida -- mismo criterio que el motor
+    // diario ("un feriado pesa mas que cualquier otro motivo individual").
+    if (isHolidayForEmployee) {
+      status = checkins.length > 0 ? 'WorkedHoliday' : 'HolidayAbsent';
     }
 
     return {
