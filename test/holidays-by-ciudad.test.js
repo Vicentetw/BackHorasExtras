@@ -367,6 +367,29 @@ test('POST /api/holidays: misma fecha pero OTRA ciudad -> 200 (no es duplicado)'
   await db.query('DELETE FROM holidays WHERE id = ?', [body.id]);
 });
 
+test('POST /api/holidays: sin description (campo opcional en el dialogo) -> 200, no 500', async () => {
+  // Bug real: holidays.description era VARCHAR(200) NOT NULL, unica
+  // columna "description" de todo el esquema con esa restriccion -- el
+  // dialogo de Angular la trata como opcional (sin required), routes/
+  // holidays.js convierte '' a null antes de insertar, y esa insercion
+  // rompia con ER_BAD_NULL_ERROR. Migracion 20260919 la vuelve nullable.
+  const res = await fetch(`${BASE_URL}/api/holidays?tenantId=${TENANT_A}`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      date: '2026-10-02',
+      name: 'Feriado sin descripcion (test)',
+      type: 'LOCAL',
+      isWorkDay: false,
+      recurring: false,
+      tenantId: TENANT_A
+    })
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  await db.query('DELETE FROM holidays WHERE id = ?', [body.id]);
+});
+
 test('POST /api/holidays: ciudad_id inexistente -> 404', async () => {
   const res = await fetch(`${BASE_URL}/api/holidays?tenantId=${TENANT_A}`, {
     method: 'POST',
