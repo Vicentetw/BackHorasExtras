@@ -2919,7 +2919,16 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const isOvertimeAuthorized = overtimeAuthorizationMode !== 'custom'
             ? true
             : (u.overtimeAuthorized === undefined || u.overtimeAuthorized === null ? true : !!Number(u.overtimeAuthorized));
-          const computedOvertimeMinutes = (overtimeResult && isOvertimeAuthorized) ? overtimeResult.cappedMinutes : 0;
+          // Pedido real: "el tope es una opcion solo para que salte un aviso
+          // en el detalle, superó límite diario" -- ANTES esto usaba
+          // overtimeResult.cappedMinutes, que TRUNCABA el numero real (si
+          // alguien hizo 8h de HE real y el tope configurado es 6h, se
+          // mostraba y sumaba "6h" como si fuera el numero real, sin ningun
+          // aviso de que se habia recortado). Ahora se usa el valor REAL
+          // (.minutes) siempre, y overCap queda solo para mostrar un aviso
+          // (ver dayOvertimeOverCap mas abajo) -- el tope deja de "mentir"
+          // el numero y pasa a ser puramente informativo.
+          const computedOvertimeMinutes = (overtimeResult && isOvertimeAuthorized) ? overtimeResult.minutes : 0;
           const dayOvertimeNeedsVerification = !!(overtimeResult && isOvertimeAuthorized && overtimeResult.needsVerification);
           const dayOvertimeSource = (overtimeResult && isOvertimeAuthorized) ? overtimeResult.source : null;
 
@@ -2931,6 +2940,12 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
           const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
           const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
+          // Pedido real: "el tope es una opcion solo para que salte un aviso
+          // en el detalle, superó límite diario" -- se compara el TOTAL final
+          // del dia (automatico + manual, ya sin el omitido) contra el tope
+          // configurado; no es solo la parte automatica, un manual que por si
+          // solo supere el tope tambien tiene que avisar.
+          const dayOvertimeOverCap = dayOvertimeMinutes > overtimeSettings.capMinutes;
           // Hora exacta en la que arranca la HE automatica (marker o
           // fallback) -- Fase 7, "Horas Extra por Regimen" necesita mostrar
           // entrada / inicio HE / salida por dia, no solo la duracion.
@@ -2983,6 +2998,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               overtimeStartTime: dayOvertimeStartTime,
               overtimeNeedsVerification: dayOvertimeNeedsVerification,
               overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
+              // Pedido real: "el tope es una opcion solo para que salte un
+              // aviso en el detalle, superó límite diario" -- overtimeMinutes
+              // de arriba SIEMPRE es el valor real (ya no se trunca), esto es
+              // solo la bandera para mostrar el aviso cuando corresponda.
+              overtimeOverCap: dayOvertimeOverCap,
               overtimeManualMinutes: manualMinutesThisDay,
               overtimeManuallyOmitted: isManuallyOmitted,
               // Pedido real: poder tildar/destildar "Omitido" directo desde
@@ -3078,14 +3098,18 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     res.json({
       from,
       to,
+      // Pedido real: el frontend necesita mostrar "Superó el límite diario
+      // (Xh Ym)" en el aviso de overtimeOverCap sin tener que pedir
+      // /config/overtime-settings aparte.
+      overtimeCapMinutes: overtimeSettings.capMinutes,
       data: result
     });
 
   } catch (err) {
     console.error(err);
     if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
+      return res.status(503).json({
+        error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.'
       });
     }
     res.status(500).json({ error: 'Error en rango' });
