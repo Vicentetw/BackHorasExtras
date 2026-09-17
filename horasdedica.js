@@ -2932,19 +2932,38 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       });
     });
 
+    // Pedido real: "diferenciar bien... salida particular, que estan en
+    // salidas" -- el calendario de Presentismo no distinguia nunca un dia
+    // con salida particular (esa info solo se veia en la pantalla de
+    // Salidas). Se agrega como una bandera aparte (hasParticularExit, ver
+    // mas abajo), NO como un status nuevo excluyente -- un dia puede ser
+    // "OnTime" y tener ademas una salida particular esa tarde, son cosas
+    // independientes. Corre para TODO el rango (no solo en modo detalle),
+    // igual que ya hace la deteccion de HE de mas abajo, porque afecta el
+    // calendario de cualquier empleado, no solo el detalle de uno puntual.
+    // Alcance acotado a proposito: solo detecta una salida+regreso
+    // COMPLETOS el mismo dia (closedEvents) -- no reproduce la logica de
+    // eventos abiertos/huerfanos de /movements-range (eso queda para la
+    // pantalla de Salidas, que sigue siendo la fuente de verdad del detalle).
     const possibleJustificationByEmployeeDate = new Map();
-    if (detailEmployeeId) {
+    const particularExitByEmployeeDate = new Set(); // `${employeeId}|${date}`
+    {
       const particularMarkerMap = await fetchMarkerMap('PARTICULAR', tenantId);
       const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
       for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
-        const { orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs });
-        orphanReturns
-          .filter(r => r.employeeId === detailEmployeeId)
-          .forEach(r => {
-            const hh = String(r.timeIn.getHours()).padStart(2, '0');
-            const mm = String(r.timeIn.getMinutes()).padStart(2, '0');
-            possibleJustificationByEmployeeDate.set(`${date}|${hh}:${mm}`, { markerTime: `${hh}:${mm}`, category: r.category });
-          });
+        const { closedEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs });
+        closedEvents
+          .filter(ev => ev.category === 'PARTICULAR')
+          .forEach(ev => particularExitByEmployeeDate.add(`${ev.employeeId}|${date}`));
+        if (detailEmployeeId) {
+          orphanReturns
+            .filter(r => r.employeeId === detailEmployeeId)
+            .forEach(r => {
+              const hh = String(r.timeIn.getHours()).padStart(2, '0');
+              const mm = String(r.timeIn.getMinutes()).padStart(2, '0');
+              possibleJustificationByEmployeeDate.set(`${date}|${hh}:${mm}`, { markerTime: `${hh}:${mm}`, category: r.category });
+            });
+        }
       }
     }
 
@@ -3059,6 +3078,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               overtimeManualMinutes: manualMinutesNonWork,
               eventTypeCode: leaveEventNonWork ? (leaveEventNonWork.eventTypeCode || null) : undefined,
               eventTypeDescripcion: leaveEventNonWork ? (leaveEventNonWork.eventTypeDescripcion || null) : undefined,
+              hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
             });
           }
           return;
@@ -3084,7 +3104,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               firstCheckin: checks.length > 0 ? extractTime(checks[0]) : undefined,
               lastCheckin: checks.length > 0 ? extractTime(checks[checks.length - 1]) : undefined,
               totalCheckins: checks.length,
-              overtimeManualMinutes: manualMinutesHoliday
+              overtimeManualMinutes: manualMinutesHoliday,
+              hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
             });
           }
           return;
@@ -3246,7 +3267,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
               eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,
               eventTypeDescripcion: isLate && lateJustifiedThisDay ? (exclusion.eventTypeDescripcion || null) : undefined,
-              possibleJustification
+              possibleJustification,
+              hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
             });
           }
         } else if (exclusion || leaveEvent) {
@@ -3263,7 +3285,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               reason: leaveEvent ? (leaveEvent.observaciones || null) : (exclusion.reason || null),
               eventTypeCode: leaveEvent ? (leaveEvent.eventTypeCode || null) : (exclusion.eventTypeCode || null),
               eventTypeDescripcion: leaveEvent ? (leaveEvent.eventTypeDescripcion || null) : (exclusion.eventTypeDescripcion || null),
-              overtimeManualMinutes: manualMinutesExcused
+              overtimeManualMinutes: manualMinutesExcused,
+              hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
             });
           }
         } else if (!employeeActivo) {
@@ -3274,7 +3297,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const manualMinutesInactive = manualKeyInactive ? (manualMinutesByUserDate.get(manualKeyInactive) || 0) : 0;
           if (manualMinutesInactive > 0) overtimeMinutes += manualMinutesInactive;
           if (days) {
-            days.push({ date, status: 'Inactive', overtimeManualMinutes: manualMinutesInactive });
+            days.push({ date, status: 'Inactive', overtimeManualMinutes: manualMinutesInactive, hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`) });
           }
         } else {
           absent++;
@@ -3282,7 +3305,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           const manualMinutesAbsent = manualKeyAbsent ? (manualMinutesByUserDate.get(manualKeyAbsent) || 0) : 0;
           if (manualMinutesAbsent > 0) overtimeMinutes += manualMinutesAbsent;
           if (days) {
-            days.push({ date, status: 'Absent', overtimeManualMinutes: manualMinutesAbsent });
+            days.push({ date, status: 'Absent', overtimeManualMinutes: manualMinutesAbsent, hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`) });
           }
         }
       });
