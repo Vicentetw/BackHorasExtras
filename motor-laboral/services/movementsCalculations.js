@@ -150,7 +150,15 @@ function detectMovements(checkins, markerMap, options = {}) {
 function closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId) {
   const results = [];
   for (const [employeeId, ev] of openEvents.entries()) {
-    const exit = exitTimeByEmployeeId.get(employeeId) || null;
+    const exitRaw = exitTimeByEmployeeId.get(employeeId) || null;
+    // Mismo bug que openOrphanReturnsAtScheduleEntrance, del otro lado: si
+    // la salida REAL ocurrio tarde (ej. cerca de medianoche), el horario
+    // de salida programado (usado para "cerrar" el evento) puede caer
+    // ANTES de esa salida real -- una duracion negativa que no tiene
+    // sentido. El frontend ya muestra "Sin regreso" para hasReturn=false
+    // sin importar este valor, pero "Duracion" SI se calcula con el; se
+    // descarta en vez de mostrar un numero negativo.
+    const exit = (exitRaw && exitRaw.getTime() > ev.timeOut.getTime()) ? exitRaw : null;
     results.push({
       employeeId,
       category: ev.category,
@@ -176,17 +184,29 @@ function closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId) {
 // entranceTimeByEmployeeId: Map employeeId -> Date|null (ya resuelto por el
 // llamador via scheduleRepository, mismo patron que closeOpenEventsAtScheduleExit).
 function openOrphanReturnsAtScheduleEntrance(orphanReturns, entranceTimeByEmployeeId) {
-  return orphanReturns.map(r => ({
-    employeeId: r.employeeId,
-    category: r.category,
-    timeOut: entranceTimeByEmployeeId.get(r.employeeId) || null,
-    timeIn: r.timeIn,
-    hasReturn: true,
-    // La salida se sintetizo con el horario de entrada programado -- no
-    // hubo ningun marcador real que la abra.
-    salidaMarkerUserId: null,
-    regresoMarkerUserId: r.regresoMarkerUserId ?? null
-  }));
+  return orphanReturns.map(r => {
+    const entrance = entranceTimeByEmployeeId.get(r.employeeId) || null;
+    // Bug real (VERA Tedy Oscar, legajo 9394, 01/04/2026): el regreso real
+    // (ej. 00:04, recien pasada la medianoche) puede caer ANTES del
+    // horario de entrada programado que se usa para "inventar" la salida
+    // -- sintetizarla igual daba una salida DESPUES del regreso (duracion
+    // negativa, "-7h -56m"). Si el horario de entrada no es anterior al
+    // regreso real, no tiene sentido usarlo: se deja sin salida (se
+    // muestra "-" en vez de un numero negativo sin sentido) en lugar de
+    // inventar un dato que contradice al fichaje real.
+    const timeOut = (entrance && entrance.getTime() < r.timeIn.getTime()) ? entrance : null;
+    return {
+      employeeId: r.employeeId,
+      category: r.category,
+      timeOut,
+      timeIn: r.timeIn,
+      hasReturn: true,
+      // La salida se sintetizo con el horario de entrada programado -- no
+      // hubo ningun marcador real que la abra.
+      salidaMarkerUserId: null,
+      regresoMarkerUserId: r.regresoMarkerUserId ?? null
+    };
+  });
 }
 
 // Cantidad de dias de una salida a Campana: dias corridos entre la fecha de

@@ -210,6 +210,23 @@ test('closeOpenEventsAtScheduleExit: cierra con el horario de salida resuelto', 
   }]);
 });
 
+test('closeOpenEventsAtScheduleExit: si la salida real ocurrio DESPUES del horario de salida programado, no sintetiza el regreso (evita una duracion negativa)', () => {
+  // Simetrico al caso de VERA (arriba): una salida real tarde (ej. 22:00)
+  // con el horario de salida programado del dia (13:40 default) cayendo
+  // ANTES -- "cerrar" ahi daria una duracion negativa. El frontend ya
+  // muestra "Sin regreso" para hasReturn=false sin importar timeIn, pero
+  // "Duracion" si usa timeIn -- se descarta en vez de mostrar un negativo.
+  const openEvents = new Map([
+    ['2525', { category: 'PARTICULAR', timeOut: dt('22:00:00'), salidaMarkerUserId: 6 }]
+  ]);
+  const exitTimeByEmployeeId = new Map([['2525', dt('13:40:00')]]);
+
+  const result = closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId);
+
+  assert.equal(result[0].timeIn, null, 'no debe sintetizar un regreso que queda antes de la salida real');
+  assert.equal(result[0].timeOut.getTime(), dt('22:00:00').getTime());
+});
+
 test('openOrphanReturnsAtScheduleEntrance: sintetiza la salida con el horario de entrada programado', () => {
   // Caso real Perrotta 02/07/2026: sin salida abierta, entrada particular a
   // las 08:43:17, con horario de entrada programado 07:00 -- esto es lo que
@@ -231,6 +248,23 @@ test('openOrphanReturnsAtScheduleEntrance: sintetiza la salida con el horario de
     salidaMarkerUserId: null,
     regresoMarkerUserId: 5
   }]);
+});
+
+test('openOrphanReturnsAtScheduleEntrance: si el horario de entrada programado cae DESPUES del regreso real, no se sintetiza (evita una duracion negativa)', () => {
+  // Caso real: VERA Tedy Oscar, legajo 9394, 01/04/2026 -- regreso real
+  // (marcador 3) a las 00:04, con horario de entrada programado 07:00 para
+  // ESE dia -- usar 07:00 como "salida" daria una salida DESPUES del
+  // regreso (duracion "-7h -56m", sin sentido). Se deja sin salida en vez
+  // de inventar un dato que contradice al fichaje real.
+  const orphanReturns = [
+    { employeeId: '9394', category: 'OFICIAL', timeIn: dt('00:04:00'), regresoMarkerUserId: 3 }
+  ];
+  const entranceTimeByEmployeeId = new Map([['9394', dt('07:00:00')]]);
+
+  const result = openOrphanReturnsAtScheduleEntrance(orphanReturns, entranceTimeByEmployeeId);
+
+  assert.equal(result[0].timeOut, null, 'no debe sintetizar una salida que queda despues del regreso real');
+  assert.equal(result[0].timeIn.getTime(), dt('00:04:00').getTime());
 });
 
 test('computeCampanaDias: regreso antes del horario de corte no cuenta el ultimo dia', () => {

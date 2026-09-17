@@ -3311,8 +3311,14 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
     const summaryMap = new Map();
     filteredEvents.forEach(e => {
       const emp = employeeById.get(e.employeeId);
-      const dateStr = formatLocalDate(e.timeOut);
-      const durationMinutes = e.timeIn ? Math.round((e.timeIn - e.timeOut) / 60000) : null;
+      // e.timeOut puede venir null (ver openOrphanReturnsAtScheduleEntrance
+      // -- se descarta la salida sintetizada si quedaria despues del regreso
+      // real). Si no hay salida, la fecha de la fila se toma del regreso
+      // real (e.timeIn), que siempre existe para un evento cerrado.
+      const dateStr = formatLocalDate(e.timeOut || e.timeIn);
+      // `e.timeIn - null` en JS NO da NaN, coerciona null a 0 y da un
+      // numero gigante sin sentido -- hay que chequear timeOut tambien.
+      const durationMinutes = (e.timeIn && e.timeOut) ? Math.round((e.timeIn - e.timeOut) / 60000) : null;
 
       rows.push({
         date: dateStr,
