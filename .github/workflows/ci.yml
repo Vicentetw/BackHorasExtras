@@ -1,0 +1,93 @@
+name: CI backend (deploy)
+
+# Fase 0 del plan de "Bitácora de confianza" -- mismo workflow que el repo
+# de desarrollo (horasDedicacionOnline/backendonline2), adaptado a la
+# estructura plana de este repo (horasdedica.js en la raiz, sin la carpeta
+# backendonline2/). Este repo no recibe PRs de contribuidores (se mergea
+# a mano por mirror desde el repo de desarrollo), asi que el valor real
+# aca es que Render no despliegue un mirror roto: si algo se copio mal o
+# quedo desincronizado al mirrorear, este check lo agarra ANTES del
+# deploy en vez de que el primer aviso sea produccion caida.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: horas_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      MYSQL_ADDON_HOST: 127.0.0.1
+      MYSQL_ADDON_USER: root
+      MYSQL_ADDON_PASSWORD: root
+      MYSQL_ADDON_DB: horas_ci
+      MYSQL_ADDON_PORT: 3306
+      TEST_BASE_URL: http://localhost:3000
+      PORT: 3000
+      # Site/secret keys de PRUEBA oficiales y publicas de Cloudflare
+      # Turnstile ("always passes") -- no son credenciales de nadie.
+      TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA'
+      # ANTHROPIC_API_KEY y MERCADOPAGO_ACCESS_TOKEN NO se configuran aca a
+      # proposito -- los tests que los necesitan se saltan solos.
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Instalar cliente de MySQL
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: Esperar a que MySQL este listo
+        run: |
+          for i in $(seq 1 30); do
+            mysqladmin ping -h127.0.0.1 -uroot -proot --silent && break
+            sleep 2
+          done
+
+      - name: Cargar la foto de esquema de produccion
+        run: mysql -h127.0.0.1 -uroot -proot horas_ci < schema/full_schema_snapshot.sql
+
+      - name: Aplicar migraciones posteriores a la foto (orden alfabetico = orden cronologico)
+        run: |
+          for f in migrations/*.sql; do
+            echo "Aplicando $f"
+            mysql -h127.0.0.1 -uroot -proot horas_ci < "$f"
+          done
+
+      - name: Levantar el backend
+        run: |
+          node horasdedica.js > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/ -o /dev/null && break
+            sleep 1
+          done
+
+      - name: Correr la suite completa
+        run: npm test
+
+      - name: Mostrar el log del servidor si algo fallo
+        if: failure()
+        run: cat server.log || true
