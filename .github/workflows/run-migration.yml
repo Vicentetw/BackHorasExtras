@@ -1,0 +1,51 @@
+name: Correr migracion SQL en produccion (manual)
+
+# Solo se dispara a mano desde la pestaña Actions -- nunca solo, nunca por
+# push/schedule. Pensado para cuando quien pide la migracion no tiene
+# acceso a una terminal (ej. esta con el celular) -- un click ejecuta el/
+# los archivo(s) de migrations/ que se le indique, contra produccion.
+# Version adaptada de horas-dedica-completo/.github/workflows/run-migration.yml
+# a la estructura PLANA de este repo (migrations/ en la raiz, sin la
+# carpeta backendonline2/ del monorepo de desarrollo). Ver
+# migration-runner/run-migration.js para el detalle (valida que solo se
+# puedan correr archivos dentro de migrations/*.sql).
+#
+# Requiere que este repo tenga sus PROPIOS secrets configurados (Settings >
+# Secrets and variables > Actions): MYSQL_ADDON_HOST, MYSQL_ADDON_USER,
+# MYSQL_ADDON_PASSWORD, MYSQL_ADDON_DB, MYSQL_ADDON_PORT -- son un store
+# separado del repo de desarrollo (horas-dedica-completo), no se comparten
+# solos aunque apunten a la misma base.
+on:
+  workflow_dispatch:
+    inputs:
+      migration_files:
+        description: 'Archivo(s) de migrations/ a correr (separados por coma), ej: migrations/20260920_checkins_manual_audit.sql'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run-migration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependencias
+        working-directory: migration-runner
+        run: npm install --omit=dev
+
+      - name: Correr migracion
+        working-directory: .
+        env:
+          MYSQL_ADDON_HOST: ${{ secrets.MYSQL_ADDON_HOST }}
+          MYSQL_ADDON_USER: ${{ secrets.MYSQL_ADDON_USER }}
+          MYSQL_ADDON_PASSWORD: ${{ secrets.MYSQL_ADDON_PASSWORD }}
+          MYSQL_ADDON_DB: ${{ secrets.MYSQL_ADDON_DB }}
+          MYSQL_ADDON_PORT: ${{ secrets.MYSQL_ADDON_PORT }}
+        run: node migration-runner/run-migration.js "${{ inputs.migration_files }}"
