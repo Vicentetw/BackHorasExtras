@@ -43,7 +43,9 @@ test('detectMovements: caso real legajo 2518 (23/07/2026), con ruido y marcadore
     employeeId: '2518',
     category: 'PARTICULAR',
     timeOut: dt('09:43:38'),
-    timeIn: dt('11:05:16')
+    timeIn: dt('11:05:16'),
+    salidaMarkerUserId: 6,
+    regresoMarkerUserId: 5
   });
 });
 
@@ -65,6 +67,8 @@ test('detectMovements: doble lectura del mismo empleado cierra en vez de abrir u
   assert.equal(closedEvents.length, 1);
   assert.equal(closedEvents[0].timeOut.getTime(), dt('14:34:02').getTime());
   assert.equal(closedEvents[0].timeIn.getTime(), dt('14:34:08').getTime());
+  assert.equal(closedEvents[0].salidaMarkerUserId, 4);
+  assert.equal(closedEvents[0].regresoMarkerUserId, 4, 'el marcador 4 vuelto a fichar justo antes queda como diagnostico, aunque su direccion configurada sea SALIDA');
 });
 
 test('detectMovements: sin fichaje de regreso ese dia queda abierta', () => {
@@ -76,7 +80,7 @@ test('detectMovements: sin fichaje de regreso ese dia queda abierta', () => {
 
   assert.equal(closedEvents.length, 0);
   assert.equal(openEvents.size, 1);
-  assert.deepEqual(openEvents.get('2525'), { category: 'PARTICULAR', timeOut: dt('09:00:05') });
+  assert.deepEqual(openEvents.get('2525'), { category: 'PARTICULAR', timeOut: dt('09:00:05'), salidaMarkerUserId: 6 });
 });
 
 test('detectMovements: marcador de regreso sin salida abierta no arma un evento cerrado/abierto, pero se reporta como orphanReturn', () => {
@@ -89,7 +93,7 @@ test('detectMovements: marcador de regreso sin salida abierta no arma un evento 
   assert.equal(closedEvents.length, 0);
   assert.equal(openEvents.size, 0);
   assert.equal(orphanReturns.length, 1);
-  assert.deepEqual(orphanReturns[0], { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('09:00:05') });
+  assert.deepEqual(orphanReturns[0], { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('09:00:05'), regresoMarkerUserId: 5 });
 });
 
 test('detectMovements: caso real Perrotta 02/07/2026 -- aviso de entrada particular (regreso antes del primer ingreso del dia)', () => {
@@ -106,7 +110,7 @@ test('detectMovements: caso real Perrotta 02/07/2026 -- aviso de entrada particu
   assert.equal(closedEvents.length, 0);
   assert.equal(openEvents.size, 0);
   assert.equal(orphanReturns.length, 1);
-  assert.deepEqual(orphanReturns[0], { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('08:43:17') });
+  assert.deepEqual(orphanReturns[0], { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('08:43:17'), regresoMarkerUserId: 5 });
 });
 
 test('detectMovements: un marcador vencido (>2min sin consumirse) no se le atribuye a otro empleado', () => {
@@ -139,7 +143,7 @@ test('detectMovements: dentro de la ventana default (30s), el marcador sigue sie
   const { openEvents } = detectMovements(checkins, PARTICULAR_MARKERS);
 
   assert.equal(openEvents.size, 1);
-  assert.deepEqual(openEvents.get('2525'), { category: 'PARTICULAR', timeOut: dt2('13:34:15') });
+  assert.deepEqual(openEvents.get('2525'), { category: 'PARTICULAR', timeOut: dt2('13:34:15'), salidaMarkerUserId: 6 });
 });
 
 test('detectMovements: rebote del propio empleado no consume el marcador de OTRO empleado fichado en el medio', () => {
@@ -182,12 +186,12 @@ test('detectMovements: dos lecturas propias mas alla de la ventana de rebote SI 
   const { openEvents } = detectMovements(checkins, markers);
 
   assert.equal(openEvents.size, 1);
-  assert.deepEqual(openEvents.get('2446'), { category: 'CAMPANA', timeOut: dt2('13:37:25') });
+  assert.deepEqual(openEvents.get('2446'), { category: 'CAMPANA', timeOut: dt2('13:37:25'), salidaMarkerUserId: 8 });
 });
 
 test('closeOpenEventsAtScheduleExit: cierra con el horario de salida resuelto', () => {
   const openEvents = new Map([
-    ['2525', { category: 'PARTICULAR', timeOut: dt('09:00:05') }]
+    ['2525', { category: 'PARTICULAR', timeOut: dt('09:00:05'), salidaMarkerUserId: 6 }]
   ]);
   const exitTimeByEmployeeId = new Map([['2525', dt('13:40:00')]]);
 
@@ -198,7 +202,9 @@ test('closeOpenEventsAtScheduleExit: cierra con el horario de salida resuelto', 
     category: 'PARTICULAR',
     timeOut: dt('09:00:05'),
     timeIn: dt('13:40:00'),
-    hasReturn: false
+    hasReturn: false,
+    salidaMarkerUserId: 6,
+    regresoMarkerUserId: null
   }]);
 });
 
@@ -208,7 +214,7 @@ test('openOrphanReturnsAtScheduleEntrance: sintetiza la salida con el horario de
   // debe aparecer en salidas.html (Particular) como "duración" de la salida
   // particular, igual que cualquier otra fila.
   const orphanReturns = [
-    { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('08:43:17') }
+    { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('08:43:17'), regresoMarkerUserId: 5 }
   ];
   const entranceTimeByEmployeeId = new Map([['2525', dt('07:00:00')]]);
 
@@ -219,7 +225,9 @@ test('openOrphanReturnsAtScheduleEntrance: sintetiza la salida con el horario de
     category: 'PARTICULAR',
     timeOut: dt('07:00:00'),
     timeIn: dt('08:43:17'),
-    hasReturn: true
+    hasReturn: true,
+    salidaMarkerUserId: null,
+    regresoMarkerUserId: 5
   }]);
 });
 

@@ -73,7 +73,16 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   // la suma porque algunos dias de junio ya superaban el tope y quedaban
   // truncados en silencio -- withOvertime (cuantos empleados tienen HE>0)
   // no cambia, un dia topeado ya era >0 antes de la correccion tambien.
-  assert.equal(sumOvertime.toFixed(2), '1747.92', 'suma total de horas extras del mes');
+  //
+  // Actualizado 2026-09-17 (2da vez, mismo dia): 1747.92 -> 1730.31. Bug
+  // real (Perrotta, ver resolveDailyOvertime en overtimeCalculations.js):
+  // un marcador de HE (badge 9) atribuido por error al PRIMER fichaje del
+  // dia de un empleado (su propia entrada normal, no un ingreso real a
+  // HE) generaba una HE fantasma -- se descarta ahora. Baja la suma porque
+  // junio tambien tenia casos asi, no solo el de septiembre que lo
+  // destapo. withOvertime sigue en 74 -- ningun empleado quedo en 0 HE
+  // solo por esto.
+  assert.equal(sumOvertime.toFixed(2), '1730.31', 'suma total de horas extras del mes');
   assert.equal(withOvertime, 74, 'cantidad de empleados con horas extras > 0');
 });
 
@@ -89,7 +98,9 @@ test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conoci
   assert.equal(perrotta.late, 0);
   // Actualizado 2026-09-04 junto con el total de arriba (fallback al corte
   // configurado en vez de "14:00" fijo) -- antes '40.10'.
-  assert.equal(perrotta.overtimeHours, '40.30');
+  // Actualizado 2026-09-17: 40.30 -> 40.23 -- descarte de HE fantasma por
+  // marcador atribuido a su primer fichaje del dia (ver comentario arriba).
+  assert.equal(perrotta.overtimeHours, '40.23');
   assert.equal(perrotta.personalLeaveLimitHours, '4.00');
 });
 

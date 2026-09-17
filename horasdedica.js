@@ -2905,9 +2905,18 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           // (resolveDailyOvertime) para poder testearla sin DB.
           const heInterval = heIntervalsByEmployeeDate.get(`${employeeId}|${date}`);
           const overtimeChecks = checks.map(c => new Date(String(c).replace(' ', 'T')));
+          // Pedido real: "no todos tienen el mismo horario" -- el corte para
+          // el heuristico clasico (Prioridad 2, sin marcador real ese dia) ya
+          // no es un unico valor por empresa: se resuelve por la PLANTILLA de
+          // este empleado ese dia (su propio "Corte HE" si lo tiene cargado,
+          // si no el horario de salida de esa plantilla), y solo cae al
+          // corte global configurado si ni siquiera se pudo resolver un
+          // horario (ver resolveOvertimeCutoffMinutes).
+          const effectiveCutoffMinutes = overtimeCalc.resolveOvertimeCutoffMinutes(schedule, overtimeSettings.cutoffMinutes);
+          const effectiveCapMinutes = overtimeCalc.resolveOvertimeCapMinutes(schedule, overtimeSettings.capMinutes);
           const overtimeResult = overtimeCalc.resolveDailyOvertime(heInterval, overtimeChecks, {
-            cutoffMinutes: overtimeSettings.cutoffMinutes,
-            capMinutes: overtimeSettings.capMinutes
+            cutoffMinutes: effectiveCutoffMinutes,
+            capMinutes: effectiveCapMinutes
           });
           // "Autorizado a hacer horas extras" (employees.overtime_authorized):
           // existia la columna desde hacia tiempo pero ningun motor la
@@ -2945,7 +2954,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           // del dia (automatico + manual, ya sin el omitido) contra el tope
           // configurado; no es solo la parte automatica, un manual que por si
           // solo supere el tope tambien tiene que avisar.
-          const dayOvertimeOverCap = dayOvertimeMinutes > overtimeSettings.capMinutes;
+          const dayOvertimeOverCap = dayOvertimeMinutes > effectiveCapMinutes;
           // Hora exacta en la que arranca la HE automatica (marker o
           // fallback) -- Fase 7, "Horas Extra por Regimen" necesita mostrar
           // entrada / inicio HE / salida por dia, no solo la duracion.
@@ -3171,7 +3180,7 @@ async function fetchMovementCheckins(fromDate, toDateExclusive, tenantId) {
 
 async function fetchMarkerMap(category, tenantId) {
   const params = [];
-  let query = `SELECT userId, category, direction FROM specialusers WHERE isActive = TRUE AND direction IS NOT NULL`;
+  let query = `SELECT userId, category, direction, badgeNumber FROM specialusers WHERE isActive = TRUE AND direction IS NOT NULL`;
   if (category) {
     query += ` AND category = ?`;
     params.push(category);
@@ -3185,7 +3194,7 @@ async function fetchMarkerMap(category, tenantId) {
   }
   const [rows] = await db.query(query, params);
   const markerMap = {};
-  rows.forEach(m => { markerMap[m.userId] = { category: m.category, direction: m.direction }; });
+  rows.forEach(m => { markerMap[m.userId] = { category: m.category, direction: m.direction, badgeNumber: m.badgeNumber }; });
   return markerMap;
 }
 
@@ -3277,6 +3286,15 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
       return dateStr;
     };
 
+    // Pedido real: "que se agreguen dos columnas antes de salida el
+    // marcador si lo hubo... y antes de regreso también" -- para poder
+    // detectar/corregir una atribucion erronea (caso real: AVILA Natalia
+    // 08/04/2026, su propia entrada se tomo como Salida por un marcador
+    // ajeno). salidaMarkerUserId/regresoMarkerUserId ya vienen de
+    // detectMovements -- solo hace falta resolverlos al numero de badge
+    // (mismo markerMap ya cargado arriba, no hace falta otra consulta).
+    const badgeByMarkerUserId = (userId) => (userId != null && markerMap[userId]) ? markerMap[userId].badgeNumber : null;
+
     const rows = [];
     const summaryMap = new Map();
     filteredEvents.forEach(e => {
@@ -3290,7 +3308,9 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
         employeeName: emp.Name,
         badge: emp.Badgenumber,
         category: e.category,
+        salidaMarkerBadge: badgeByMarkerUserId(e.salidaMarkerUserId),
         timeOut: formatLocalDateTime(e.timeOut),
+        regresoMarkerBadge: badgeByMarkerUserId(e.regresoMarkerUserId),
         timeIn: formatLocalDateTime(e.timeIn),
         hasReturn: e.hasReturn,
         durationMinutes

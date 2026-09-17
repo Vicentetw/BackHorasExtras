@@ -33,6 +33,11 @@ function buildScheduleFromBlocks(template, blocks, date) {
     templateId: template.id,
     tenantId: template.tenant_id,
     template_type: template.type || null,
+    // Corte de HE propio de esta plantilla (columna nullable en
+    // work_schedule_templates) -- ver overtimeCalculations.resolveOvertimeCutoffMinutes,
+    // que usa esto en vez del corte único global cuando está cargado.
+    overtimeCutoffTime: template.overtime_cutoff_time || null,
+    overtimeCapMinutes: template.overtime_cap_minutes ?? null,
     blocks,
     blockCount: blocks.length
   };

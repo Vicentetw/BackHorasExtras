@@ -61,7 +61,7 @@ function detectMovements(checkins, markerMap, options = {}) {
   const maxMarkerGapMs = options.maxMarkerGapMs ?? DEFAULT_MAX_MARKER_GAP_MS;
   const ownCheckinBounceMs = options.ownCheckinBounceMs ?? DEFAULT_OWN_CHECKIN_BOUNCE_MS;
   const sorted = checkins.slice().sort((a, b) => a.checktime - b.checktime);
-  let lastMarker = null; // { category, direction, markedAt }
+  let lastMarker = null; // { category, direction, markedAt, userId }
   const openEvents = new Map();
   const closedEvents = [];
   const orphanReturns = [];
@@ -70,7 +70,7 @@ function detectMovements(checkins, markerMap, options = {}) {
   for (const row of sorted) {
     const marker = markerMap[row.userId];
     if (marker) {
-      lastMarker = { category: marker.category, direction: marker.direction, markedAt: row.checktime };
+      lastMarker = { category: marker.category, direction: marker.direction, markedAt: row.checktime, userId: row.userId };
       continue;
     }
 
@@ -92,11 +92,18 @@ function detectMovements(checkins, markerMap, options = {}) {
       // No se aplica el resguardo de rebote aca a proposito -- cerrar es
       // idempotente en el sentido de que no inventa un evento nuevo, solo
       // le pone fin a uno que ya existia.
+      // Pedido real: "quiero ver que marcador hubo (si lo hubo)" para poder
+      // detectar/corregir una atribucion erronea (ej. AVILA, 08/04/2026 --
+      // su propia entrada se tomo como Salida por un marcador ajeno) --
+      // regresoMarkerUserId es INFORMATIVO, el cierre pasa igual aunque no
+      // haya ningun marcador de regreso pendiente en este momento.
       closedEvents.push({
         employeeId: row.employeeId,
         category: open.category,
         timeOut: open.timeOut,
-        timeIn: row.checktime
+        timeIn: row.checktime,
+        salidaMarkerUserId: open.salidaMarkerUserId,
+        regresoMarkerUserId: lastMarker ? lastMarker.userId : null
       });
       openEvents.delete(row.employeeId);
       lastMarker = null;
@@ -118,13 +125,15 @@ function detectMovements(checkins, markerMap, options = {}) {
     if (lastMarker && lastMarker.direction === 'SALIDA') {
       openEvents.set(row.employeeId, {
         category: lastMarker.category,
-        timeOut: row.checktime
+        timeOut: row.checktime,
+        salidaMarkerUserId: lastMarker.userId
       });
     } else if (lastMarker && lastMarker.direction === 'REGRESO') {
       orphanReturns.push({
         employeeId: row.employeeId,
         category: lastMarker.category,
-        timeIn: row.checktime
+        timeIn: row.checktime,
+        regresoMarkerUserId: lastMarker.userId
       });
     }
     lastMarker = null;
@@ -147,7 +156,11 @@ function closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId) {
       category: ev.category,
       timeOut: ev.timeOut,
       timeIn: exit,
-      hasReturn: false
+      hasReturn: false,
+      salidaMarkerUserId: ev.salidaMarkerUserId ?? null,
+      // El regreso se sintetizo con el horario de salida programado -- no
+      // hubo ningun marcador real que lo cierre.
+      regresoMarkerUserId: null
     });
   }
   return results;
@@ -168,7 +181,11 @@ function openOrphanReturnsAtScheduleEntrance(orphanReturns, entranceTimeByEmploy
     category: r.category,
     timeOut: entranceTimeByEmployeeId.get(r.employeeId) || null,
     timeIn: r.timeIn,
-    hasReturn: true
+    hasReturn: true,
+    // La salida se sintetizo con el horario de entrada programado -- no
+    // hubo ningun marcador real que la abra.
+    salidaMarkerUserId: null,
+    regresoMarkerUserId: r.regresoMarkerUserId ?? null
   }));
 }
 

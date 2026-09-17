@@ -28,11 +28,51 @@
 // usuario ficticio, no de este empleado) que el llamador debe resolver
 // aparte (ver movementsCalculations.js) y usar en lugar de esto cuando estan
 // presentes ese dia.
+const { timeToMinutes } = require('./attendanceCalculations');
+
 const DEFAULT_CUTOFF_MINUTES = 13 * 60 + 40; // 13:40
 const DEFAULT_CAP_MINUTES = 360; // 6:00
 
 function minutesSinceMidnight(date) {
   return date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
+}
+
+// Pedido real del usuario: "no todos tienen el mismo horario" -- un corte de
+// HE unico para toda la empresa (el viejo /config/overtime-settings) no
+// tiene sentido cuando un sereno (22:00-06:00) y un administrativo (09:00-
+// 18:00) conviven en la misma empresa. El corte para el heuristico clasico
+// (Prioridad 2, cuando no hay marcador real ese dia) pasa a resolverse por
+// PLANTILLA de cada empleado:
+//   1. Si la plantilla asignada tiene su propio "Corte HE" (overtime_cutoff_time),
+//      se usa ese -- lo carga un admin en la plantilla (Motor Laboral > Plantillas).
+//   2. Si no, se usa el horario de SALIDA de la plantilla de ese dia (schedule.timeExit)
+//      -- "despues de terminar su horario" (solo importa si esta autorizado a
+//      hacer HE, algo que ya se filtra aparte via employees.overtime_authorized/
+//      overtimeAuthorizationMode, no es responsabilidad de esta funcion).
+//   3. Si no se pudo resolver ni siquiera el horario (schedule null/sin timeExit
+//      -- caso raro, dato faltante), cae al corte global configurado
+//      (globalCutoffMinutes) como ultimo respaldo, para no dejar de calcular HE.
+// schedule: el objeto que ya arma scheduleRepository.buildScheduleFromBlocks
+// (trae overtimeCutoffTime y timeExit) -- puede ser null si no se pudo resolver.
+function resolveOvertimeCutoffMinutes(schedule, globalCutoffMinutes) {
+  if (schedule && schedule.overtimeCutoffTime) {
+    return timeToMinutes(schedule.overtimeCutoffTime);
+  }
+  if (schedule && schedule.timeExit) {
+    return timeToMinutes(schedule.timeExit);
+  }
+  return globalCutoffMinutes ?? DEFAULT_CUTOFF_MINUTES;
+}
+
+// Mismo criterio que resolveOvertimeCutoffMinutes, para el TOPE diario de HE:
+// el de la plantilla (si esta cargado) gana sobre el tope global configurado
+// -- sin fallback a "horario de salida" aca (un tope no tiene un equivalente
+// de horario, a diferencia del corte).
+function resolveOvertimeCapMinutes(schedule, globalCapMinutes) {
+  if (schedule && schedule.overtimeCapMinutes !== null && schedule.overtimeCapMinutes !== undefined) {
+    return Number(schedule.overtimeCapMinutes);
+  }
+  return globalCapMinutes ?? DEFAULT_CAP_MINUTES;
 }
 
 // checkins: Date[] -- todos los fichajes de UN empleado en UN dia (no hace
@@ -105,10 +145,33 @@ function computeDailyOvertime(checkins, options = {}) {
 //   empleado/dia, o nada si no marco).
 // fallbackChecks: Date[] -- todos los fichajes de ese empleado ese dia,
 //   para la Prioridad 2.
+// Bug real (Perrotta, legajo 2525, 16/09/2026 -- confirmado contra Checkins
+// de produccion): un marcador de "Ingreso a HE" (badge 9) fichado por OTRA
+// persona (ej. un sereno saliendo de su turno) justo antes de que este
+// empleado marcara su entrada normal de la mañana quedaba "vivo" (dentro de
+// maxMarkerGapMs) y detectMovements se lo atribuia a ESE fichaje -- abriendo
+// una HE fantasma desde la hora de entrada normal (6:56) hasta el fichaje
+// siguiente, horas despues (6h43m que nunca pasaron).
+//
+// Un "ingreso a HE" real de esta persona practicamente nunca es TAMBIEN su
+// PRIMER fichaje del dia -- si arranco una hora extra, ya venia trabajando
+// desde la mañana. Si el fichaje que "abrio" el intervalo (heInterval.timeOut)
+// coincide con el primer fichaje del dia de esta persona, es mucho mas
+// probable que el marcador fuera de otra persona y este fichaje, al ser el
+// siguiente en sonar el lector, se lo haya "robado" -- se lo descarta (queda
+// igual que si el marcador no hubiera sonado ese dia).
+function isFirstCheckinOfDay(moment, fallbackChecks) {
+  if (!moment || !fallbackChecks || fallbackChecks.length === 0) return false;
+  const first = fallbackChecks.reduce((min, d) => (d < min ? d : min), fallbackChecks[0]);
+  return first.getTime() === moment.getTime();
+}
+
 function resolveDailyOvertime(heInterval, fallbackChecks, options = {}) {
   const capMinutes = options.capMinutes ?? DEFAULT_CAP_MINUTES;
 
-  if (heInterval && heInterval.timeIn && heInterval.timeOut) {
+  const heIntervalIsSuspicious = !!(heInterval && heInterval.timeOut && isFirstCheckinOfDay(heInterval.timeOut, fallbackChecks));
+
+  if (!heIntervalIsSuspicious && heInterval && heInterval.timeIn && heInterval.timeOut) {
     const minutes = Math.round((heInterval.timeIn - heInterval.timeOut) / 60000);
     if (minutes > 0) {
       return {
@@ -135,5 +198,7 @@ module.exports = {
   DEFAULT_CUTOFF_MINUTES,
   DEFAULT_CAP_MINUTES,
   computeDailyOvertime,
-  resolveDailyOvertime
+  resolveDailyOvertime,
+  resolveOvertimeCutoffMinutes,
+  resolveOvertimeCapMinutes
 };

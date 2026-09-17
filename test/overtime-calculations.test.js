@@ -7,6 +7,8 @@ const assert = require('node:assert/strict');
 const {
   computeDailyOvertime,
   resolveDailyOvertime,
+  resolveOvertimeCutoffMinutes,
+  resolveOvertimeCapMinutes,
   DEFAULT_CUTOFF_MINUTES,
   DEFAULT_CAP_MINUTES
 } = require('../motor-laboral/services/overtimeCalculations');
@@ -32,29 +34,44 @@ test('computeDailyOvertime: sin actividad entre 07:00 y 14:00 -- se descarta (pr
   assert.equal(computeDailyOvertime(checkins), null);
 });
 
-test('computeDailyOvertime: un solo fichaje post-corte -- Auto-Verificar con fallback a las 14:00', () => {
+test('computeDailyOvertime: un solo fichaje post-corte -- Auto-Verificar con fallback al corte configurado', () => {
   // Entro normal, y una unica marca a la salida final (19:00) -- no hay forma
-  // de saber cuando arranco la HE real, se asume 14:00 y se pide verificar.
+  // de saber cuando arranco la HE real, se asume el corte configurado
+  // (13:40 default) y se pide verificar. Antes esto asumia un "14:00" fijo
+  // sin importar el corte configurado -- corregido a pedido del usuario
+  // (el inicio de HE tiene que respetar la hora de corte real).
   const checkins = [dt('07:00:00'), dt('12:30:00'), dt('19:00:00')];
   const result = computeDailyOvertime(checkins);
 
   assert.equal(result.needsVerification, true);
-  assert.equal(result.start.getTime(), dt('14:00:00').getTime());
+  assert.equal(result.start.getTime(), dt('13:40:00').getTime());
   assert.equal(result.end.getTime(), dt('19:00:00').getTime());
-  assert.equal(result.minutes, 300);
+  assert.equal(result.minutes, 320); // 5h20 (13:40 -> 19:00)
 });
 
 test('computeDailyOvertime: el segundo fichaje post-corte es tambien el ultimo -- Auto-Verificar', () => {
   // Solo dos marcas post-corte: la del corte (13:45) y la salida final
   // (19:50) -- tomar la 2da como "reingreso" daria una duracion de 0 (inicio
-  // y fin serian la misma marca). Debe pedir verificar con el fallback de
-  // las 14:00, no calcular una HE de 0 minutos.
+  // y fin serian la misma marca). Debe pedir verificar con el fallback al
+  // corte configurado, no calcular una HE de 0 minutos.
   const checkins = [dt('07:00:00'), dt('13:45:00'), dt('19:50:00')];
   const result = computeDailyOvertime(checkins);
 
   assert.equal(result.needsVerification, true);
-  assert.equal(result.start.getTime(), dt('14:00:00').getTime());
+  assert.equal(result.start.getTime(), dt('13:40:00').getTime());
   assert.equal(result.end.getTime(), dt('19:50:00').getTime());
+});
+
+test('computeDailyOvertime: el fichaje de inicio de HE debe ser POSTERIOR al corte, no igual', () => {
+  // Marca justo EN el corte (13:40:00 con cutoff 13:40) no cuenta como
+  // "post-corte" -- pedido explicito del usuario: tiene que ser posterior,
+  // no exactamente a esa hora. Con esta unica marca post-corte real
+  // ausente, cae al fallback (arranca del corte configurado).
+  const checkins = [dt('07:00:00'), dt('13:40:00'), dt('19:00:00')];
+  const result = computeDailyOvertime(checkins);
+
+  assert.equal(result.needsVerification, true);
+  assert.equal(result.start.getTime(), dt('13:40:00').getTime());
 });
 
 test('computeDailyOvertime: topeado a capMinutes, marca overCap sin descartar', () => {
@@ -80,13 +97,14 @@ test('computeDailyOvertime: cutoff configurable (13:38 en vez del default 13:40)
   assert.equal(withCustomCutoff.start.getTime(), dt('14:10:00').getTime());
 });
 
-test('computeDailyOvertime: fallback de las 14:00 cae DESPUES del ultimo fichaje -- se descarta (fiel a app.js)', () => {
-  // Caso limite real: si el "ultimo fichaje" del dia es antes de las 14:00
-  // (ej. alguien que se retira temprano y las dos unicas marcas post-corte
-  // son casi seguidas), el fallback de las 14:00 da una duracion negativa.
-  // app.js hace `if (dur <= 0) continue` -- se omite el dia en vez de sumar
-  // una HE negativa. Documentado a proposito, no es un bug de este puerto.
-  const checkins = [dt('07:00:00'), dt('13:45:00'), dt('13:50:00')];
+test('computeDailyOvertime: fallback al corte cae DESPUES del ultimo fichaje -- se descarta', () => {
+  // Caso limite real: si el ultimo fichaje del dia es ANTES del corte (se
+  // retiro temprano, sin ninguna marca post-corte), el fallback -- que
+  // arranca en el corte configurado -- da una duracion negativa. Se omite
+  // el dia en vez de sumar una HE negativa (mismo criterio que ya tenia
+  // app.js con su fallback fijo de las 14:00, solo que ahora el punto de
+  // referencia es el corte real configurado).
+  const checkins = [dt('07:00:00'), dt('12:30:00')];
   assert.equal(computeDailyOvertime(checkins), null);
 });
 
@@ -152,4 +170,73 @@ test('resolveDailyOvertime: intervalo de marcador con duracion invalida (<=0) ta
 test('resolveDailyOvertime: sin marcador ni actividad valida, null (ningun dia con HE)', () => {
   assert.equal(resolveDailyOvertime(null, []), null);
   assert.equal(resolveDailyOvertime(undefined, [dt('15:00:00'), dt('20:00:00')]), null); // sin actividad 07-14h
+});
+
+// Caso real: Perrotta, legajo 2525, 16/09/2026. Otra persona (probablemente
+// un sereno saliendo de su turno) fichó el marcador "Ingreso a HE" (badge 9)
+// justo antes de que Perrotta marcara su entrada normal de la mañana (6:56)
+// -- el marcador seguia "vivo" y detectMovements se lo atribuyo a ESE
+// fichaje, abriendo una HE fantasma de 6:56 hasta su fichaje siguiente
+// (6h43m que nunca pasaron). Confirmado contra los Checkins reales de
+// produccion antes de este fix.
+test('resolveDailyOvertime: el intervalo de marcador se descarta si "abre" con el PRIMER fichaje del dia de la persona', () => {
+  const heInterval = { timeOut: dt('06:56:00'), timeIn: dt('13:39:00') }; // 6h43 -- fantasma
+  const fallbackChecks = [dt('06:56:00'), dt('13:39:00')];
+
+  const result = resolveDailyOvertime(heInterval, fallbackChecks);
+
+  // Sin actividad entre 07:00 y 14:00 en este ejemplo puntual -- computeDailyOvertime
+  // devuelve null (mismo criterio que "sin marcador ese dia"), no los 6h43m fantasma.
+  assert.equal(result, null);
+});
+
+// Corte de HE por plantilla (pedido real: "no todos tienen el mismo
+// horario") -- reemplaza el corte único global como fuente principal.
+test('resolveOvertimeCutoffMinutes: usa el corte propio de la plantilla cuando existe', () => {
+  const schedule = { overtimeCutoffTime: '18:00:00', timeExit: '17:00:00' };
+  assert.equal(resolveOvertimeCutoffMinutes(schedule, 820), 18 * 60);
+});
+
+test('resolveOvertimeCutoffMinutes: sin corte propio, usa el horario de salida de la plantilla', () => {
+  const schedule = { overtimeCutoffTime: null, timeExit: '22:30:00' }; // ej. un sereno
+  assert.equal(resolveOvertimeCutoffMinutes(schedule, 820), 22 * 60 + 30);
+});
+
+test('resolveOvertimeCutoffMinutes: sin plantilla resuelta, cae al corte global configurado', () => {
+  assert.equal(resolveOvertimeCutoffMinutes(null, 820), 820);
+  assert.equal(resolveOvertimeCutoffMinutes({}, 820), 820);
+});
+
+test('resolveOvertimeCutoffMinutes: sin plantilla ni corte global, cae al default histórico (13:40)', () => {
+  assert.equal(resolveOvertimeCutoffMinutes(null, undefined), DEFAULT_CUTOFF_MINUTES);
+});
+
+test('resolveOvertimeCapMinutes: usa el tope propio de la plantilla cuando esta cargado', () => {
+  assert.equal(resolveOvertimeCapMinutes({ overtimeCapMinutes: 180 }, 360), 180);
+});
+
+test('resolveOvertimeCapMinutes: tope propio en 0 es un valor valido (no cae al global)', () => {
+  assert.equal(resolveOvertimeCapMinutes({ overtimeCapMinutes: 0 }, 360), 0);
+});
+
+test('resolveOvertimeCapMinutes: sin tope propio, cae al tope global configurado', () => {
+  assert.equal(resolveOvertimeCapMinutes({ overtimeCapMinutes: null }, 360), 360);
+  assert.equal(resolveOvertimeCapMinutes(null, 360), 360);
+});
+
+test('resolveOvertimeCapMinutes: sin plantilla ni tope global, cae al default histórico (360)', () => {
+  assert.equal(resolveOvertimeCapMinutes(null, undefined), DEFAULT_CAP_MINUTES);
+});
+
+test('resolveDailyOvertime: el intervalo de marcador se respeta si NO coincide con el primer fichaje del dia', () => {
+  // Mismo heInterval que arriba, pero esta persona ya tenia un fichaje ANTES
+  // (entrada normal real a las 06:30) -- el marcador de las 06:56 no es su
+  // primer fichaje del dia, se confia en el normalmente.
+  const heInterval = { timeOut: dt('06:56:00'), timeIn: dt('13:39:00') };
+  const fallbackChecks = [dt('06:30:00'), dt('06:56:00'), dt('13:39:00')];
+
+  const result = resolveDailyOvertime(heInterval, fallbackChecks);
+
+  assert.equal(result.source, 'marker');
+  assert.equal(result.minutes, 403); // 6h43, real esta vez
 });
