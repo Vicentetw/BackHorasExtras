@@ -387,6 +387,225 @@ app.delete('/delete/manual/:id', requirePermission('attendance', 'delete'), asyn
   }
 });
 
+// Pedido real: "fichaje manual" (no le tomó la huella, corte de luz, reloj
+// descompuesto) inserta directo en Checkins -- un cambio con impacto real
+// en las horas calculadas de toda la empresa, a diferencia de ManualEntries
+// (que solo agrega HE aparte). Por eso queda APAGADO por defecto y requiere
+// que un admin de la empresa (permiso settings:update) lo habilite a
+// propósito, ademas del permiso attendance:create que ya hace falta para
+// usarlo -- doble candado, ver migración 20260920_checkins_manual_audit.
+app.get('/config/manual-checkins-enabled', requirePermission('settings', 'read'), async (req, res) => {
+  try {
+    const value = await getAppSetting('manualCheckinsEnabled', resolveTenantId(req), db);
+    res.json({ manualCheckinsEnabled: value === 'true' });
+  } catch (err) {
+    console.error('ERROR fetching manualCheckinsEnabled:', err);
+    res.status(500).json({ error: 'Error fetching manualCheckinsEnabled' });
+  }
+});
+
+app.post('/config/manual-checkins-enabled', requirePermission('settings', 'update'), async (req, res) => {
+  try {
+    const enabled = !!req.body.manualCheckinsEnabled;
+    await setAppSetting('manualCheckinsEnabled', resolveTenantId(req), String(enabled), db);
+    res.json({ ok: true, manualCheckinsEnabled: enabled });
+  } catch (err) {
+    console.error('ERROR saving manualCheckinsEnabled:', err);
+    res.status(500).json({ error: 'Error saving manualCheckinsEnabled' });
+  }
+});
+
+const MANUAL_CHECKIN_CATEGORIES = ['corte_luz', 'reloj_descompuesto', 'no_tomo_huella', 'otro'];
+
+// Resuelve el USERID de reloj (Checkins.USERID) de un empleado a partir de
+// su legajo -- mismo identificador (employeeId) que ya usan /attendance-range
+// y /movements-range en este archivo, no el id interno. Un empleado sin
+// usuario de reloj vinculado (nunca matcheado, ver /matching) no tiene forma
+// de recibir un fichaje -- se lo excluye con un motivo explicito en vez de
+// fallar en silencio.
+async function resolveCheckinUserId(employeeId, tenantId, db) {
+  const [rows] = await db.query(
+    `SELECT u.USERID
+     FROM employees e
+     JOIN user_employee_map ue ON ue.employee_id = e.id
+     JOIN users u ON u.USERID = ue.USERID AND u.tenant_id = ue.tenant_id
+     WHERE e.employee_id = ? AND e.tenant_id = ?
+     LIMIT 1`,
+    [employeeId, tenantId]
+  );
+  return rows.length > 0 ? rows[0].USERID : null;
+}
+
+// POST /api/manual-checkins -- alta en bloque (uno o varios empleados, un
+// fichaje cada uno). No hay campo "entrada/salida": el motor ya decide eso
+// por el ORDEN de los fichajes del dia (igual que un fichaje real de reloj),
+// no hace falta que el admin lo indique.
+app.post('/api/manual-checkins', requirePermission('attendance', 'create'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId === null) {
+      return res.status(400).json({ error: 'Falta indicar la empresa (tenantId)' });
+    }
+
+    const enabledValue = await getAppSetting('manualCheckinsEnabled', tenantId, db);
+    if (enabledValue !== 'true') {
+      return res.status(403).json({ error: 'El fichaje manual no está habilitado para esta empresa' });
+    }
+
+    const entries = Array.isArray(req.body.entries) ? req.body.entries : [];
+    if (entries.length === 0) {
+      return res.status(400).json({ error: 'entries es requerido y no puede estar vacío' });
+    }
+
+    const resolved = [];
+    const unresolved = [];
+    for (const entry of entries) {
+      const { employeeId, checktime, motivoCategoria, motivoDetalle } = entry || {};
+      const checkTimeMySQL = toMySQLDatetime(checktime);
+      if (!employeeId || !checkTimeMySQL) {
+        unresolved.push({ employeeId: employeeId ?? null, reason: 'Fecha/hora inválida' });
+        continue;
+      }
+      if (motivoCategoria && !MANUAL_CHECKIN_CATEGORIES.includes(motivoCategoria)) {
+        unresolved.push({ employeeId, reason: `motivoCategoria inválido: ${motivoCategoria}` });
+        continue;
+      }
+      const userId = await resolveCheckinUserId(employeeId, tenantId, db);
+      if (userId === null) {
+        unresolved.push({ employeeId, reason: 'Este empleado no tiene un usuario de reloj vinculado (ver Matching)' });
+        continue;
+      }
+      resolved.push({ employeeId, userId, checkTimeMySQL, motivoCategoria: motivoCategoria || null, motivoDetalle: motivoDetalle || null });
+    }
+
+    if (resolved.length === 0) {
+      return res.status(400).json({ error: 'Ningún fichaje pudo cargarse', unresolved });
+    }
+
+    const createdBy = req.appUser ? req.appUser.id : null;
+    const created = [];
+    for (const r of resolved) {
+      const [result] = await db.query(
+        `INSERT INTO Checkins (USERID, tenant_id, CHECKTIME, source, motivo_categoria, motivo_detalle, created_by)
+         VALUES (?, ?, ?, 'manual', ?, ?, ?)`,
+        [r.userId, tenantId, r.checkTimeMySQL, r.motivoCategoria, r.motivoDetalle, createdBy]
+      );
+      await db.query(
+        `INSERT INTO manual_checkin_log
+           (tenant_id, employee_id, checkin_userid, checktime, motivo_categoria, motivo_detalle, action, performed_by)
+         VALUES (?, ?, ?, ?, ?, ?, 'created', ?)`,
+        [tenantId, r.employeeId, r.userId, r.checkTimeMySQL, r.motivoCategoria, r.motivoDetalle, createdBy]
+      );
+      created.push({ id: result.insertId, employeeId: r.employeeId, checktime: r.checkTimeMySQL });
+    }
+
+    res.json({ ok: true, created, unresolved });
+  } catch (err) {
+    console.error('ERROR creating manual checkins:', err);
+    res.status(500).json({ error: 'Error interno al cargar fichajes manuales' });
+  }
+});
+
+// GET /api/manual-checkins -- listado de auditoria (que se cargo, quien, cuando, por que).
+app.get('/api/manual-checkins', requirePermission('attendance', 'read'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const { from, to, employeeId } = req.query;
+
+    const params = [];
+    let where = `c.source = 'manual'`;
+    if (tenantId !== null) {
+      where += ' AND c.tenant_id = ?';
+      params.push(tenantId);
+    }
+    if (from) {
+      where += ' AND c.CHECKTIME >= ?';
+      params.push(`${from} 00:00:00`);
+    }
+    if (to) {
+      where += ' AND c.CHECKTIME <= ?';
+      params.push(`${to} 23:59:59`);
+    }
+    if (employeeId) {
+      where += ' AND e.employee_id = ?';
+      params.push(employeeId);
+    }
+
+    const [rows] = await db.query(
+      `SELECT
+         c.id, c.CHECKTIME AS checktime, c.motivo_categoria, c.motivo_detalle,
+         c.created_at, e.employee_id AS employeeId, COALESCE(e.nombre, u.Name) AS employeeName,
+         au.email AS createdByEmail
+       FROM Checkins c
+       LEFT JOIN users u ON u.USERID = c.USERID AND u.tenant_id = c.tenant_id
+       LEFT JOIN user_employee_map ue ON ue.USERID = u.USERID AND ue.tenant_id = u.tenant_id
+       LEFT JOIN employees e ON e.id = ue.employee_id
+       LEFT JOIN app_users au ON au.id = c.created_by
+       WHERE ${where}
+       ORDER BY c.CHECKTIME DESC
+       LIMIT 500`,
+      params
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('ERROR listing manual checkins:', err);
+    res.status(500).json({ error: 'Error al listar fichajes manuales' });
+  }
+});
+
+// DELETE /api/manual-checkins/:id -- borrado real (no soft-delete, ver
+// comentario en la migracion) + una copia completa en manual_checkin_log
+// ANTES de borrar, para no perder nunca el rastro de auditoria.
+app.delete('/api/manual-checkins/:id', requirePermission('attendance', 'delete'), async (req, res) => {
+  const { id } = req.params;
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ error: 'ID inválido' });
+  }
+  try {
+    const tenantId = resolveTenantId(req);
+    const params = [Number(id)];
+    let tenantClause = '';
+    if (tenantId !== null) {
+      tenantClause = ' AND tenant_id = ?';
+      params.push(tenantId);
+    }
+    const [rows] = await db.query(
+      `SELECT id, tenant_id, USERID, CHECKTIME, motivo_categoria, motivo_detalle
+       FROM Checkins WHERE id = ? AND source = 'manual'${tenantClause}`,
+      params
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Fichaje manual no encontrado' });
+    }
+    const row = rows[0];
+    const performedBy = req.appUser ? req.appUser.id : null;
+
+    const [empRows] = await db.query(
+      `SELECT e.employee_id AS employeeId
+       FROM user_employee_map ue
+       JOIN employees e ON e.id = ue.employee_id
+       WHERE ue.USERID = ? AND ue.tenant_id = ?
+       LIMIT 1`,
+      [row.USERID, row.tenant_id]
+    );
+    const employeeId = empRows.length > 0 ? empRows[0].employeeId : null;
+
+    await db.query(
+      `INSERT INTO manual_checkin_log
+         (tenant_id, employee_id, checkin_userid, checktime, motivo_categoria, motivo_detalle, action, performed_by)
+       VALUES (?, ?, ?, ?, ?, ?, 'deleted', ?)`,
+      [row.tenant_id, employeeId, row.USERID, row.CHECKTIME, row.motivo_categoria, row.motivo_detalle, performedBy]
+    );
+
+    await db.query(`DELETE FROM Checkins WHERE id = ?`, [row.id]);
+
+    res.json({ ok: true, deletedId: row.id });
+  } catch (err) {
+    console.error('ERROR deleting manual checkin:', err);
+    res.status(500).json({ error: 'Error al borrar el fichaje manual' });
+  }
+});
+
 // Pedido real: "que no puedan subir cualquier archivo" -- el input del
 // frontend ya filtraba por accept=".csv", pero eso es solo una sugerencia
 // del navegador, no un chequeo real (se salta con cualquier cliente que no

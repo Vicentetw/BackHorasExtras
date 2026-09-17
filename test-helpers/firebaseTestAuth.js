@@ -24,7 +24,7 @@ function initAdmin() {
 // aislamiento por TENANT (no de permisos) no se vean afectados por el
 // gating de permisos de cada ruta. Pasar { permissions: [...] } explicito
 // para probar puntualmente el efecto de un permiso faltante.
-const ALL_PERMISSIONS = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'users']
+const ALL_PERMISSIONS = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'settings', 'users']
   .flatMap((m) => ['read', 'create', 'update', 'delete'].map((a) => `${m}:${a}`));
 
 // Por default el usuario de prueba es superadmin (ve todos los tenants),
