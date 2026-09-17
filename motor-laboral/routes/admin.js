@@ -247,8 +247,20 @@ function createMotorLaboralAdminRoutes(db) {
   router.get('/templates/:id/blocks', requirePermission('schedules', 'read'), async (req, res) => {
     try {
       const { id } = req.params;
+      // Bug real reportado: "modifico un horario y no guarda los cambios" --
+      // este endpoint devolvia las columnas crudas de la tabla
+      // (block_name, block_type), pero el frontend (ShiftBlock en
+      // motor-laboral.ts, igual que WorkScheduleTemplate) siempre esperó
+      // "name"/"type" -- ni siquiera la LECTURA coincidia (la columna
+      // "Nombre"/"Tipo" de la tabla de bloques quedaba vacia en pantalla),
+      // y el guardado (POST/PUT, mas abajo) esperaba ademas un tercer
+      // vocabulario distinto (dayOfWeek/startTime/blockType camelCase) que
+      // el Angular nunca mando -- de ahi el 400 "dayOfWeek, startTime,
+      // endTime y blockType son requeridos" con cualquier edicion real.
       const [rows] = await db.query(
-        `SELECT * FROM shift_blocks WHERE template_id = ? ORDER BY day_of_week ASC, start_time ASC`,
+        `SELECT id, template_id, day_of_week, block_name AS name, start_time, end_time,
+                block_type AS type, crosses_midnight, active, created_at, updated_at
+         FROM shift_blocks WHERE template_id = ? ORDER BY day_of_week ASC, start_time ASC`,
         [id]
       );
       res.json(rows);
@@ -262,23 +274,23 @@ function createMotorLaboralAdminRoutes(db) {
     try {
       const { id } = req.params;
       const {
-        dayOfWeek,
-        blockName,
-        startTime,
-        endTime,
-        blockType,
-        crossesMidnight,
+        day_of_week,
+        name,
+        start_time,
+        end_time,
+        type,
+        crosses_midnight,
         active
       } = req.body;
 
-      if (dayOfWeek === undefined || !startTime || !endTime || !blockType) {
-        return res.status(400).json({ error: 'dayOfWeek, startTime, endTime y blockType son requeridos' });
+      if (day_of_week === undefined || !start_time || !end_time || !type) {
+        return res.status(400).json({ error: 'day_of_week, start_time, end_time y type son requeridos' });
       }
 
       const [result] = await db.query(
         `INSERT INTO shift_blocks (template_id, day_of_week, block_name, start_time, end_time, block_type, crosses_midnight, active)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, dayOfWeek, blockName || null, startTime, endTime, blockType, crossesMidnight ? 1 : 0, active ? 1 : 0]
+        [id, day_of_week, name || null, start_time, end_time, type, crosses_midnight ? 1 : 0, active ? 1 : 0]
       );
       res.json({ ok: true, id: result.insertId });
     } catch (err) {
@@ -291,22 +303,22 @@ function createMotorLaboralAdminRoutes(db) {
     try {
       const { id } = req.params;
       const {
-        dayOfWeek,
-        blockName,
-        startTime,
-        endTime,
-        blockType,
-        crossesMidnight,
+        day_of_week,
+        name,
+        start_time,
+        end_time,
+        type,
+        crosses_midnight,
         active
       } = req.body;
 
-      if (dayOfWeek === undefined || !startTime || !endTime || !blockType) {
-        return res.status(400).json({ error: 'dayOfWeek, startTime, endTime y blockType son requeridos' });
+      if (day_of_week === undefined || !start_time || !end_time || !type) {
+        return res.status(400).json({ error: 'day_of_week, start_time, end_time y type son requeridos' });
       }
 
       const [result] = await db.query(
         `UPDATE shift_blocks SET day_of_week = ?, block_name = ?, start_time = ?, end_time = ?, block_type = ?, crosses_midnight = ?, active = ? WHERE id = ?`,
-        [dayOfWeek, blockName || null, startTime, endTime, blockType, crossesMidnight ? 1 : 0, active ? 1 : 0, id]
+        [day_of_week, name || null, start_time, end_time, type, crosses_midnight ? 1 : 0, active ? 1 : 0, id]
       );
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {
