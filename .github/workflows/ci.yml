@@ -70,11 +70,30 @@ jobs:
       - name: Cargar la foto de esquema de produccion
         run: mysql -h127.0.0.1 -uroot -proot horas_ci < schema/full_schema_snapshot.sql
 
-      - name: Aplicar migraciones posteriores a la foto (orden alfabetico = orden cronologico)
+      - name: Aplicar migraciones posteriores a la foto
+        # Bug real de la primera corrida: corría TODAS las migraciones,
+        # incluidas las viejas de antes de la guarda de information_schema
+        # (ej. julio 2026) -- esas hacen ALTER TABLE ADD COLUMN liso, y la
+        # columna YA está en la foto de esquema (2026-09-11) -> "ERROR 1060
+        # Duplicate column name". Se filtra por nombre (YYYYMMDD_...) en vez
+        # de confiar en que toda migración sea idempotente.
         run: |
           for f in migrations/*.sql; do
-            echo "Aplicando $f"
-            mysql -h127.0.0.1 -uroot -proot horas_ci < "$f"
+            base=$(basename "$f")
+            case "$base" in
+              [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_*)
+                prefix=${base:0:8}
+                if [ "$prefix" -ge "20260911" ]; then
+                  echo "Aplicando $f"
+                  mysql -h127.0.0.1 -uroot -proot horas_ci < "$f"
+                else
+                  echo "Saltando $f (anterior a la foto de esquema, ya reflejado en full_schema_snapshot.sql)"
+                fi
+                ;;
+              *)
+                echo "Saltando $f (sin fecha en el nombre, anterior a la foto de esquema)"
+                ;;
+            esac
           done
 
       - name: Levantar el backend
