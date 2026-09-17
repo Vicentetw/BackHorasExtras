@@ -366,6 +366,7 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
       });
     }
 
+
     // Verificar que existe (y que pertenece a la empresa del que pide el
     // cambio -- un empleado de otra empresa se trata igual que si no
     // existiera, para no filtrar ni siquiera que existe)
@@ -385,11 +386,19 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
     }
 
     const previousBadge = existing[0].employee_id;
-    // Un usuario normal no puede mover un empleado a otra empresa; solo el
-    // superadmin puede reasignar tenant_id explicitamente.
+    // Bug real (corrompio en produccion el tenant_id de 2 empleados
+    // editados por un superadmin, ej. al asignarles ciudad): un usuario
+    // normal no puede mover un empleado a otra empresa (ignora el body,
+    // conserva el actual); para superadmin, ANTES se usaba directamente
+    // `tenant_id || null` del body -- el dialogo de editar empleado NUNCA
+    // manda ese campo, asi que CUALQUIER guardado de un superadmin
+    // pisaba el tenant_id real del empleado con NULL en silencio. Ahora
+    // solo se reasigna si el body manda un tenant_id explicito (>0); si
+    // no, se conserva el que ya tenia -- igual que ya hacia el usuario
+    // normal.
     const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
       ? existing[0].tenant_id
-      : (tenant_id || null);
+      : (tenant_id !== undefined && tenant_id !== null && tenant_id !== '' ? tenant_id : existing[0].tenant_id);
 
     // Verificar que no haya conflicto de legajo
     const normalizedDocumento = documento ? String(documento).trim() : null;
