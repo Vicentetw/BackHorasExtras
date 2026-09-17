@@ -6,7 +6,9 @@ const {
   detectMovements,
   closeOpenEventsAtScheduleExit,
   openOrphanReturnsAtScheduleEntrance,
-  computeCampanaDias
+  computeCampanaDias,
+  isFirstRealCheckinOfDay,
+  filterEventsOpenedByFirstCheckinOfDay
 } = require('../motor-laboral/services/movementsCalculations');
 
 const PARTICULAR_MARKERS = {
@@ -251,4 +253,65 @@ test('computeCampanaDias: salida y regreso el mismo dia cuentan 1 dia (regreso d
   const timeOut = new Date('2026-08-10T08:00:00');
   const timeIn = new Date('2026-08-10T18:00:00');
   assert.equal(computeCampanaDias(timeOut, timeIn, '09:00'), 1);
+});
+
+// Caso real: AVILA Natalia, legajo 9006, 08/04/2026 y 14/04/2026 -- una
+// llegada tarde (07:23) quedó marcada como "Salida Particular" de
+// 6h29m/6h37m que nunca pasó (badge 6 fichado por otra persona justo
+// antes de que Natalia marcara su propia entrada de la mañana).
+test('isFirstRealCheckinOfDay: detecta cuando timeOut coincide con el primer fichaje real del dia de esa persona', () => {
+  const dayCheckins = [
+    { checktime: dt('07:23:00'), userId: '9006', employeeId: '9006' },
+    { checktime: dt('13:51:00'), userId: '9006', employeeId: '9006' }
+  ];
+  assert.equal(isFirstRealCheckinOfDay('9006', dt('07:23:00'), dayCheckins), true);
+  assert.equal(isFirstRealCheckinOfDay('9006', dt('13:51:00'), dayCheckins), false);
+});
+
+test('isFirstRealCheckinOfDay: sin fichajes de esa persona ese dia, false (no revienta)', () => {
+  assert.equal(isFirstRealCheckinOfDay('9006', dt('07:23:00'), []), false);
+  assert.equal(isFirstRealCheckinOfDay('9006', dt('07:23:00'), null), false);
+});
+
+test('filterEventsOpenedByFirstCheckinOfDay: saca el evento fantasma de AVILA (abrio con su primera entrada del dia)', () => {
+  const dayCheckins = [
+    { checktime: dt('07:23:00'), userId: '9006', employeeId: '9006' },
+    { checktime: dt('13:51:00'), userId: '9006', employeeId: '9006' }
+  ];
+  // El mismo shape que devuelve closeOpenEventsAtScheduleExit para este caso:
+  // se cerro al horario programado (13:51), sin ningun regreso real.
+  const events = [{
+    employeeId: '9006',
+    category: 'PARTICULAR',
+    timeOut: dt('07:23:00'),
+    timeIn: dt('13:51:00'),
+    hasReturn: false,
+    salidaMarkerUserId: 6,
+    regresoMarkerUserId: null
+  }];
+
+  const result = filterEventsOpenedByFirstCheckinOfDay(events, dayCheckins);
+
+  assert.deepEqual(result, []);
+});
+
+test('filterEventsOpenedByFirstCheckinOfDay: NO saca una salida real (abrio bien entrada la jornada, no con la primera entrada)', () => {
+  const dayCheckins = [
+    { checktime: dt('07:02:00'), userId: '2609', employeeId: '2609' }, // entrada normal de la mañana
+    { checktime: dt('14:34:02'), userId: '2609', employeeId: '2609' }, // ahora sí sale
+    { checktime: dt('14:34:08'), userId: '2609', employeeId: '2609' }
+  ];
+  const events = [{
+    employeeId: '2609',
+    category: 'OFICIAL',
+    timeOut: dt('14:34:02'),
+    timeIn: dt('14:34:08'),
+    hasReturn: true,
+    salidaMarkerUserId: 4,
+    regresoMarkerUserId: 4
+  }];
+
+  const result = filterEventsOpenedByFirstCheckinOfDay(events, dayCheckins);
+
+  assert.deepEqual(result, events);
 });

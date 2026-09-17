@@ -161,7 +161,7 @@ function createMotorLaboralAdminRoutes(db) {
       const tenantId = req.appUser && !req.appUser.isSuperadmin
         ? req.appUser.tenantId
         : bodyTenantId;
-      const { name, description, type, active, is_default } = req.body;
+      const { name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });
       }
@@ -174,8 +174,8 @@ function createMotorLaboralAdminRoutes(db) {
         }
       }
       const [result] = await db.query(
-        `INSERT INTO work_schedule_templates (tenant_id, name, description, type, active, is_default) VALUES (?, ?, ?, ?, ?, ?)`,
-        [tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0]
+        `INSERT INTO work_schedule_templates (tenant_id, name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null]
       );
       res.json({ ok: true, id: result.insertId });
     } catch (err) {
@@ -198,7 +198,7 @@ function createMotorLaboralAdminRoutes(db) {
       const tenantId = req.appUser && !req.appUser.isSuperadmin
         ? req.appUser.tenantId
         : bodyTenantId;
-      const { name, description, type, active, is_default } = req.body;
+      const { name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });
       }
@@ -210,9 +210,17 @@ function createMotorLaboralAdminRoutes(db) {
           console.error('Error unsetting other defaults for tenant', tenantId, err2);
         }
       }
+      // Bug real (reportado en vivo): el frontend ya mandaba
+      // overtime_cutoff_time/overtime_cap_minutes en el body (corte y tope
+      // de HE por plantilla), pero este UPDATE nunca los destructuraba ni
+      // los incluia en el SET -- se guardaban en silencio, sin error, como
+      // si nada. "La pongo y no se guarda".
       const [result] = await db.query(
-        `UPDATE work_schedule_templates SET tenant_id = ?, name = ?, description = ?, type = ?, active = ?, is_default = ? WHERE id = ?`,
-        [tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, id]
+        `UPDATE work_schedule_templates
+         SET tenant_id = ?, name = ?, description = ?, type = ?, active = ?, is_default = ?,
+             overtime_cutoff_time = ?, overtime_cap_minutes = ?
+         WHERE id = ?`,
+        [tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null, id]
       );
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {

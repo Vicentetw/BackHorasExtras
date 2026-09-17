@@ -210,9 +210,54 @@ function computeCampanaDias(timeOut, timeIn, cutoffTimeStr) {
   return Math.max(dias, 0);
 }
 
+// Caso real: AVILA Natalia, legajo 9006, abril 2026 -- una llegada tarde
+// (07:23) quedó marcada como "Salida Particular" de 6h29m/6h37m que nunca
+// pasó. Alguien más fichó el marcador de Salida (badge 6) justo antes de
+// que Natalia marcara su propia entrada de la mañana; ese marcador seguía
+// "vivo" (ver maxMarkerGapMs) y detectMovements se lo atribuyó a ESE
+// fichaje -- abriendo una salida fantasma desde su hora de entrada normal.
+// Se cerraba recién al horario de salida programado (por eso "Marcador
+// Regreso" salía vacío: no hubo un regreso real, se cerró por horario).
+//
+// Mismo principio que el fix análogo para HE (ver
+// overtimeCalculations.resolveDailyOvertime): una Salida Particular/
+// Oficial real de una persona prácticamente nunca coincide con su PRIMER
+// fichaje real del día -- si de verdad se fue, ya venía trabajando desde
+// antes. Si coincide, es mucho más probable que el marcador fuera de otra
+// persona.
+//
+// NO se resuelve dentro de detectMovements (que ya tiene una batería de
+// tests con casos reales confirmados, y esta función corre TAMBIÉN para
+// Campaña, donde "primer fichaje del día" no es la pregunta correcta --
+// una salida a Campaña dura varios días, se procesa sobre una ventana
+// larga de hasta 90 días, no día por día). Se expone acá como un filtro
+// aparte, que el llamador aplica SOLO donde corresponde (Particular/
+// Oficial, procesado día por día en /movements-range).
+//
+// dayCheckins: los mismos checkins crudos (con employeeId) de ESE día que
+// ya se le pasaron a detectMovements. Devuelve true si timeOut coincide
+// con el primer fichaje real de ese empleado ese día.
+function isFirstRealCheckinOfDay(employeeId, timeOut, dayCheckins) {
+  let first = null;
+  for (const c of dayCheckins || []) {
+    if (c.employeeId !== employeeId) continue;
+    if (!first || c.checktime < first) first = c.checktime;
+  }
+  return !!(first && timeOut && timeOut.getTime() === first.getTime());
+}
+
+// Aplica isFirstRealCheckinOfDay a un array de eventos (cerrados o los
+// resultados ya de closeOpenEventsAtScheduleExit) -- se sacan los que
+// abrieron con el primer fichaje real del día de esa persona.
+function filterEventsOpenedByFirstCheckinOfDay(events, dayCheckins) {
+  return (events || []).filter((e) => !isFirstRealCheckinOfDay(e.employeeId, e.timeOut, dayCheckins));
+}
+
 module.exports = {
   detectMovements,
   closeOpenEventsAtScheduleExit,
   openOrphanReturnsAtScheduleEntrance,
-  computeCampanaDias
+  computeCampanaDias,
+  isFirstRealCheckinOfDay,
+  filterEventsOpenedByFirstCheckinOfDay
 };

@@ -3241,7 +3241,18 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
     const allEvents = [];
     for (const [dateStr, dayCheckins] of checkinsByDate.entries()) {
       const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, markerMap, { maxMarkerGapMs });
-      allEvents.push(...closedEvents.map(e => ({ ...e, hasReturn: true })));
+      // Bug real: AVILA Natalia, legajo 9006, abril 2026 -- una llegada
+      // tarde quedaba marcada como "Salida Particular" de 6h+ porque el
+      // marcador de Salida lo fichó otra persona justo antes de que Natalia
+      // marcara su propia entrada de la mañana (ver isFirstRealCheckinOfDay
+      // en movementsCalculations.js). Se filtran acá, antes de sumar a la
+      // respuesta -- ni closedEvents ni lo que sale de
+      // closeOpenEventsAtScheduleExit (mismo problema, solo que sigue
+      // "abierta" hasta que la cierra el horario de salida en vez de un
+      // fichaje real).
+      allEvents.push(
+        ...movementsCalc.filterEventsOpenedByFirstCheckinOfDay(closedEvents, dayCheckins).map(e => ({ ...e, hasReturn: true }))
+      );
 
       if (openEvents.size > 0) {
         const exitTimeByEmployeeId = new Map();
@@ -3253,7 +3264,8 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
           const [h, m] = exitTimeStr.split(':').map(Number);
           exitTimeByEmployeeId.set(employeeId, new Date(ev.timeOut.getFullYear(), ev.timeOut.getMonth(), ev.timeOut.getDate(), h, m, 0));
         }
-        allEvents.push(...movementsCalc.closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId));
+        const closedAtScheduleExit = movementsCalc.closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId);
+        allEvents.push(...movementsCalc.filterEventsOpenedByFirstCheckinOfDay(closedAtScheduleExit, dayCheckins));
       }
 
       // "Entrada particular": un regreso huérfano (marcador REGRESO antes del
