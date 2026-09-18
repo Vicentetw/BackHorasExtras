@@ -12,6 +12,19 @@ const { resolveScheduleSegments } = require('../services/scheduleResolver');
 const { resolveToleranceConfig } = require('../services/toleranceResolver');
 const { computeAttendanceResult } = require('../services/timeClassifier');
 const { DAY_TYPES } = require('../services/dayTypeRuleResolver');
+const templateConfigHistoryRepository = require('../repositories/templateConfigHistoryRepository');
+
+// Mismo motivo que ya documenta /attendance-range en horasdedica.js:
+// toISOString() usa UTC, y en un servidor con huso horario negativo
+// (Argentina UTC-3) eso puede correr "hoy" un dia para atras cerca de la
+// medianoche. Se arma la fecha por componentes locales.
+function todayLocalDate() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 const COUNTRY_CODE_RE = /^[A-Z]{2}$/;
 // IP exacta (v4 o v6) o CIDR v4 (ver countryFirewallService.matchesCidr) --
@@ -226,7 +239,10 @@ function createMotorLaboralAdminRoutes(db) {
       // edicion en vez de conservar el valor actual. Se trae `existing`
       // SIEMPRE (antes solo se pedia cuando el caller ya estaba acotado a un
       // tenant) para poder usarlo como fallback.
-      const [[existing]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [id]);
+      // Etapa 14 (hallazgo #3 de la auditoria): se trae la fila COMPLETA
+      // (no solo tenant_id) para poder archivar la configuracion de
+      // tolerancia ANTERIOR si cambia -- ver templateConfigHistoryRepository.
+      const [[existing]] = await db.query('SELECT * FROM work_schedule_templates WHERE id = ?', [id]);
       if (!existing) {
         return res.status(404).json({ error: 'Plantilla no encontrada' });
       }
@@ -257,6 +273,24 @@ function createMotorLaboralAdminRoutes(db) {
           console.error('Error unsetting other defaults for tenant', tenantId, err2);
         }
       }
+      // Etapa 14 (hallazgo #3 de la auditoria): si alguna de las 4
+      // columnas de tolerancia cambia, archivar el estado ANTERIOR antes
+      // de pisarlo -- sin esto, recalcular una fecha pasada usaria la
+      // config NUEVA en vez de la que regia en su momento. No afecta a
+      // ninguna plantilla que nunca cambia su configuracion (el caso de
+      // todas hasta hoy).
+      await templateConfigHistoryRepository.archiveCurrentConfigIfChanged(
+        existing,
+        {
+          tolerancia_entrada_minutos: tolerancia_entrada_minutos ?? null,
+          tolerancia_salida_anticipada_minutos: tolerancia_salida_anticipada_minutos ?? null,
+          politica_llegada_anticipada: politica_llegada_anticipada || null,
+          politica_salida_posterior: politica_salida_posterior || null
+        },
+        todayLocalDate(),
+        db
+      );
+
       // Bug real (reportado en vivo): el frontend ya mandaba
       // overtime_cutoff_time/overtime_cap_minutes en el body (corte y tope
       // de HE por plantilla), pero este UPDATE nunca los destructuraba ni

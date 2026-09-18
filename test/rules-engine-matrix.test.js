@@ -180,19 +180,17 @@ test('turno partido: falta la salida del segundo tramo -> MISSING_EXIT solo en e
   assert.ok(missingExit);
 });
 
-// --- Hallazgos de la Etapa 13 (documentar, NO corregir todavia -- regla
-// explicita del archivo de fases: "documentar comportamiento actual,
-// no cambiarlo todavia"). Se llevan tal cual a la Etapa 14 (auditoria). ---
+// --- Hallazgos de la Etapa 13, CORREGIDOS en la Etapa 14 (ver
+// checkinNormalizer.js) -- se actualizan estos mismos tests para
+// verificar el comportamiento seguro en vez del bug original. ---
 
-test('HALLAZGO Etapa 13: multiples fichajes en UN SOLO segmento -- las marcas de mas se ignoran en silencio', () => {
+test('CORREGIDO (Etapa 14, hallazgo #2): multiples fichajes en UN SOLO segmento -- ya NO se ignoran en silencio, queda incidencia explicita', () => {
   // Un solo bloque WORK (09-18) espera EXACTAMENTE 2 fichajes (entrada,
-  // salida) -- el emparejamiento posicional (checkinIn=checkins[0],
-  // checkinOut=checkins[1]) no sabe que hacer con marcas de mas. Si
-  // alguien vuelve a fichar a mitad de dia (ej. sale a un tramite y
-  // vuelve, sin que su plantilla tenga un segundo bloque WORK), el motor
-  // toma la SEGUNDA marca cronologica como si fuera la salida real y
-  // nunca llega a leer las siguientes -- 5 horas de trabajo real (14:00 a
-  // 18:00) desaparecen sin ninguna incidencia que lo delate.
+  // salida). El emparejamiento posicional sigue usando las primeras 2
+  // marcas (adivinar cual de las 2 marcas de en medio es la "real" seria
+  // peor que no saberlo) -- pero ahora UNEXPECTED_EXTRA_CHECKINS deja
+  // registradas las marcas sobrantes (14:00, 18:00) para que un admin las
+  // revise, en vez de que desaparezcan sin dejar rastro.
   const seg = segment();
   const result = computeAttendanceResult({
     segments: [seg],
@@ -200,15 +198,16 @@ test('HALLAZGO Etapa 13: multiples fichajes en UN SOLO segmento -- las marcas de
     toleranceConfig: resolveToleranceConfig({}, 10),
     isOvertimeAuthorized: true
   });
-  assert.equal(result.normalMinutes, 240, '09:00 a 13:00 -- las marcas 14:00 y 18:00 se pierden en silencio, sin incidencia');
-  assert.equal(result.incidents.length, 0, 'ninguna incidencia avisa que hubo mas fichajes de los esperados -- HALLAZGO para Etapa 14');
+  assert.equal(result.normalMinutes, 240, '09:00 a 13:00 -- el emparejamiento de las 2 primeras marcas no cambia (no hay forma segura de adivinar mejor)');
+  const extra = result.incidents.find((i) => i.type === 'UNEXPECTED_EXTRA_CHECKINS');
+  assert.ok(extra, 'ahora SI queda una incidencia explicita -- ya no desaparece sin rastro');
+  assert.deepEqual(extra.extra, [m('14:00'), m('18:00')]);
 });
 
-test('HALLAZGO Etapa 13: fichaje duplicado (misma hora dos veces) -- trunca el dia entero a cero, sin avisar', () => {
+test('CORREGIDO (Etapa 14, hallazgo #2): fichaje duplicado (misma hora dos veces) -- ya NO trunca el dia, se ignora el duplicado y se usa la salida real', () => {
   // Un reloj que registra la misma marca dos veces (rebote, doble tilde)
-  // hace que checkinOut tome ese duplicado (09:00) en vez de la salida
-  // real (18:00) -- overlapEnd == overlapStart, normalMinutes = 0. El
-  // fichaje real de salida (18:00) queda completamente sin leer.
+  // ya no hace que checkinOut tome ese duplicado -- se colapsa antes de
+  // emparejar, y el dia se calcula CORRECTAMENTE con la salida real.
   const seg = segment();
   const result = computeAttendanceResult({
     segments: [seg],
@@ -216,8 +215,9 @@ test('HALLAZGO Etapa 13: fichaje duplicado (misma hora dos veces) -- trunca el d
     toleranceConfig: resolveToleranceConfig({}, 10),
     isOvertimeAuthorized: true
   });
-  assert.equal(result.normalMinutes, 0, 'el dia entero queda en cero -- HALLAZGO para Etapa 14, no una correccion de esta etapa');
-  assert.equal(result.incidents.length, 0, 'tampoco hay ninguna incidencia que marque un fichaje duplicado como sospechoso');
+  assert.equal(result.normalMinutes, 540, 'el dia se calcula bien -- 09:00 a 18:00, el duplicado no lo arruina mas');
+  const duplicateIncident = result.incidents.find((i) => i.type === 'DUPLICATE_CHECKIN_IGNORED');
+  assert.ok(duplicateIncident, 'queda una incidencia explicita marcando que hubo un duplicado, aunque el calculo ya sea correcto');
 });
 
 test('HALLAZGO Etapa 13: cambio de configuracion de plantilla (tolerancia) NO tiene vigencia historica, a diferencia de los convenios', () => {

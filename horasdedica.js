@@ -44,6 +44,11 @@ const { resolveScheduleSegments } = require('./motor-laboral/services/scheduleRe
 const { resolveToleranceConfig } = require('./motor-laboral/services/toleranceResolver');
 const { computeAttendanceResult } = require('./motor-laboral/services/timeClassifier');
 const { buildLegacyComparable, compareAttendanceResults } = require('./motor-laboral/services/shadowComparator');
+// Etapa 14 (hallazgo #3 de la auditoria): resuelve la configuracion de
+// tolerancia que regia EN LA FECHA calculada, no la actual de la
+// plantilla -- ver templateConfigHistoryResolver.js.
+const templateConfigHistoryRepository = require('./motor-laboral/repositories/templateConfigHistoryRepository');
+const { resolveHistoricalToleranceFields } = require('./motor-laboral/services/templateConfigHistoryResolver');
 const mercadopagoWebhookRoutes = require('./routes/mercadopagoWebhook');
 const publicRoutes = require('./routes/public');
 
@@ -2759,6 +2764,14 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     const dayTypeRulesForShadow = shadowModeActive
       ? await dayTypeRuleRepository.findForScopes({ tenantIds, templateIds: [...shadowModeTemplateIds] }, db)
       : [];
+    // Etapa 14 (hallazgo #3 de la auditoria): snapshots historicos de
+    // tolerancia para las plantillas en modo sombra -- en la enorme
+    // mayoria de los casos esto es un array vacio (ninguna cambio nunca
+    // su configuracion), y resolveHistoricalToleranceFields cae al
+    // comportamiento de siempre (usar la plantilla en vivo).
+    const templateConfigHistoryForShadow = shadowModeActive
+      ? await templateConfigHistoryRepository.findForTemplates([...shadowModeTemplateIds], db)
+      : [];
     // Diferencias encontradas por TODO el request (todos los empleados,
     // todos los dias) -- se insertan en un solo lote al final, best-effort
     // (un error aca no debe romper la respuesta oficial de /attendance-range).
@@ -3269,10 +3282,17 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               const dayTypeRulesForTemplate = dayTypeRulesForShadow.filter(
                 (r) => r.template_id == null || r.template_id === schedule.templateId
               );
+              // Etapa 14 (hallazgo #3): la config de tolerancia que regia
+              // ESE DIA, no la actual de la plantilla -- sin snapshots
+              // (caso de hoy para toda plantilla que nunca cambio), esto
+              // devuelve schedule.template tal cual, cero cambio.
+              const historicalTemplateConfig = resolveHistoricalToleranceFields(
+                templateConfigHistoryForShadow, schedule.templateId, date, schedule.template
+              );
               const engineResult = computeAttendanceResult({
                 segments: resolveScheduleSegments(schedule.blocks),
                 checkins: checks.map((c) => timeToMinutes(extractTime(c))),
-                toleranceConfig: resolveToleranceConfig(schedule.template, tolerance),
+                toleranceConfig: resolveToleranceConfig(historicalTemplateConfig, tolerance),
                 isOvertimeAuthorized,
                 dayType: shadowDayType,
                 dayTypeRules: dayTypeRulesForTemplate
@@ -3293,11 +3313,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               // una regla de tipo de dia propias cargadas, una diferencia
               // es la funcionalidad nueva funcionando como se pidio, no un
               // bug -- ver shadowComparator.classifyDiff.
-              const hasCustomConfig = !!(schedule.template && (
-                schedule.template.tolerancia_entrada_minutos != null
-                || schedule.template.tolerancia_salida_anticipada_minutos != null
-                || schedule.template.politica_llegada_anticipada != null
-                || schedule.template.politica_salida_posterior != null
+              const hasCustomConfig = !!(historicalTemplateConfig && (
+                historicalTemplateConfig.tolerancia_entrada_minutos != null
+                || historicalTemplateConfig.tolerancia_salida_anticipada_minutos != null
+                || historicalTemplateConfig.politica_llegada_anticipada != null
+                || historicalTemplateConfig.politica_salida_posterior != null
               )) || dayTypeRulesForTemplate.some((r) => r.day_type === shadowDayType);
               const diffs = compareAttendanceResults({ legacy: legacyComparable, engine: engineResult, hasCustomConfig });
               shadowResult = {

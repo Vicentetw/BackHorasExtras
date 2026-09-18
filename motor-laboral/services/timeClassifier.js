@@ -20,6 +20,7 @@
 // dayTypeRules (datos), nunca de una condicion en este archivo.
 const { evaluateEntranceTolerance, evaluateExitTolerance, resolvePolicyOutcome } = require('./toleranceResolver');
 const { resolveOvertimeRate, resolveAllDayRule } = require('./dayTypeRuleResolver');
+const { normalizeCheckins } = require('./checkinNormalizer');
 
 // Un segmento (de resolveScheduleSegments) + hasta 2 fichajes (entrada,
 // salida) ya emparejados posicionalmente -- mismo criterio que ya usa
@@ -206,7 +207,6 @@ function applyAllDayOverride(result, dayTypeRules, dayType, isOvertimeAuthorized
 // Etapa 7 (rate siempre null, ninguna regla ALL_DAY se dispara).
 function computeAttendanceResult({ segments, checkins, toleranceConfig, isOvertimeAuthorized, dayType = 'WORKDAY', dayTypeRules = [] }) {
   const sortedSegments = (segments || []).slice().sort((a, b) => a.startMinutes - b.startMinutes);
-  const sortedCheckins = (checkins || []).slice().sort((a, b) => a - b);
 
   const scheduledMinutes = sortedSegments.reduce((sum, s) => sum + s.durationMinutes, 0);
 
@@ -222,11 +222,19 @@ function computeAttendanceResult({ segments, checkins, toleranceConfig, isOverti
     // Dia sin jornada (franco implicito) -- si igual hay fichajes, se
     // preservan como incidencia, nunca se pierden ni se inventa una
     // clasificacion sin segmento contra el cual compararlos.
-    if (sortedCheckins.length > 0) {
-      incidents.push({ type: 'CHECKIN_ON_NON_SCHEDULED_DAY', checkinsCount: sortedCheckins.length });
+    const rawSortedCheckins = (checkins || []).slice().sort((a, b) => a - b);
+    if (rawSortedCheckins.length > 0) {
+      incidents.push({ type: 'CHECKIN_ON_NON_SCHEDULED_DAY', checkinsCount: rawSortedCheckins.length });
     }
     return { scheduledMinutes: 0, workedMinutes: 0, normalMinutes: 0, overtimeMinutes: 0, unauthorizedMinutes: 0, incidents, classifiedSegments, appliedRules, ruleSetVersion: 1 };
   }
+
+  // Etapa 14 (HALLAZGO #2 de la auditoria): antes de emparejar fichajes
+  // por posicion, colapsar duplicados exactos (rebote de reloj) y dejar
+  // registrada cualquier marca de mas -- nunca desaparecen en silencio.
+  // Ver checkinNormalizer.js.
+  const { checkins: sortedCheckins, incidents: normalizationIncidents } = normalizeCheckins(checkins, sortedSegments.length);
+  incidents.push(...normalizationIncidents);
 
   if (sortedCheckins.length === 0) {
     incidents.push({ type: 'NO_CHECKINS' });
