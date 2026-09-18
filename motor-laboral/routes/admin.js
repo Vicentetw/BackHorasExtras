@@ -7,6 +7,11 @@ const {
   SETTING_COUNTRIES,
   SETTING_IPS
 } = require('../middleware/countryFirewallMiddleware');
+const { timeToMinutes } = require('../services/attendanceCalculations');
+const { resolveScheduleSegments } = require('../services/scheduleResolver');
+const { resolveToleranceConfig } = require('../services/toleranceResolver');
+const { computeAttendanceResult } = require('../services/timeClassifier');
+const { DAY_TYPES } = require('../services/dayTypeRuleResolver');
 
 const COUNTRY_CODE_RE = /^[A-Z]{2}$/;
 // IP exacta (v4 o v6) o CIDR v4 (ver countryFirewallService.matchesCidr) --
@@ -749,6 +754,99 @@ function createMotorLaboralAdminRoutes(db) {
       },
       uptimeSeconds: Math.round(process.uptime())
     });
+  });
+
+  // Etapa 11 del plan "Motor de reglas de asistencia configurable" --
+  // simulador de solo lectura: NUNCA escribe nada en la base. Corre el
+  // motor nuevo (scheduleResolver + toleranceResolver + timeClassifier +
+  // dayTypeRuleResolver) sobre datos hipotéticos, para que un admin pueda
+  // cambiar una configuración y ver de inmediato como cambiaría el
+  // resultado -- sin tocar ningún empleado, plantilla ni fichaje real.
+  // Mismo permiso de LECTURA que el resto del admin de plantillas
+  // (a proposito no exige 'update': simular no modifica nada).
+  router.post('/simulate', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const {
+        templateId,
+        blocks,
+        toleranceOverrides,
+        checkins,
+        dayType,
+        isOvertimeAuthorized,
+        dayTypeRules
+      } = req.body;
+
+      if (!Array.isArray(checkins) || checkins.length === 0) {
+        return res.status(400).json({ error: 'checkins (array de horas "HH:mm") es requerido' });
+      }
+      const effectiveDayType = dayType || 'WORKDAY';
+      if (!DAY_TYPES.includes(effectiveDayType)) {
+        return res.status(400).json({ error: `dayType debe ser uno de: ${DAY_TYPES.join(', ')}` });
+      }
+
+      // Bloques: o se cargan de una plantilla REAL (solo lectura, para
+      // simular "que pasaria si cambio la tolerancia de ESTA plantilla"),
+      // o se reciben hipoteticos directo en el body (para probar un
+      // horario que ni siquiera existe todavia).
+      let sourceBlocks = blocks;
+      let template = null;
+      if (templateId) {
+        const [[tpl]] = await db.query('SELECT * FROM work_schedule_templates WHERE id = ?', [templateId]);
+        if (!tpl) return res.status(404).json({ error: 'Plantilla no encontrada' });
+        const effectiveTenantId = resolveTenantId(req);
+        if (effectiveTenantId !== null && tpl.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ error: 'Plantilla no encontrada' });
+        }
+        template = tpl;
+        if (!sourceBlocks) {
+          const dow = new Date(`${req.body.date || '2026-01-05'}T00:00:00`).getDay(); // lunes por defecto si no se manda fecha
+          const [rows] = await db.query('SELECT * FROM shift_blocks WHERE template_id = ? AND day_of_week = ?', [templateId, dow]);
+          sourceBlocks = rows;
+        }
+      }
+      if (!Array.isArray(sourceBlocks) || sourceBlocks.length === 0) {
+        return res.status(400).json({ error: 'blocks o templateId (con bloques cargados ese día) es requerido' });
+      }
+
+      const segments = resolveScheduleSegments(sourceBlocks);
+      const toleranceConfig = resolveToleranceConfig(
+        { ...(template || {}), ...(toleranceOverrides || {}) },
+        10 // fallback legacy neutro para la simulacion -- no depende de un empleado real
+      );
+      const checkinMinutes = checkins.map((c) => timeToMinutes(c));
+
+      const result = computeAttendanceResult({
+        segments,
+        checkins: checkinMinutes,
+        toleranceConfig,
+        isOvertimeAuthorized: !!isOvertimeAuthorized,
+        dayType: effectiveDayType,
+        dayTypeRules: Array.isArray(dayTypeRules) ? dayTypeRules : []
+      });
+
+      // minutesToTime: para que el frontend arme la linea de tiempo sin
+      // tener que reimplementar la conversion.
+      const minutesToTime = (mins) => {
+        const normalized = ((mins % (24 * 60)) + 24 * 60) % (24 * 60);
+        const h = Math.floor(normalized / 60);
+        const m = normalized % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      };
+
+      res.json({
+        ...result,
+        segments: segments.map((s) => ({ ...s, startTimeLabel: minutesToTime(s.startMinutes), endTimeLabel: minutesToTime(s.endMinutes) })),
+        classifiedSegments: result.classifiedSegments.map((s) => ({
+          ...s,
+          startTimeLabel: minutesToTime(s.startMinutes),
+          endTimeLabel: minutesToTime(s.endMinutes)
+        })),
+        toleranceConfig
+      });
+    } catch (err) {
+      console.error('Motor Laboral admin simulate error:', err);
+      res.status(500).json({ error: 'Error al simular' });
+    }
   });
 
   return router;
