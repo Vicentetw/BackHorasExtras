@@ -172,6 +172,76 @@ test('dia sin jornada (franco) con un fichaje igual: se preserva como incidencia
   assert.ok(result.incidents.some((i) => i.type === 'CHECKIN_ON_NON_SCHEDULED_DAY'));
 });
 
+// --- Etapa 8: horas extra por tipo de dia (feriado/franco/fin de semana) ---
+
+test('Etapa 8: sin ninguna regla de tipo de dia cargada, dayType=HOLIDAY no cambia nada -- igual a la Etapa 7', () => {
+  const seg = segment();
+  const result = computeAttendanceResult({
+    segments: [seg],
+    checkins: [m('09:00'), m('18:00')],
+    toleranceConfig: NO_POLICY_CONFIG,
+    isOvertimeAuthorized: true,
+    dayType: 'HOLIDAY',
+    dayTypeRules: []
+  });
+  assert.equal(result.normalMinutes, 540);
+  assert.equal(result.overtimeMinutes, 0);
+  const normalSeg = result.classifiedSegments.find((s) => s.type === 'NORMAL');
+  assert.equal(normalSeg.rate ?? null, null, 'sin regla configurada, no hay tasa -- nunca "if holiday => 100" hardcodeado');
+});
+
+test('Etapa 8: feriado con regla ALL_DAY rate=100 sin requerir autorizacion -- TODO el tiempo trabajado pasa a OVERTIME al 100%', () => {
+  const seg = segment();
+  const dayTypeRules = [{ day_type: 'HOLIDAY', trigger_type: 'ALL_DAY', rate: 100, requires_authorization: 0 }];
+  const result = computeAttendanceResult({
+    segments: [seg],
+    checkins: [m('09:00'), m('18:00')],
+    toleranceConfig: NO_POLICY_CONFIG,
+    isOvertimeAuthorized: false, // a proposito NO autorizado -- la regla dice que no hace falta
+    dayType: 'HOLIDAY',
+    dayTypeRules
+  });
+  assert.equal(result.normalMinutes, 0, 'ya no queda nada como NORMAL, todo se reclasifico');
+  assert.equal(result.overtimeMinutes, 540);
+  assert.equal(result.unauthorizedMinutes, 0);
+  const seg100 = result.classifiedSegments.find((s) => s.type === 'OVERTIME');
+  assert.equal(seg100.rate, 100);
+});
+
+test('Etapa 8: franco con regla ALL_DAY que SI requiere autorizacion, y el empleado NO esta autorizado -> UNAUTHORIZED_OVERTIME, nunca se pierde', () => {
+  const seg = segment();
+  const dayTypeRules = [{ day_type: 'REST_DAY', trigger_type: 'ALL_DAY', rate: 100, requires_authorization: 1 }];
+  const result = computeAttendanceResult({
+    segments: [seg],
+    checkins: [m('09:00'), m('18:00')],
+    toleranceConfig: NO_POLICY_CONFIG,
+    isOvertimeAuthorized: false,
+    dayType: 'REST_DAY',
+    dayTypeRules
+  });
+  assert.equal(result.overtimeMinutes, 0);
+  assert.equal(result.unauthorizedMinutes, 540);
+  assert.equal(result.workedMinutes, 540, 'el tiempo trabajado no desaparece, solo cambia de clasificacion');
+});
+
+test('Etapa 8: sabado con regla puntual AFTER_SCHEDULE rate=50 -- solo el exceso toma esa tasa, lo normal sigue NORMAL', () => {
+  const seg = segment();
+  const toleranceConfig = resolveToleranceConfig({ politica_salida_posterior: 'EXTRA_SI_AUTORIZADO' }, 10);
+  const dayTypeRules = [{ day_type: 'SATURDAY', trigger_type: 'AFTER_SCHEDULE', rate: 50, requires_authorization: 0 }];
+  const result = computeAttendanceResult({
+    segments: [seg],
+    checkins: [m('09:00'), m('20:00')],
+    toleranceConfig,
+    isOvertimeAuthorized: false,
+    dayType: 'SATURDAY',
+    dayTypeRules
+  });
+  assert.equal(result.normalMinutes, 540, 'lo normal no se toca, la regla solo aplica al exceso');
+  assert.equal(result.overtimeMinutes, 120);
+  const overtimeSeg = result.classifiedSegments.find((s) => s.type === 'OVERTIME');
+  assert.equal(overtimeSeg.rate, 50);
+});
+
 test('turno nocturno (22:00-06:00) fichado exacto: NORMAL = duracion completa del segmento', () => {
   const seg = segment({ start_time: '22:00:00', end_time: '06:00:00', crosses_midnight: 1 });
   const result = computeAttendanceResult({

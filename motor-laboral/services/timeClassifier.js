@@ -1,29 +1,32 @@
-// Etapa 7 del plan "Motor de reglas de asistencia configurable" (ver
-// fases para impletentar avance.txt). Primera version del motor de
-// clasificacion: junta ScheduleResolver (Etapa 5) + toleranceResolver
-// (Etapa 6) para transformar HORARIO + FICHAJES + CONFIGURACION +
-// AUTORIZACION en un CalculationResult (aca "AttendanceResult", nombre
-// adaptado al vocabulario ya usado en el resto del proyecto).
+// Etapas 7 y 8 del plan "Motor de reglas de asistencia configurable" (ver
+// fases para impletentar avance.txt). Motor de clasificacion: junta
+// ScheduleResolver (Etapa 5) + toleranceResolver (Etapa 6) +
+// dayTypeRuleResolver (Etapa 8) para transformar HORARIO + FICHAJES +
+// CONFIGURACION + AUTORIZACION + TIPO DE DIA en un CalculationResult (aca
+// "AttendanceResult", nombre adaptado al vocabulario ya usado en el resto
+// del proyecto).
 //
 // Modulo PURO (sin acceso a DB) -- todavia sin conectar a ningun
-// endpoint. No implementa todavia reglas de horas extra por tipo de dia
-// (feriado/franco/sabado/domingo con tasa propia -- eso es la Etapa 8) ni
-// convenios (Etapa 9): la unica pregunta que resuelve ahora es "el exceso
-// de este segmento, ¿es HE reconocida, no autorizada, o no se computa?",
-// usando la MISMA autorizacion que ya existe en el resto del sistema
+// endpoint. Todavia sin convenios (Etapa 9, RuleResolver): dayTypeRules
+// se recibe ya resuelto por el llamador (filtrado por tenant/plantilla),
+// este modulo no decide CUALES reglas aplican, solo las usa. La
+// autorizacion sigue siendo la MISMA que ya existe en el resto del sistema
 // (overtimeAuthorizationMode + employees.overtime_authorized), pasada
 // como parametro -- este modulo no la resuelve ni la duplica.
 //
 // Principio explicito del documento fuente: nunca se pierde tiempo
 // fichado. Todo intervalo, reconocido o no, queda en classifiedSegments.
+// Y: nunca hardcodear "if holiday => 100" -- la tasa siempre sale de
+// dayTypeRules (datos), nunca de una condicion en este archivo.
 const { evaluateEntranceTolerance, evaluateExitTolerance, resolvePolicyOutcome } = require('./toleranceResolver');
+const { resolveOvertimeRate, resolveAllDayRule } = require('./dayTypeRuleResolver');
 
 // Un segmento (de resolveScheduleSegments) + hasta 2 fichajes (entrada,
 // salida) ya emparejados posicionalmente -- mismo criterio que ya usa
 // evaluateMultiVisitDay en attendanceCalculations.js (N bloques -> 2N
 // marcas alternadas). checkinIn/checkinOut en minutos desde medianoche,
 // o null si falta ese fichaje.
-function classifySegment({ segment, checkinIn, checkinOut, toleranceConfig, isOvertimeAuthorized }) {
+function classifySegment({ segment, checkinIn, checkinOut, toleranceConfig, isOvertimeAuthorized, dayType, dayTypeRules }) {
   const appliedRules = [];
   const classifiedSegments = [];
   let normalMinutes = 0;
@@ -61,7 +64,7 @@ function classifySegment({ segment, checkinIn, checkinOut, toleranceConfig, isOv
     const minutesBefore = segment.startMinutes - checkinIn;
     const outcome = resolvePolicyOutcome(toleranceConfig.politicaLlegadaAnticipada, minutesBefore);
     appliedRules.push({ rule: 'EARLY_ARRIVAL_POLICY', outcome });
-    classifiedSegments.push(applyOutcome(outcome, checkinIn, segment.startMinutes, isOvertimeAuthorized, incidents, 'ANTES_DEL_HORARIO'));
+    classifiedSegments.push(applyOutcome(outcome, checkinIn, segment.startMinutes, isOvertimeAuthorized, incidents, 'ANTES_DEL_HORARIO', dayType, dayTypeRules, 'BEFORE_SCHEDULE'));
   }
 
   // --- Dentro del segmento: NORMAL (lo que realmente se solapa con lo programado) ---
@@ -94,7 +97,7 @@ function classifySegment({ segment, checkinIn, checkinOut, toleranceConfig, isOv
   if (checkinOut != null && checkinOut > effectiveEndMinutes) {
     const outcome = resolvePolicyOutcome(toleranceConfig.politicaSalidaPosterior, checkinOut - effectiveEndMinutes);
     appliedRules.push({ rule: 'LATE_DEPARTURE_POLICY', outcome });
-    classifiedSegments.push(applyOutcome(outcome, effectiveEndMinutes, checkinOut, isOvertimeAuthorized, incidents, 'DESPUES_DEL_HORARIO'));
+    classifiedSegments.push(applyOutcome(outcome, effectiveEndMinutes, checkinOut, isOvertimeAuthorized, incidents, 'DESPUES_DEL_HORARIO', dayType, dayTypeRules, 'AFTER_SCHEDULE'));
   }
 
   // Sumar lo que aporto cada segmento clasificado fuera de NORMAL.
@@ -113,7 +116,10 @@ function classifySegment({ segment, checkinIn, checkinOut, toleranceConfig, isOv
 // Traduce el resultado de resolvePolicyOutcome a un segmento clasificado
 // concreto, aplicando la autorizacion EXISTENTE solo cuando la politica es
 // EXTRA_SI_AUTORIZADO -- las otras 3 politicas no dependen de autorizacion.
-function applyOutcome(outcome, startMinutes, endMinutes, isOvertimeAuthorized, incidents, label) {
+// dayType/dayTypeRules/trigger (Etapa 8): si hay una regla configurada
+// para este tipo de dia + disparador, agrega la tasa (rate) -- sin regla,
+// rate queda en null (identico a como se comporta hoy, sin porcentaje).
+function applyOutcome(outcome, startMinutes, endMinutes, isOvertimeAuthorized, incidents, label, dayType, dayTypeRules, trigger) {
   const minutes = endMinutes - startMinutes;
   if (!outcome.recognized) {
     return { type: 'NOT_COMPUTED', startMinutes, endMinutes, minutes, label, policy: outcome.policy };
@@ -125,14 +131,67 @@ function applyOutcome(outcome, startMinutes, endMinutes, isOvertimeAuthorized, i
     incidents.push({ type: 'REGISTERED_WITHOUT_OVERTIME', label, minutes });
     return { type: 'INFORMATIVE_ONLY', startMinutes, endMinutes, minutes, label, policy: outcome.policy };
   }
-  // OVERTIME_CANDIDATE: depende de la autorizacion existente. El tiempo
-  // NUNCA se descarta -- si no esta autorizado, queda como
-  // UNAUTHORIZED_OVERTIME (se preserva, se marca como incidencia).
-  if (isOvertimeAuthorized) {
-    return { type: 'OVERTIME', startMinutes, endMinutes, minutes, label, policy: outcome.policy };
+  // OVERTIME_CANDIDATE: depende de la autorizacion existente, salvo que la
+  // propia regla de dia+disparador diga explicitamente que no la requiere
+  // (ej. un feriado que se paga siempre, autorizado o no). El tiempo NUNCA
+  // se descarta -- si no esta autorizado (y la regla si la exige), queda
+  // como UNAUTHORIZED_OVERTIME (se preserva, se marca como incidencia).
+  const rateInfo = resolveOvertimeRate(dayTypeRules, { dayType, trigger });
+  const rate = rateInfo && rateInfo.rate != null ? rateInfo.rate : null;
+  const classificationType = (rateInfo && rateInfo.classificationType) || 'OVERTIME';
+  const authorizationRequired = rateInfo ? rateInfo.requiresAuthorization : true;
+  const isAuthorized = !authorizationRequired || isOvertimeAuthorized;
+
+  if (isAuthorized) {
+    return { type: 'OVERTIME', startMinutes, endMinutes, minutes, label, policy: outcome.policy, rate, classificationType };
   }
   incidents.push({ type: 'UNAUTHORIZED_OVERTIME', label, minutes });
-  return { type: 'UNAUTHORIZED_OVERTIME', startMinutes, endMinutes, minutes, label, policy: outcome.policy };
+  return { type: 'UNAUTHORIZED_OVERTIME', startMinutes, endMinutes, minutes, label, policy: outcome.policy, rate, classificationType };
+}
+
+// Etapa 8: si hay una regla ALL_DAY configurada para este tipo de dia
+// (ej. "trabajar el franco es HE al 100%, siempre"), TODO el tiempo que
+// ya se clasifico como trabajado (NORMAL o RECOGNIZED_WORKED_TIME) se
+// reevalua bajo esa tasa -- no solo el exceso. Los segmentos que el
+// admin marco explicitamente como NOT_COMPUTED/INFORMATIVE_ONLY NO se
+// tocan (esa es una decision mas fuerte, no la pisa un default de dia).
+function applyAllDayOverride(result, dayTypeRules, dayType, isOvertimeAuthorized) {
+  const allDayRule = resolveAllDayRule(dayTypeRules, dayType);
+  if (!allDayRule) return result;
+
+  const authorizationRequired = allDayRule.requiresAuthorization;
+  const isAuthorized = !authorizationRequired || isOvertimeAuthorized;
+  const newType = isAuthorized ? 'OVERTIME' : 'UNAUTHORIZED_OVERTIME';
+
+  let normalMinutes = 0;
+  let overtimeMinutes = result.overtimeMinutes;
+  let unauthorizedMinutes = result.unauthorizedMinutes;
+  const incidents = result.incidents.slice();
+  const appliedRules = result.appliedRules.slice();
+  appliedRules.push({ rule: 'ALL_DAY_OVERRIDE', dayType, outcome: allDayRule });
+
+  const classifiedSegments = result.classifiedSegments.map((seg) => {
+    if (seg.type !== 'NORMAL' && seg.type !== 'RECOGNIZED_WORKED_TIME') return seg;
+    if (newType === 'UNAUTHORIZED_OVERTIME') {
+      unauthorizedMinutes += seg.minutes;
+      incidents.push({ type: 'UNAUTHORIZED_OVERTIME', label: seg.label || 'ALL_DAY', minutes: seg.minutes });
+    } else {
+      overtimeMinutes += seg.minutes;
+    }
+    return { ...seg, type: newType, rate: allDayRule.rate, classificationType: allDayRule.classificationType, overriddenBy: 'ALL_DAY_RULE' };
+  });
+
+  // workedMinutes no cambia (el tiempo trabajado sigue siendo el mismo,
+  // solo cambia SU clasificacion) -- scheduledMinutes tampoco.
+  return {
+    ...result,
+    normalMinutes,
+    overtimeMinutes,
+    unauthorizedMinutes,
+    incidents,
+    classifiedSegments,
+    appliedRules
+  };
 }
 
 // segments: resolveScheduleSegments(blocks) (Etapa 5). checkins: array de
@@ -141,7 +200,11 @@ function applyOutcome(outcome, startMinutes, endMinutes, isOvertimeAuthorized, i
 // toleranceConfig: resolveToleranceConfig(template, legacyTolerance) (Etapa 6).
 // isOvertimeAuthorized: boolean YA resuelto por el llamador (overtimeAuthorizationMode
 // + employees.overtime_authorized) -- este modulo no lo calcula.
-function computeAttendanceResult({ segments, checkins, toleranceConfig, isOvertimeAuthorized }) {
+// dayType (Etapa 8, default 'WORKDAY') + dayTypeRules (filas de
+// day_type_overtime_rules ya filtradas por tenant/convenio/plantilla por
+// el llamador): sin dayTypeRules, el comportamiento es identico a la
+// Etapa 7 (rate siempre null, ninguna regla ALL_DAY se dispara).
+function computeAttendanceResult({ segments, checkins, toleranceConfig, isOvertimeAuthorized, dayType = 'WORKDAY', dayTypeRules = [] }) {
   const sortedSegments = (segments || []).slice().sort((a, b) => a.startMinutes - b.startMinutes);
   const sortedCheckins = (checkins || []).slice().sort((a, b) => a - b);
 
@@ -173,7 +236,7 @@ function computeAttendanceResult({ segments, checkins, toleranceConfig, isOverti
   sortedSegments.forEach((segment, i) => {
     const checkinIn = sortedCheckins[i * 2] ?? null;
     const checkinOut = sortedCheckins[i * 2 + 1] ?? null;
-    const result = classifySegment({ segment, checkinIn, checkinOut, toleranceConfig, isOvertimeAuthorized });
+    const result = classifySegment({ segment, checkinIn, checkinOut, toleranceConfig, isOvertimeAuthorized, dayType, dayTypeRules });
     workedMinutes += result.workedMinutes;
     normalMinutes += result.normalMinutes;
     overtimeMinutes += result.overtimeMinutes;
@@ -183,7 +246,7 @@ function computeAttendanceResult({ segments, checkins, toleranceConfig, isOverti
     appliedRules.push(...result.appliedRules);
   });
 
-  return {
+  const result = {
     scheduledMinutes,
     workedMinutes,
     normalMinutes,
@@ -194,6 +257,8 @@ function computeAttendanceResult({ segments, checkins, toleranceConfig, isOverti
     appliedRules,
     ruleSetVersion: 1
   };
+
+  return applyAllDayOverride(result, dayTypeRules, dayType, isOvertimeAuthorized);
 }
 
 module.exports = {
