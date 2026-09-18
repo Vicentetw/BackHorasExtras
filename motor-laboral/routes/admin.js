@@ -188,16 +188,27 @@ function createMotorLaboralAdminRoutes(db) {
     try {
       const { id } = req.params;
       const effectiveTenantId = resolveTenantId(req);
-      if (effectiveTenantId !== null) {
-        const [[existing]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [id]);
-        if (!existing || existing.tenant_id !== effectiveTenantId) {
-          return res.status(404).json({ error: 'Plantilla no encontrada' });
-        }
+      // Bug real ya corregido en routes/employees.js: para un superadmin, se
+      // usaba directo el tenant_id que mandaba el body sin conservar el
+      // valor existente si no lo mandaba -- ahi llegaba a escribir NULL en
+      // silencio. Aca la validacion de abajo lo evitaba (devolvia 400 en vez
+      // de corromper el dato), pero seguia siendo el mismo defecto
+      // estructural: un frontend que dejara de mandar tenant_id rompia la
+      // edicion en vez de conservar el valor actual. Se trae `existing`
+      // SIEMPRE (antes solo se pedia cuando el caller ya estaba acotado a un
+      // tenant) para poder usarlo como fallback.
+      const [[existing]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [id]);
+      if (!existing) {
+        return res.status(404).json({ error: 'Plantilla no encontrada' });
+      }
+      if (effectiveTenantId !== null && existing.tenant_id !== effectiveTenantId) {
+        return res.status(404).json({ error: 'Plantilla no encontrada' });
       }
       const bodyTenantId = req.body.tenant_id ?? req.body.tenantId;
+      const hasExplicitBodyTenantId = bodyTenantId !== undefined && bodyTenantId !== null && bodyTenantId !== '';
       const tenantId = req.appUser && !req.appUser.isSuperadmin
         ? req.appUser.tenantId
-        : bodyTenantId;
+        : (hasExplicitBodyTenantId ? bodyTenantId : existing.tenant_id);
       const { name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });

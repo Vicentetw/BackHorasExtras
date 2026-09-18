@@ -74,6 +74,32 @@ test('PUT /templates/:id: cambiar la descripción persiste de verdad', async () 
   assert.equal(found.description, 'descripcion cambiada');
 });
 
+test('PUT /templates/:id: si el body NO manda tenant_id, se conserva el existente (no lo pisa con NULL ni lo rechaza)', async () => {
+  // Mismo patron de bug ya corregido en routes/employees.js (Fase 1 del
+  // plan de confianza): un superadmin editando sin mandar tenant_id
+  // explicito no debe corromper ni romper la edicion.
+  const createRes = await fetch(`${BASE}/templates`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Sin tenant en el PUT', description: 'original', type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID })
+  });
+  const { id } = await createRes.json();
+  createdTemplateIds.push(id);
+
+  const updateRes = await fetch(`${BASE}/templates/${id}?tenantId=${TENANT_ID}`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    // A proposito SIN tenant_id/tenantId en el body.
+    body: JSON.stringify({ name: 'Sin tenant en el PUT', description: 'cambiada sin mandar tenant', type: 'FIXED', active: true, is_default: false })
+  });
+  const updateBody = await updateRes.json();
+  assert.equal(updateRes.status, 200, JSON.stringify(updateBody));
+
+  const [[row]] = await db.query('SELECT tenant_id, description FROM work_schedule_templates WHERE id = ?', [id]);
+  assert.equal(row.tenant_id, TENANT_ID, 'el tenant_id no debe quedar en NULL');
+  assert.equal(row.description, 'cambiada sin mandar tenant');
+});
+
 test('POST /templates/:id/blocks + PUT /blocks/:id: crear y editar un bloque con el payload real de block-dialog.ts', async () => {
   const createTemplateRes = await fetch(`${BASE}/templates`, {
     method: 'POST',
