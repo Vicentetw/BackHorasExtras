@@ -2,6 +2,11 @@ async function findAll({ tenantId }, db) {
   const params = [];
   let query = `SELECT
        e.employee_id AS employeeId,
+       -- Etapa 12 del plan "Motor de reglas de asistencia configurable" --
+       -- e.employee_id (arriba) es el LEGAJO, no el PK. rule_engine_shadow_diffs.employee_id
+       -- (como employee_convention_assignments/employee_work_calendars) referencia
+       -- employees.id de verdad, por eso hace falta exponerlo tambien aca.
+       e.id AS internalEmployeeId,
        COALESCE(u.USERID, NULL) AS USERID,
        COALESCE(u.Badgenumber, e.employee_id) AS Badgenumber,
        COALESCE(e.nombre, u.Name) AS Name,

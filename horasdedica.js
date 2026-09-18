@@ -33,6 +33,17 @@ const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
+// Etapa 12 del plan "Motor de reglas de asistencia configurable" (ver
+// "fases para impletentar avance.txt") -- modo de comparacion/sombra.
+// Solo se activa para una plantilla puntual con rules_engine_mode='shadow'
+// (default 'legacy' para TODAS las existentes -- ver migracion
+// 20260924_rules_engine_mode_and_shadow_diffs.sql). NUNCA cambia el
+// resultado oficial de /attendance-range, solo agrega informacion.
+const dayTypeRuleRepository = require('./motor-laboral/repositories/dayTypeRuleRepository');
+const { resolveScheduleSegments } = require('./motor-laboral/services/scheduleResolver');
+const { resolveToleranceConfig } = require('./motor-laboral/services/toleranceResolver');
+const { computeAttendanceResult } = require('./motor-laboral/services/timeClassifier');
+const { buildLegacyComparable, compareAttendanceResults } = require('./motor-laboral/services/shadowComparator');
 const mercadopagoWebhookRoutes = require('./routes/mercadopagoWebhook');
 const publicRoutes = require('./routes/public');
 
@@ -2731,6 +2742,28 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     ];
     const blocksByTemplate = await scheduleRepository.getShiftBlocksByTemplate(involvedTemplateIds, db);
 
+    // Etapa 12: modo sombra -- se activa SOLO si al menos una plantilla
+    // involucrada en este rango tiene rules_engine_mode='shadow' (default
+    // 'legacy' para todas -- ver migracion). Si ninguna esta en modo
+    // sombra (el caso de TODOS los tenants reales hoy), se salta por
+    // completo esta seccion: cero query extra, cero costo por dia.
+    const involvedTemplateRows = [
+      ...Object.values(tenantTemplateByTenantId).filter(Boolean),
+      ...(defaultTemplate ? [defaultTemplate] : []),
+      ...Object.values(assignedCalendarRowsByEmployee).flat()
+    ];
+    const shadowModeTemplateIds = new Set(
+      involvedTemplateRows.filter(t => t.rules_engine_mode === 'shadow').map(t => t.id)
+    );
+    const shadowModeActive = shadowModeTemplateIds.size > 0;
+    const dayTypeRulesForShadow = shadowModeActive
+      ? await dayTypeRuleRepository.findForScopes({ tenantIds, templateIds: [...shadowModeTemplateIds] }, db)
+      : [];
+    // Diferencias encontradas por TODO el request (todos los empleados,
+    // todos los dias) -- se insertan en un solo lote al final, best-effort
+    // (un error aca no debe romper la respuesta oficial de /attendance-range).
+    const shadowDiffsToPersist = [];
+
     const scheduleFromTemplate = (template, date) => {
       const dow = scheduleRepository.getLocalDayOfWeek(date);
       const blocks = (blocksByTemplate[template.id] && blocksByTemplate[template.id][dow]) || [];
@@ -3222,6 +3255,83 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           }
           if (dayOvertimeMinutes > 0) overtimeMinutes += dayOvertimeMinutes;
 
+          // Etapa 12 del plan "Motor de reglas de asistencia configurable"
+          // -- modo sombra: SOLO si la plantilla de ESTE dia tiene
+          // rules_engine_mode='shadow' (default 'legacy' para todas -- ver
+          // migracion 20260924). No modifica NINGUNO de los contadores de
+          // arriba (daysWorked/late/overtimeMinutes/etc, ya calculados) --
+          // solo corre el motor nuevo en paralelo y anota diferencias.
+          let shadowResult = null;
+          if (shadowModeActive && schedule.rulesEngineMode === 'shadow') {
+            try {
+              const dow = scheduleRepository.getLocalDayOfWeek(date);
+              const shadowDayType = holidayForcesWork ? 'HOLIDAY' : (dow === 0 ? 'SUNDAY' : dow === 6 ? 'SATURDAY' : 'WORKDAY');
+              const dayTypeRulesForTemplate = dayTypeRulesForShadow.filter(
+                (r) => r.template_id == null || r.template_id === schedule.templateId
+              );
+              const engineResult = computeAttendanceResult({
+                segments: resolveScheduleSegments(schedule.blocks),
+                checkins: checks.map((c) => timeToMinutes(extractTime(c))),
+                toleranceConfig: resolveToleranceConfig(schedule.template, tolerance),
+                isOvertimeAuthorized,
+                dayType: shadowDayType,
+                dayTypeRules: dayTypeRulesForTemplate
+              });
+              // computedOvertimeMinutes (NO dayOvertimeMinutes): se compara
+              // solo la deteccion AUTOMATICA -- el motor nuevo no conoce
+              // ManualEntries (carga humana explicita, fuera de alcance).
+              const legacyComparable = buildLegacyComparable({
+                firstMinutes: firstMin,
+                lastMinutes: lastMin,
+                isLate,
+                lateMinutes,
+                isPartialAbsence,
+                overtimeMinutes: computedOvertimeMinutes,
+                visits: multiVisit ? multiVisit.visits : null
+              });
+              // hasCustomConfig: si esta plantilla/dia tiene tolerancias o
+              // una regla de tipo de dia propias cargadas, una diferencia
+              // es la funcionalidad nueva funcionando como se pidio, no un
+              // bug -- ver shadowComparator.classifyDiff.
+              const hasCustomConfig = !!(schedule.template && (
+                schedule.template.tolerancia_entrada_minutos != null
+                || schedule.template.tolerancia_salida_anticipada_minutos != null
+                || schedule.template.politica_llegada_anticipada != null
+                || schedule.template.politica_salida_posterior != null
+              )) || dayTypeRulesForTemplate.some((r) => r.day_type === shadowDayType);
+              const diffs = compareAttendanceResults({ legacy: legacyComparable, engine: engineResult, hasCustomConfig });
+              shadowResult = {
+                engine: {
+                  workedMinutes: engineResult.workedMinutes,
+                  normalMinutes: engineResult.normalMinutes,
+                  overtimeMinutes: engineResult.overtimeMinutes,
+                  unauthorizedMinutes: engineResult.unauthorizedMinutes,
+                  incidents: engineResult.incidents,
+                  classifiedSegments: engineResult.classifiedSegments
+                },
+                diffs
+              };
+              diffs.forEach((d) => {
+                shadowDiffsToPersist.push({
+                  tenantId: u.tenantId ?? null,
+                  // employees.id (PK), NO el legajo -- mismo criterio que
+                  // employee_convention_assignments.employee_id.
+                  employeeId: u.internalEmployeeId,
+                  date,
+                  templateId: schedule.templateId ?? null,
+                  field: d.field,
+                  legacyValue: d.legacyValue,
+                  newValue: d.newValue,
+                  diffType: d.diffType
+                });
+              });
+            } catch (shadowErr) {
+              // No debe romper NUNCA el resultado oficial -- ver Etapa 12
+              // del plan ("sin cambiar todavia el resultado oficial").
+              console.error('Etapa 12 (modo sombra): error al comparar, no afecta el resultado oficial:', shadowErr);
+            }
+          }
+
           if (days) {
             let status = 'OnTime';
             if (isPartialAbsence) status = 'PartialAbsence';
@@ -3269,6 +3379,10 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               eventTypeDescripcion: isLate && lateJustifiedThisDay ? (exclusion.eventTypeDescripcion || null) : undefined,
               possibleJustification,
               hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
+              // Etapa 12: solo presente cuando la plantilla de este dia
+              // esta en modo 'shadow' -- el frontend actual lo ignora
+              // (campo aditivo, nunca reemplaza nada de lo de arriba).
+              shadowResult,
             });
           }
         } else if (exclusion || leaveEvent) {
@@ -3345,6 +3459,28 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       }
       result.push(row);
     });
+
+    // Etapa 12: persistir las diferencias encontradas (si hubo alguna) en
+    // un solo lote -- best-effort, un error aca NUNCA debe tumbar la
+    // respuesta oficial de /attendance-range (ver Etapa 12 del plan: "sin
+    // cambiar todavia el resultado oficial"). No se inserta nada cuando
+    // shadowDiffsToPersist esta vacio (ni modo sombra activo, ni diferencias).
+    if (shadowDiffsToPersist.length > 0) {
+      try {
+        const values = shadowDiffsToPersist.map((d) => [
+          d.tenantId, d.employeeId, d.date, d.templateId, d.field,
+          JSON.stringify(d.legacyValue), JSON.stringify(d.newValue), d.diffType
+        ]);
+        await db.query(
+          `INSERT INTO rule_engine_shadow_diffs
+             (tenant_id, employee_id, date, template_id, field, legacy_value, new_value, diff_type)
+           VALUES ?`,
+          [values]
+        );
+      } catch (shadowPersistErr) {
+        console.error('Etapa 12 (modo sombra): error al guardar diferencias, no afecta el resultado oficial:', shadowPersistErr);
+      }
+    }
 
     res.json({
       from,

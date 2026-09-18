@@ -39,7 +39,15 @@ function buildScheduleFromBlocks(template, blocks, date) {
     overtimeCutoffTime: template.overtime_cutoff_time || null,
     overtimeCapMinutes: template.overtime_cap_minutes ?? null,
     blocks,
-    blockCount: blocks.length
+    blockCount: blocks.length,
+    // Etapa 12 del plan "Motor de reglas de asistencia configurable" --
+    // 'legacy' (default de la plantilla) = /attendance-range no cambia en
+    // nada. 'template' completo (no solo los 4 campos de tolerancia) para
+    // que el llamador pueda resolver tolerancias/reglas sin volver a
+    // consultar la DB por dia -- ver resolveToleranceConfig, que ya acepta
+    // cualquier objeto con esas columnas.
+    rulesEngineMode: template.rules_engine_mode || 'legacy',
+    template
   };
 }
 
