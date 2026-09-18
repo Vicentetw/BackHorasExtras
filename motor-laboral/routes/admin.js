@@ -14,6 +14,16 @@ const COUNTRY_CODE_RE = /^[A-Z]{2}$/;
 // guardar, no una verificacion exhaustiva de formato IP.
 const IP_OR_CIDR_RE = /^[0-9a-fA-F:.]+(\/\d{1,3})?$/;
 
+// Etapa 6/10 del plan "Motor de reglas de asistencia configurable" --
+// mismos 4 valores que la migracion 20260921_template_tolerances.sql y
+// motor-laboral/services/toleranceResolver.js (VALID_POLICIES). Se
+// valida aca (capa HTTP) para devolver un 400 claro en vez de que MySQL
+// rechace un valor invalido de ENUM con un error crudo.
+const VALID_TOLERANCE_POLICIES = ['NO_COMPUTAR', 'TIEMPO_TRABAJADO', 'EXTRA_SI_AUTORIZADO', 'REGISTRAR_SIN_EXTRA'];
+function isValidPolicyOrNull(value) {
+  return value === undefined || value === null || value === '' || VALID_TOLERANCE_POLICIES.includes(value);
+}
+
 function createMotorLaboralAdminRoutes(db) {
   const router = express.Router();
 
@@ -161,9 +171,16 @@ function createMotorLaboralAdminRoutes(db) {
       const tenantId = req.appUser && !req.appUser.isSuperadmin
         ? req.appUser.tenantId
         : bodyTenantId;
-      const { name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes } = req.body;
+      const {
+        name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes,
+        tolerancia_entrada_minutos, tolerancia_salida_anticipada_minutos,
+        politica_llegada_anticipada, politica_salida_posterior
+      } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });
+      }
+      if (!isValidPolicyOrNull(politica_llegada_anticipada) || !isValidPolicyOrNull(politica_salida_posterior)) {
+        return res.status(400).json({ error: `politica_llegada_anticipada/politica_salida_posterior deben ser uno de: ${VALID_TOLERANCE_POLICIES.join(', ')}` });
       }
       // If marking this template as default, unset other defaults for the tenant
       if (is_default) {
@@ -174,8 +191,15 @@ function createMotorLaboralAdminRoutes(db) {
         }
       }
       const [result] = await db.query(
-        `INSERT INTO work_schedule_templates (tenant_id, name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null]
+        `INSERT INTO work_schedule_templates
+           (tenant_id, name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes,
+            tolerancia_entrada_minutos, tolerancia_salida_anticipada_minutos, politica_llegada_anticipada, politica_salida_posterior)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null,
+          tolerancia_entrada_minutos ?? null, tolerancia_salida_anticipada_minutos ?? null,
+          politica_llegada_anticipada || null, politica_salida_posterior || null
+        ]
       );
       res.json({ ok: true, id: result.insertId });
     } catch (err) {
@@ -209,9 +233,16 @@ function createMotorLaboralAdminRoutes(db) {
       const tenantId = req.appUser && !req.appUser.isSuperadmin
         ? req.appUser.tenantId
         : (hasExplicitBodyTenantId ? bodyTenantId : existing.tenant_id);
-      const { name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes } = req.body;
+      const {
+        name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes,
+        tolerancia_entrada_minutos, tolerancia_salida_anticipada_minutos,
+        politica_llegada_anticipada, politica_salida_posterior
+      } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });
+      }
+      if (!isValidPolicyOrNull(politica_llegada_anticipada) || !isValidPolicyOrNull(politica_salida_posterior)) {
+        return res.status(400).json({ error: `politica_llegada_anticipada/politica_salida_posterior deben ser uno de: ${VALID_TOLERANCE_POLICIES.join(', ')}` });
       }
       // If marking this template as default, unset other defaults for the tenant
       if (is_default) {
@@ -225,13 +256,21 @@ function createMotorLaboralAdminRoutes(db) {
       // overtime_cutoff_time/overtime_cap_minutes en el body (corte y tope
       // de HE por plantilla), pero este UPDATE nunca los destructuraba ni
       // los incluia en el SET -- se guardaban en silencio, sin error, como
-      // si nada. "La pongo y no se guarda".
+      // si nada. "La pongo y no se guarda". Ojo con el mismo bug para las
+      // 4 columnas nuevas de tolerancia (Etapa 6/10) -- SI se incluyen.
       const [result] = await db.query(
         `UPDATE work_schedule_templates
          SET tenant_id = ?, name = ?, description = ?, type = ?, active = ?, is_default = ?,
-             overtime_cutoff_time = ?, overtime_cap_minutes = ?
+             overtime_cutoff_time = ?, overtime_cap_minutes = ?,
+             tolerancia_entrada_minutos = ?, tolerancia_salida_anticipada_minutos = ?,
+             politica_llegada_anticipada = ?, politica_salida_posterior = ?
          WHERE id = ?`,
-        [tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null, id]
+        [
+          tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null,
+          tolerancia_entrada_minutos ?? null, tolerancia_salida_anticipada_minutos ?? null,
+          politica_llegada_anticipada || null, politica_salida_posterior || null,
+          id
+        ]
       );
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {

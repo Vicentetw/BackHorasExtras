@@ -74,6 +74,55 @@ test('PUT /templates/:id: cambiar la descripción persiste de verdad', async () 
   assert.equal(found.description, 'descripcion cambiada');
 });
 
+test('Etapa 10: POST/PUT /templates persisten las 4 columnas nuevas de tolerancia', async () => {
+  const createRes = await fetch(`${BASE}/templates`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Con tolerancias', description: null, type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID,
+      tolerancia_entrada_minutos: 15,
+      tolerancia_salida_anticipada_minutos: 5,
+      politica_llegada_anticipada: 'TIEMPO_TRABAJADO',
+      politica_salida_posterior: 'EXTRA_SI_AUTORIZADO'
+    })
+  });
+  const createBody = await createRes.json();
+  assert.equal(createRes.status, 200, JSON.stringify(createBody));
+  createdTemplateIds.push(createBody.id);
+
+  const getAfterCreate = await fetch(`${BASE}/templates?tenantId=${TENANT_ID}`, { headers });
+  const afterCreate = (await getAfterCreate.json()).find((t) => t.id === createBody.id);
+  assert.equal(afterCreate.tolerancia_entrada_minutos, 15);
+  assert.equal(afterCreate.tolerancia_salida_anticipada_minutos, 5);
+  assert.equal(afterCreate.politica_llegada_anticipada, 'TIEMPO_TRABAJADO');
+  assert.equal(afterCreate.politica_salida_posterior, 'EXTRA_SI_AUTORIZADO');
+
+  const updateRes = await fetch(`${BASE}/templates/${createBody.id}`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Con tolerancias', description: null, type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID,
+      tolerancia_entrada_minutos: 20,
+      politica_llegada_anticipada: 'NO_COMPUTAR'
+    })
+  });
+  assert.equal(updateRes.status, 200);
+  const getAfterUpdate = await fetch(`${BASE}/templates?tenantId=${TENANT_ID}`, { headers });
+  const afterUpdate = (await getAfterUpdate.json()).find((t) => t.id === createBody.id);
+  assert.equal(afterUpdate.tolerancia_entrada_minutos, 20);
+  assert.equal(afterUpdate.politica_llegada_anticipada, 'NO_COMPUTAR');
+  assert.equal(afterUpdate.tolerancia_salida_anticipada_minutos, null, 'un campo que no se manda en el PUT vuelve a NULL (mismo criterio que el resto de la fila)');
+});
+
+test('Etapa 10: un valor invalido de politica devuelve 400 claro, no un error crudo de MySQL', async () => {
+  const res = await fetch(`${BASE}/templates`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Politica invalida', type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID, politica_salida_posterior: 'ALGO_RARO' })
+  });
+  assert.equal(res.status, 400);
+});
+
 test('PUT /templates/:id: si el body NO manda tenant_id, se conserva el existente (no lo pisa con NULL ni lo rechaza)', async () => {
   // Mismo patron de bug ya corregido en routes/employees.js (Fase 1 del
   // plan de confianza): un superadmin editando sin mandar tenant_id
