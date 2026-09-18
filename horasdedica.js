@@ -49,6 +49,10 @@ const { buildLegacyComparable, compareAttendanceResults } = require('./motor-lab
 // plantilla -- ver templateConfigHistoryResolver.js.
 const templateConfigHistoryRepository = require('./motor-laboral/repositories/templateConfigHistoryRepository');
 const { resolveHistoricalToleranceFields } = require('./motor-laboral/services/templateConfigHistoryResolver');
+// Etapa 14 (hallazgo #1 de la auditoria): resuelve el convenio vigente
+// de un empleado para poder aplicar sus reglas propias de HE por tipo de
+// dia -- antes, ningun modulo de calculo lo consumia.
+const conventionAssignmentRepository = require('./motor-laboral/repositories/conventionAssignmentRepository');
 const mercadopagoWebhookRoutes = require('./routes/mercadopagoWebhook');
 const publicRoutes = require('./routes/public');
 
@@ -2669,6 +2673,13 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     const employeeIds = employees
       .map(e => Number(e.employeeId))
       .filter(id => !Number.isNaN(id));
+    // Etapa 14 (hallazgo #1): e.employeeId (arriba) es el LEGAJO, no el
+    // PK -- employee_convention_assignments.employee_id SI es el PK
+    // (employees.id, mismo criterio que employee_work_calendars), hace
+    // falta esta lista aparte para poder consultarla.
+    const internalEmployeeIds = employees
+      .map(e => e.internalEmployeeId)
+      .filter(id => typeof id === 'number' && !Number.isNaN(id));
 
     const tenantIds = Array.from(new Set(
       employees
@@ -2761,8 +2772,24 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       involvedTemplateRows.filter(t => t.rules_engine_mode === 'shadow').map(t => t.id)
     );
     const shadowModeActive = shadowModeTemplateIds.size > 0;
+    // Etapa 14 (hallazgo #1 de la auditoria): antes de esto, un convenio
+    // asignado a un empleado no tenia NINGUN efecto en el calculo -- se
+    // trae de una sola vez (mismo criterio de rango que ya usa
+    // assignedCalendarRowsByEmployee para plantillas) el encuadramiento
+    // de cada empleado para poder resolver, dia por dia, que reglas de
+    // day_type_overtime_rules le corresponden por SU convenio.
+    const conventionAssignmentRowsByEmployee = shadowModeActive
+      ? await conventionAssignmentRepository.findAssignmentRowsForRange(previousDayStr, formatLocalDate(effectiveEndDate), internalEmployeeIds, db)
+      : {};
+    const involvedConventionIds = new Set(
+      Object.values(conventionAssignmentRowsByEmployee).flat().map((row) => row.convention_id)
+    );
     const dayTypeRulesForShadow = shadowModeActive
-      ? await dayTypeRuleRepository.findForScopes({ tenantIds, templateIds: [...shadowModeTemplateIds] }, db)
+      ? await dayTypeRuleRepository.findForScopes({
+          tenantIds,
+          templateIds: [...shadowModeTemplateIds],
+          conventionIds: [...involvedConventionIds]
+        }, db)
       : [];
     // Etapa 14 (hallazgo #3 de la auditoria): snapshots historicos de
     // tolerancia para las plantillas en modo sombra -- en la enorme
@@ -3287,8 +3314,31 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
             try {
               const dow = scheduleRepository.getLocalDayOfWeek(date);
               const shadowDayType = holidayForcesWork ? 'HOLIDAY' : (dow === 0 ? 'SUNDAY' : dow === 6 ? 'SATURDAY' : 'WORKDAY');
-              const dayTypeRulesForTemplate = dayTypeRulesForShadow.filter(
-                (r) => r.template_id == null || r.template_id === schedule.templateId
+              // Etapa 14 (hallazgo #1): convenio vigente de ESTE empleado
+              // en ESTA fecha (mismo criterio de vigencia que ya usa la
+              // asignacion de plantilla, unas lineas mas arriba) -- null
+              // si no tiene ninguno asignado (opt-in, sigue usando solo su
+              // plantilla, comportamiento sin cambios).
+              const employeeConventionRows = conventionAssignmentRowsByEmployee[u.internalEmployeeId] || [];
+              const activeConventionAssignment = employeeConventionRows.find(
+                (r) => r.valid_from <= date && (r.valid_to === null || r.valid_to >= date)
+              );
+              const activeConventionId = activeConventionAssignment ? activeConventionAssignment.convention_id : null;
+              // Un candidato aplica si NO esta restringido a otro
+              // tenant/plantilla/convenio -- null en cualquiera de los 3
+              // significa "sin restriccion a ese nivel" (regla global en
+              // ese aspecto), nunca "aplica a cualquiera". Bug real
+              // encontrado al conectar convenios (hallazgo #1): el filtro
+              // anterior solo miraba template_id, nunca tenant_id -- una
+              // regla de OTRO tenant (template_id=null, tenant_id=6)
+              // podia colarse en el calculo de un empleado de otro tenant
+              // en un pedido cross-empresa (superadmin). Mismo patron de
+              // fuga de tenant_id que ya tuvo bugs reales en este
+              // proyecto (fases 19-21).
+              const dayTypeRulesForTemplate = dayTypeRulesForShadow.filter((r) =>
+                (r.tenant_id == null || r.tenant_id === u.tenantId)
+                && (r.template_id == null || r.template_id === schedule.templateId)
+                && (r.convention_id == null || r.convention_id === activeConventionId)
               );
               // Etapa 14 (hallazgo #3): la config de tolerancia que regia
               // ESE DIA, no la actual de la plantilla -- sin snapshots

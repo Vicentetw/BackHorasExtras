@@ -51,7 +51,36 @@ async function findActiveAssignmentsForEmployees(employeeIds, date, db) {
   return map;
 }
 
+// Etapa 14 (hallazgo #1 de la auditoria): trae TODAS las asignaciones
+// (crudas, con valid_from/valid_to) que se solapan con un RANGO de
+// fechas, para que el llamador resuelva dia por dia en memoria -- mismo
+// patron que scheduleRepository.findAssignedCalendarRowsForRange, para
+// no pagar una consulta por dia en un reporte mensual/anual con modo
+// sombra activo.
+async function findAssignmentRowsForRange(fromDate, toDate, employeeIds, db) {
+  const safeIds = (employeeIds || []).filter((id) => typeof id === 'number' && !Number.isNaN(id));
+  if (safeIds.length === 0) return {};
+
+  const [rows] = await db.query(
+    `SELECT id, employee_id, tenant_id, convention_id, category_id, valid_from, valid_to
+     FROM employee_convention_assignments
+     WHERE employee_id IN (?)
+       AND valid_from <= ?
+       AND (valid_to IS NULL OR valid_to >= ?)
+     ORDER BY employee_id ASC, valid_from DESC`,
+    [safeIds, toDate, fromDate]
+  );
+
+  const byEmployee = {};
+  rows.forEach((row) => {
+    if (!byEmployee[row.employee_id]) byEmployee[row.employee_id] = [];
+    byEmployee[row.employee_id].push(row);
+  });
+  return byEmployee;
+}
+
 module.exports = {
   findActiveAssignment,
-  findActiveAssignmentsForEmployees
+  findActiveAssignmentsForEmployees,
+  findAssignmentRowsForRange
 };
