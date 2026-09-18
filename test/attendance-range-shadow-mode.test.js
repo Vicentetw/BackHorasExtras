@@ -224,6 +224,14 @@ test('modo shadow CON tolerancia de entrada configurada, fichaje 15min tarde: Le
   const [rows] = await db.query('SELECT * FROM rule_engine_shadow_diffs WHERE employee_id = ? ORDER BY field', [employeeId]);
   assert.ok(rows.length >= 1, 'la diferencia debe quedar persistida para revision');
   rows.forEach((r) => assert.equal(r.diff_type, 'NEW_FEATURE'));
+  const rowCountAfterFirstCall = rows.length;
+
+  // Etapa 14 (hallazgo #6 de la auditoria): pedir el MISMO rango de
+  // nuevo (ej. alguien refresca Presentismo) no debe duplicar filas --
+  // la clave unica + ON DUPLICATE KEY UPDATE actualiza la fila existente.
+  await fetch(`${BASE_URL}/attendance-range?from=2026-01-01&to=2026-01-31&employeeId=${badge}`, { headers });
+  const [rowsAfterSecondCall] = await db.query('SELECT * FROM rule_engine_shadow_diffs WHERE employee_id = ?', [employeeId]);
+  assert.equal(rowsAfterSecondCall.length, rowCountAfterFirstCall, 'la segunda corrida NO debe duplicar filas -- misma diferencia, mismo empleado/fecha/campo');
 });
 
 test('Etapa 13 (Vacaciones/Permiso): dia excusado (licencia) bajo plantilla en modo shadow -> el motor nuevo NUNCA corre, shadowResult null', async () => {

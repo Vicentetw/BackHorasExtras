@@ -2776,6 +2776,14 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     // todos los dias) -- se insertan en un solo lote al final, best-effort
     // (un error aca no debe romper la respuesta oficial de /attendance-range).
     const shadowDiffsToPersist = [];
+    // Etapa 14 (hallazgo #8 de la auditoria): resolveScheduleSegments se
+    // llamaba de nuevo por CADA empleado que comparte el mismo
+    // (plantilla, dia) -- redundante (el resultado es identico) aunque
+    // barato hoy. scheduleByDate ya reusa la MISMA referencia de
+    // schedule.blocks para todos los empleados de un mismo dia/plantilla,
+    // asi que un WeakMap keyeado por esa referencia alcanza sin tener que
+    // armar una clave string por (templateId, dia de semana).
+    const scheduleSegmentsCache = new WeakMap();
 
     const scheduleFromTemplate = (template, date) => {
       const dow = scheduleRepository.getLocalDayOfWeek(date);
@@ -3289,8 +3297,13 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               const historicalTemplateConfig = resolveHistoricalToleranceFields(
                 templateConfigHistoryForShadow, schedule.templateId, date, schedule.template
               );
+              let segmentsForShadow = scheduleSegmentsCache.get(schedule.blocks);
+              if (!segmentsForShadow) {
+                segmentsForShadow = resolveScheduleSegments(schedule.blocks);
+                scheduleSegmentsCache.set(schedule.blocks, segmentsForShadow);
+              }
               const engineResult = computeAttendanceResult({
-                segments: resolveScheduleSegments(schedule.blocks),
+                segments: segmentsForShadow,
                 checkins: checks.map((c) => timeToMinutes(extractTime(c))),
                 toleranceConfig: resolveToleranceConfig(historicalTemplateConfig, tolerance),
                 isOvertimeAuthorized,
@@ -3485,6 +3498,14 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     // respuesta oficial de /attendance-range (ver Etapa 12 del plan: "sin
     // cambiar todavia el resultado oficial"). No se inserta nada cuando
     // shadowDiffsToPersist esta vacio (ni modo sombra activo, ni diferencias).
+    //
+    // Etapa 14 (hallazgo #6 de la auditoria): ON DUPLICATE KEY UPDATE en
+    // vez de un INSERT liso -- sin esto, cada refresco de Presentismo (o
+    // varios admins mirando el mismo periodo) insertaba una fila NUEVA
+    // aunque la diferencia ya estuviera registrada. La clave unica
+    // (employee_id, date, field, template_id) viene de la migracion
+    // 20260926 -- la misma diferencia se ACTUALIZA (created_at incluido,
+    // para saber cuando se vio por ultima vez), no se acumula.
     if (shadowDiffsToPersist.length > 0) {
       try {
         const values = shadowDiffsToPersist.map((d) => [
@@ -3494,7 +3515,13 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         await db.query(
           `INSERT INTO rule_engine_shadow_diffs
              (tenant_id, employee_id, date, template_id, field, legacy_value, new_value, diff_type)
-           VALUES ?`,
+           VALUES ?
+           ON DUPLICATE KEY UPDATE
+             tenant_id = VALUES(tenant_id),
+             legacy_value = VALUES(legacy_value),
+             new_value = VALUES(new_value),
+             diff_type = VALUES(diff_type),
+             created_at = CURRENT_TIMESTAMP`,
           [values]
         );
       } catch (shadowPersistErr) {
