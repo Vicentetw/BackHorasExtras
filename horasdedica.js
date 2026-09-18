@@ -2758,46 +2758,48 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     ];
     const blocksByTemplate = await scheduleRepository.getShiftBlocksByTemplate(involvedTemplateIds, db);
 
-    // Etapa 12: modo sombra -- se activa SOLO si al menos una plantilla
-    // involucrada en este rango tiene rules_engine_mode='shadow' (default
-    // 'legacy' para todas -- ver migracion). Si ninguna esta en modo
-    // sombra (el caso de TODOS los tenants reales hoy), se salta por
-    // completo esta seccion: cero query extra, cero costo por dia.
+    // Etapa 12/14: el motor nuevo corre para cualquier plantilla en modo
+    // 'shadow' (informativo, Legacy sigue siendo el oficial) O 'active'
+    // (hallazgo #5 de la auditoria -- el resultado del motor nuevo PASA A
+    // SER el oficial para esa plantilla, ver Etapa 4 del plan). Si
+    // ninguna plantilla involucrada esta en alguno de estos 2 modos (el
+    // caso de TODOS los tenants reales hoy, default 'legacy'), se salta
+    // por completo esta seccion: cero query extra, cero costo por dia.
     const involvedTemplateRows = [
       ...Object.values(tenantTemplateByTenantId).filter(Boolean),
       ...(defaultTemplate ? [defaultTemplate] : []),
       ...Object.values(assignedCalendarRowsByEmployee).flat()
     ];
-    const shadowModeTemplateIds = new Set(
-      involvedTemplateRows.filter(t => t.rules_engine_mode === 'shadow').map(t => t.id)
+    const engineModeTemplateIds = new Set(
+      involvedTemplateRows.filter(t => t.rules_engine_mode === 'shadow' || t.rules_engine_mode === 'active').map(t => t.id)
     );
-    const shadowModeActive = shadowModeTemplateIds.size > 0;
+    const engineModeActive = engineModeTemplateIds.size > 0;
     // Etapa 14 (hallazgo #1 de la auditoria): antes de esto, un convenio
     // asignado a un empleado no tenia NINGUN efecto en el calculo -- se
     // trae de una sola vez (mismo criterio de rango que ya usa
     // assignedCalendarRowsByEmployee para plantillas) el encuadramiento
     // de cada empleado para poder resolver, dia por dia, que reglas de
     // day_type_overtime_rules le corresponden por SU convenio.
-    const conventionAssignmentRowsByEmployee = shadowModeActive
+    const conventionAssignmentRowsByEmployee = engineModeActive
       ? await conventionAssignmentRepository.findAssignmentRowsForRange(previousDayStr, formatLocalDate(effectiveEndDate), internalEmployeeIds, db)
       : {};
     const involvedConventionIds = new Set(
       Object.values(conventionAssignmentRowsByEmployee).flat().map((row) => row.convention_id)
     );
-    const dayTypeRulesForShadow = shadowModeActive
+    const dayTypeRulesForEngine = engineModeActive
       ? await dayTypeRuleRepository.findForScopes({
           tenantIds,
-          templateIds: [...shadowModeTemplateIds],
+          templateIds: [...engineModeTemplateIds],
           conventionIds: [...involvedConventionIds]
         }, db)
       : [];
     // Etapa 14 (hallazgo #3 de la auditoria): snapshots historicos de
-    // tolerancia para las plantillas en modo sombra -- en la enorme
-    // mayoria de los casos esto es un array vacio (ninguna cambio nunca
-    // su configuracion), y resolveHistoricalToleranceFields cae al
+    // tolerancia para las plantillas en modo sombra/activo -- en la
+    // enorme mayoria de los casos esto es un array vacio (ninguna cambio
+    // nunca su configuracion), y resolveHistoricalToleranceFields cae al
     // comportamiento de siempre (usar la plantilla en vivo).
-    const templateConfigHistoryForShadow = shadowModeActive
-      ? await templateConfigHistoryRepository.findForTemplates([...shadowModeTemplateIds], db)
+    const templateConfigHistoryForEngine = engineModeActive
+      ? await templateConfigHistoryRepository.findForTemplates([...engineModeTemplateIds], db)
       : [];
     // Diferencias encontradas por TODO el request (todos los empleados,
     // todos los dias) -- se insertan en un solo lote al final, best-effort
@@ -2988,6 +2990,22 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       if (!datetimeStr) return '00:00';
       const parts = datetimeStr.split(' ');
       return parts.length < 2 ? datetimeStr : parts[1].substring(0, 5);
+    };
+
+    // Etapa 14 (hallazgo #5 de la auditoria): equivalente de
+    // formatLocalTime(overtimeResult.start) pero para el motor nuevo --
+    // sus segmentos estan en minutos (una linea de tiempo continua, ver
+    // timeClassifier.js), no en objetos Date. Toma el primer segmento
+    // OVERTIME (ordenado) como el inicio de la HE del dia.
+    const engineOvertimeStartTimeLabel = (result) => {
+      const overtimeSeg = (result.classifiedSegments || [])
+        .filter((s) => s.type === 'OVERTIME')
+        .sort((a, b) => a.startMinutes - b.startMinutes)[0];
+      if (!overtimeSeg) return null;
+      const normalized = ((overtimeSeg.startMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+      const h = Math.floor(normalized / 60);
+      const m = normalized % 60;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
     };
 
     // "Posible entrada particular": un marcador PARTICULAR/REGRESO (badge 5)
@@ -3258,62 +3276,21 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           // (.minutes) siempre, y overCap queda solo para mostrar un aviso
           // (ver dayOvertimeOverCap mas abajo) -- el tope deja de "mentir"
           // el numero y pasa a ser puramente informativo.
-          const computedOvertimeMinutes = (overtimeResult && isOvertimeAuthorized) ? overtimeResult.minutes : 0;
-          const dayOvertimeNeedsVerification = !!(overtimeResult && isOvertimeAuthorized && overtimeResult.needsVerification);
-          const dayOvertimeSource = (overtimeResult && isOvertimeAuthorized) ? overtimeResult.source : null;
-
-          // ManualEntries: 'omit' anula el computo automatico (un fichaje
-          // que no corresponde a HE real); 'he'/'licencia' se suman aparte
-          // -- no se pisan entre si, un dia puede tener las dos cosas.
-          const manualKey = u.USERID ? `${u.USERID}_${date}` : null;
-          const manualMinutesThisDay = manualKey ? (manualMinutesByUserDate.get(manualKey) || 0) : 0;
-          const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
-          const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
-          const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
-          // Pedido real: "el tope es una opcion solo para que salte un aviso
-          // en el detalle, superó límite diario" -- se compara el TOTAL final
-          // del dia (automatico + manual, ya sin el omitido) contra el tope
-          // configurado; no es solo la parte automatica, un manual que por si
-          // solo supere el tope tambien tiene que avisar.
-          const dayOvertimeOverCap = dayOvertimeMinutes > effectiveCapMinutes;
-          // Hora exacta en la que arranca la HE automatica (marker o
-          // fallback) -- Fase 7, "Horas Extra por Regimen" necesita mostrar
-          // entrada / inicio HE / salida por dia, no solo la duracion.
-          const dayOvertimeStartTime = (overtimeResult && isOvertimeAuthorized && !isManuallyOmitted)
-            ? formatLocalTime(overtimeResult.start)
-            : null;
-
-          const { isLate, lateMinutes, justified: lateJustifiedThisDay } = multiVisit
-            ? { isLate: multiVisit.isLate, lateMinutes: multiVisit.lateMinutes, justified: multiVisit.justified }
-            : attendanceCalc.resolveLateJustification({
-                firstMinutes: firstMin,
-                entranceMinutes: entranceMin,
-                toleranceMinutes: tolerance,
-                exclusion
-              });
-          const isPartialAbsence = !!(multiVisit && multiVisit.isPartial);
-
-          if (isPartialAbsence) {
-            partialAbsence++;
-          } else if (isLate && lateJustifiedThisDay) {
-            lateJustified++;
-            personalLeaveMinutes += lateMinutes;
-          } else if (isLate) {
-            late++;
-          }
-          if (dayOvertimeMinutes > 0) overtimeMinutes += dayOvertimeMinutes;
-
-          // Etapa 12 del plan "Motor de reglas de asistencia configurable"
-          // -- modo sombra: SOLO si la plantilla de ESTE dia tiene
-          // rules_engine_mode='shadow' (default 'legacy' para todas -- ver
-          // migracion 20260924). No modifica NINGUNO de los contadores de
-          // arriba (daysWorked/late/overtimeMinutes/etc, ya calculados) --
-          // solo corre el motor nuevo en paralelo y anota diferencias.
-          let shadowResult = null;
-          if (shadowModeActive && schedule.rulesEngineMode === 'shadow') {
+          // Etapa 14 (hallazgo #5 de la auditoria): el motor nuevo corre
+          // para CUALQUIER plantilla en modo 'shadow' (informativo, Legacy
+          // sigue siendo el oficial) o 'active' (su resultado PASA A SER
+          // el oficial -- mismos nombres de campo de siempre, cambia solo
+          // quien los calcula, ver Etapa 4 del plan). Si el motor tira un
+          // error, se cae SIEMPRE al comportamiento Legacy para ese dia
+          // puntual -- un bug del motor nuevo nunca debe romper ni dejar
+          // sin calcular el resultado oficial de nadie.
+          const runsNewEngine = engineModeActive && (schedule.rulesEngineMode === 'shadow' || schedule.rulesEngineMode === 'active');
+          let engineResult = null;
+          let engineHasCustomConfig = false;
+          if (runsNewEngine) {
             try {
               const dow = scheduleRepository.getLocalDayOfWeek(date);
-              const shadowDayType = holidayForcesWork ? 'HOLIDAY' : (dow === 0 ? 'SUNDAY' : dow === 6 ? 'SATURDAY' : 'WORKDAY');
+              const engineDayType = holidayForcesWork ? 'HOLIDAY' : (dow === 0 ? 'SUNDAY' : dow === 6 ? 'SATURDAY' : 'WORKDAY');
               // Etapa 14 (hallazgo #1): convenio vigente de ESTE empleado
               // en ESTA fecha (mismo criterio de vigencia que ya usa la
               // asignacion de plantilla, unas lineas mas arriba) -- null
@@ -3335,7 +3312,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               // en un pedido cross-empresa (superadmin). Mismo patron de
               // fuga de tenant_id que ya tuvo bugs reales en este
               // proyecto (fases 19-21).
-              const dayTypeRulesForTemplate = dayTypeRulesForShadow.filter((r) =>
+              const dayTypeRulesForTemplate = dayTypeRulesForEngine.filter((r) =>
                 (r.tenant_id == null || r.tenant_id === u.tenantId)
                 && (r.template_id == null || r.template_id === schedule.templateId)
                 && (r.convention_id == null || r.convention_id === activeConventionId)
@@ -3345,21 +3322,125 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               // (caso de hoy para toda plantilla que nunca cambio), esto
               // devuelve schedule.template tal cual, cero cambio.
               const historicalTemplateConfig = resolveHistoricalToleranceFields(
-                templateConfigHistoryForShadow, schedule.templateId, date, schedule.template
+                templateConfigHistoryForEngine, schedule.templateId, date, schedule.template
               );
-              let segmentsForShadow = scheduleSegmentsCache.get(schedule.blocks);
-              if (!segmentsForShadow) {
-                segmentsForShadow = resolveScheduleSegments(schedule.blocks);
-                scheduleSegmentsCache.set(schedule.blocks, segmentsForShadow);
+              let segmentsForEngine = scheduleSegmentsCache.get(schedule.blocks);
+              if (!segmentsForEngine) {
+                segmentsForEngine = resolveScheduleSegments(schedule.blocks);
+                scheduleSegmentsCache.set(schedule.blocks, segmentsForEngine);
               }
-              const engineResult = computeAttendanceResult({
-                segments: segmentsForShadow,
+              engineResult = computeAttendanceResult({
+                segments: segmentsForEngine,
                 checkins: checks.map((c) => timeToMinutes(extractTime(c))),
                 toleranceConfig: resolveToleranceConfig(historicalTemplateConfig, tolerance),
                 isOvertimeAuthorized,
-                dayType: shadowDayType,
+                dayType: engineDayType,
                 dayTypeRules: dayTypeRulesForTemplate
               });
+              // hasCustomConfig: si esta plantilla/dia tiene tolerancias o
+              // una regla de tipo de dia propias cargadas, una diferencia
+              // (en modo shadow) es la funcionalidad nueva funcionando
+              // como se pidio, no un bug -- ver shadowComparator.classifyDiff.
+              engineHasCustomConfig = !!(historicalTemplateConfig && (
+                historicalTemplateConfig.tolerancia_entrada_minutos != null
+                || historicalTemplateConfig.tolerancia_salida_anticipada_minutos != null
+                || historicalTemplateConfig.politica_llegada_anticipada != null
+                || historicalTemplateConfig.politica_salida_posterior != null
+              )) || dayTypeRulesForTemplate.some((r) => r.day_type === engineDayType);
+            } catch (engineErr) {
+              engineResult = null;
+              console.error('Motor de reglas nuevo: error al calcular, se preserva el comportamiento Legacy para este dia:', engineErr);
+            }
+          }
+
+          // Etapa 14 (hallazgo #5): en modo 'active', si el motor pudo
+          // calcular sin errores, SU resultado pasa a ser el oficial para
+          // este dia (si tiro un error, useEngineAsOfficial queda false y
+          // se cae a Legacy -- nunca se rompe el calculo oficial).
+          const useEngineAsOfficial = schedule.rulesEngineMode === 'active' && engineResult != null;
+
+          const computedOvertimeMinutes = useEngineAsOfficial
+            ? (engineResult.overtimeMinutes || 0)
+            : ((overtimeResult && isOvertimeAuthorized) ? overtimeResult.minutes : 0);
+          const dayOvertimeNeedsVerification = useEngineAsOfficial
+            ? false // el motor nuevo clasifica por regla, no por heuristico -- nada que "verificar"
+            : !!(overtimeResult && isOvertimeAuthorized && overtimeResult.needsVerification);
+          const dayOvertimeSource = useEngineAsOfficial
+            ? (computedOvertimeMinutes > 0 ? 'engine' : null)
+            : ((overtimeResult && isOvertimeAuthorized) ? overtimeResult.source : null);
+
+          // ManualEntries: 'omit' anula el computo automatico (un fichaje
+          // que no corresponde a HE real); 'he'/'licencia' se suman aparte
+          // -- no se pisan entre si, un dia puede tener las dos cosas.
+          // Aplica igual sea Legacy o el motor nuevo el que calculo la
+          // parte automatica -- son cargas humanas explicitas, fuera del
+          // alcance de cualquiera de los dos.
+          const manualKey = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesThisDay = manualKey ? (manualMinutesByUserDate.get(manualKey) || 0) : 0;
+          const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
+          const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
+          const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
+          // Pedido real: "el tope es una opcion solo para que salte un aviso
+          // en el detalle, superó límite diario" -- se compara el TOTAL final
+          // del dia (automatico + manual, ya sin el omitido) contra el tope
+          // configurado; no es solo la parte automatica, un manual que por si
+          // solo supere el tope tambien tiene que avisar.
+          const dayOvertimeOverCap = dayOvertimeMinutes > effectiveCapMinutes;
+          // Hora exacta en la que arranca la HE automatica (marker,
+          // fallback heuristico, o el motor nuevo) -- Fase 7, "Horas
+          // Extra por Regimen" necesita mostrar entrada / inicio HE /
+          // salida por dia, no solo la duracion.
+          const dayOvertimeStartTime = (!isManuallyOmitted && computedOvertimeMinutes > 0)
+            ? (useEngineAsOfficial ? engineOvertimeStartTimeLabel(engineResult) : (overtimeResult && isOvertimeAuthorized ? formatLocalTime(overtimeResult.start) : null))
+            : null;
+
+          let isLate; let lateMinutes; let lateJustifiedThisDay; let isPartialAbsence;
+          if (useEngineAsOfficial) {
+            const lateIncident = engineResult.incidents.find((i) => i.type === 'LATE_ARRIVAL');
+            isLate = !!lateIncident;
+            lateMinutes = lateIncident ? lateIncident.lateMinutes : 0;
+            // Misma logica de justificacion que ya usa Legacy
+            // (resolveLateJustification) -- una tardanza justificada por
+            // una excepcion cargada sigue siendo valida sin importar que
+            // motor detecto la tardanza.
+            const excToMin = exclusion && exclusion.excTo ? timeToMinutes(exclusion.excTo) : null;
+            lateJustifiedThisDay = isLate && !!exclusion && (excToMin === null || firstMin <= excToMin);
+            isPartialAbsence = engineResult.incidents.some((i) => i.type === 'MISSING_ENTRANCE' || i.type === 'MISSING_EXIT');
+          } else {
+            ({ isLate, lateMinutes, justified: lateJustifiedThisDay } = multiVisit
+              ? { isLate: multiVisit.isLate, lateMinutes: multiVisit.lateMinutes, justified: multiVisit.justified }
+              : attendanceCalc.resolveLateJustification({
+                  firstMinutes: firstMin,
+                  entranceMinutes: entranceMin,
+                  toleranceMinutes: tolerance,
+                  exclusion
+                }));
+            isPartialAbsence = !!(multiVisit && multiVisit.isPartial);
+          }
+
+          if (isPartialAbsence) {
+            partialAbsence++;
+          } else if (isLate && lateJustifiedThisDay) {
+            lateJustified++;
+            personalLeaveMinutes += lateMinutes;
+          } else if (isLate) {
+            late++;
+          }
+          if (dayOvertimeMinutes > 0) overtimeMinutes += dayOvertimeMinutes;
+
+          // Etapa 12: modo sombra -- SOLO informativo (Legacy sigue
+          // siendo el oficial para esta plantilla): compara el resultado
+          // Legacy (isLate/lateMinutes/isPartialAbsence/computedOvertimeMinutes
+          // de arriba, que en modo shadow siguen siendo los de Legacy,
+          // useEngineAsOfficial es false) contra el del motor nuevo.
+          let shadowResult = null;
+          // Etapa 14 (hallazgo #9/Auditoria): en modo 'active' no hay
+          // "Legacy oficial" contra el cual comparar (dejo de serlo para
+          // esta plantilla) -- se explica la decision del motor nuevo
+          // igual, para poder responder "por que se clasifico asi".
+          let engineExplanation = null;
+          if (engineResult && schedule.rulesEngineMode === 'shadow') {
+            try {
               // computedOvertimeMinutes (NO dayOvertimeMinutes): se compara
               // solo la deteccion AUTOMATICA -- el motor nuevo no conoce
               // ManualEntries (carga humana explicita, fuera de alcance).
@@ -3372,17 +3453,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
                 overtimeMinutes: computedOvertimeMinutes,
                 visits: multiVisit ? multiVisit.visits : null
               });
-              // hasCustomConfig: si esta plantilla/dia tiene tolerancias o
-              // una regla de tipo de dia propias cargadas, una diferencia
-              // es la funcionalidad nueva funcionando como se pidio, no un
-              // bug -- ver shadowComparator.classifyDiff.
-              const hasCustomConfig = !!(historicalTemplateConfig && (
-                historicalTemplateConfig.tolerancia_entrada_minutos != null
-                || historicalTemplateConfig.tolerancia_salida_anticipada_minutos != null
-                || historicalTemplateConfig.politica_llegada_anticipada != null
-                || historicalTemplateConfig.politica_salida_posterior != null
-              )) || dayTypeRulesForTemplate.some((r) => r.day_type === shadowDayType);
-              const diffs = compareAttendanceResults({ legacy: legacyComparable, engine: engineResult, hasCustomConfig });
+              const diffs = compareAttendanceResults({ legacy: legacyComparable, engine: engineResult, hasCustomConfig: engineHasCustomConfig });
               shadowResult = {
                 engine: {
                   workedMinutes: engineResult.workedMinutes,
@@ -3413,6 +3484,17 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               // del plan ("sin cambiar todavia el resultado oficial").
               console.error('Etapa 12 (modo sombra): error al comparar, no afecta el resultado oficial:', shadowErr);
             }
+          } else if (engineResult && schedule.rulesEngineMode === 'active') {
+            engineExplanation = {
+              workedMinutes: engineResult.workedMinutes,
+              normalMinutes: engineResult.normalMinutes,
+              overtimeMinutes: engineResult.overtimeMinutes,
+              unauthorizedMinutes: engineResult.unauthorizedMinutes,
+              incidents: engineResult.incidents,
+              classifiedSegments: engineResult.classifiedSegments,
+              appliedRules: engineResult.appliedRules,
+              ruleSetVersion: engineResult.ruleSetVersion
+            };
           }
 
           if (days) {
@@ -3466,6 +3548,10 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               // esta en modo 'shadow' -- el frontend actual lo ignora
               // (campo aditivo, nunca reemplaza nada de lo de arriba).
               shadowResult,
+              // Etapa 14 (hallazgo #5/#9): solo presente en modo 'active'
+              // -- status/overtimeMinutes/etc de arriba YA son el
+              // resultado del motor nuevo; esto explica por que.
+              engineExplanation,
             });
           }
         } else if (exclusion || leaveEvent) {

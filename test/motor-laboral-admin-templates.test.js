@@ -123,6 +123,62 @@ test('Etapa 10: un valor invalido de politica devuelve 400 claro, no un error cr
   assert.equal(res.status, 400);
 });
 
+test('Etapa 14 (hallazgo #5): POST/PUT /templates persisten rules_engine_mode, default legacy si no se manda', async () => {
+  const createRes = await fetch(`${BASE}/templates`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Sin modo explicito', type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID })
+  });
+  const createBody = await createRes.json();
+  createdTemplateIds.push(createBody.id);
+  const [[afterCreate]] = await db.query('SELECT rules_engine_mode FROM work_schedule_templates WHERE id = ?', [createBody.id]);
+  assert.equal(afterCreate.rules_engine_mode, 'legacy', 'toda plantilla nueva arranca en legacy salvo que se pida otra cosa');
+
+  const updateRes = await fetch(`${BASE}/templates/${createBody.id}`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Sin modo explicito', type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID, rules_engine_mode: 'shadow' })
+  });
+  assert.equal(updateRes.status, 200);
+  const [[afterUpdate]] = await db.query('SELECT rules_engine_mode FROM work_schedule_templates WHERE id = ?', [createBody.id]);
+  assert.equal(afterUpdate.rules_engine_mode, 'shadow');
+});
+
+test('Etapa 14 (hallazgo #5): un valor invalido de rules_engine_mode devuelve 400, no un error crudo', async () => {
+  const res = await fetch(`${BASE}/templates`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Modo invalido', type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID, rules_engine_mode: 'ALGO_RARO' })
+  });
+  assert.equal(res.status, 400);
+});
+
+test('Etapa 14 (hallazgo #5): editar OTRO campo sin re-mandar rules_engine_mode NO lo resetea a legacy en silencio', async () => {
+  // Mismo patron de bug ya visto con overtime_cutoff_time ("la pongo y no
+  // se guarda") pero al reves y mas grave -- si esto resetea el modo en
+  // silencio, una plantilla en 'active' (calculando sueldos de verdad)
+  // volveria a legacy en cualquier edicion de rutina (ej. cambiar el
+  // nombre) sin que nadie lo pidiera.
+  const createRes = await fetch(`${BASE}/templates`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Modo persistente', type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID, rules_engine_mode: 'active' })
+  });
+  const { id } = await createRes.json();
+  createdTemplateIds.push(id);
+
+  const updateRes = await fetch(`${BASE}/templates/${id}`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    // A proposito SIN rules_engine_mode -- solo se cambia el nombre.
+    body: JSON.stringify({ name: 'Modo persistente (renombrada)', type: 'FIXED', active: true, is_default: false, tenant_id: TENANT_ID })
+  });
+  assert.equal(updateRes.status, 200);
+  const [[row]] = await db.query('SELECT name, rules_engine_mode FROM work_schedule_templates WHERE id = ?', [id]);
+  assert.equal(row.name, 'Modo persistente (renombrada)');
+  assert.equal(row.rules_engine_mode, 'active', 'el modo debe seguir siendo active -- no se reseteo por editar otro campo');
+});
+
 test('PUT /templates/:id: si el body NO manda tenant_id, se conserva el existente (no lo pisa con NULL ni lo rechaza)', async () => {
   // Mismo patron de bug ya corregido en routes/employees.js (Fase 1 del
   // plan de confianza): un superadmin editando sin mandar tenant_id

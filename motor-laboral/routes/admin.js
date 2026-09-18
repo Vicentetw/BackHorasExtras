@@ -42,6 +42,15 @@ function isValidPolicyOrNull(value) {
   return value === undefined || value === null || value === '' || VALID_TOLERANCE_POLICIES.includes(value);
 }
 
+// Etapa 14 (hallazgo #5 de la auditoria): antes de esto, rules_engine_mode
+// no se podia cambiar por API en absoluto (solo por SQL directo, como se
+// hacia en los tests). 'legacy' es el default para toda plantilla nueva
+// -- cero cambio de comportamiento salvo que se elija explicitamente.
+const VALID_RULES_ENGINE_MODES = ['legacy', 'shadow', 'active'];
+function isValidRulesEngineModeOrNull(value) {
+  return value === undefined || value === null || value === '' || VALID_RULES_ENGINE_MODES.includes(value);
+}
+
 function createMotorLaboralAdminRoutes(db) {
   const router = express.Router();
 
@@ -192,13 +201,16 @@ function createMotorLaboralAdminRoutes(db) {
       const {
         name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes,
         tolerancia_entrada_minutos, tolerancia_salida_anticipada_minutos,
-        politica_llegada_anticipada, politica_salida_posterior
+        politica_llegada_anticipada, politica_salida_posterior, rules_engine_mode
       } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });
       }
       if (!isValidPolicyOrNull(politica_llegada_anticipada) || !isValidPolicyOrNull(politica_salida_posterior)) {
         return res.status(400).json({ error: `politica_llegada_anticipada/politica_salida_posterior deben ser uno de: ${VALID_TOLERANCE_POLICIES.join(', ')}` });
+      }
+      if (!isValidRulesEngineModeOrNull(rules_engine_mode)) {
+        return res.status(400).json({ error: `rules_engine_mode debe ser uno de: ${VALID_RULES_ENGINE_MODES.join(', ')}` });
       }
       // If marking this template as default, unset other defaults for the tenant
       if (is_default) {
@@ -211,12 +223,14 @@ function createMotorLaboralAdminRoutes(db) {
       const [result] = await db.query(
         `INSERT INTO work_schedule_templates
            (tenant_id, name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes,
-            tolerancia_entrada_minutos, tolerancia_salida_anticipada_minutos, politica_llegada_anticipada, politica_salida_posterior)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            tolerancia_entrada_minutos, tolerancia_salida_anticipada_minutos, politica_llegada_anticipada, politica_salida_posterior,
+            rules_engine_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null,
           tolerancia_entrada_minutos ?? null, tolerancia_salida_anticipada_minutos ?? null,
-          politica_llegada_anticipada || null, politica_salida_posterior || null
+          politica_llegada_anticipada || null, politica_salida_posterior || null,
+          rules_engine_mode || 'legacy'
         ]
       );
       res.json({ ok: true, id: result.insertId });
@@ -257,7 +271,7 @@ function createMotorLaboralAdminRoutes(db) {
       const {
         name, description, type, active, is_default, overtime_cutoff_time, overtime_cap_minutes,
         tolerancia_entrada_minutos, tolerancia_salida_anticipada_minutos,
-        politica_llegada_anticipada, politica_salida_posterior
+        politica_llegada_anticipada, politica_salida_posterior, rules_engine_mode
       } = req.body;
       if (tenantId === undefined || tenantId === null || !name || !type) {
         return res.status(400).json({ error: 'tenantId/tenant_id, name y type son requeridos' });
@@ -265,6 +279,15 @@ function createMotorLaboralAdminRoutes(db) {
       if (!isValidPolicyOrNull(politica_llegada_anticipada) || !isValidPolicyOrNull(politica_salida_posterior)) {
         return res.status(400).json({ error: `politica_llegada_anticipada/politica_salida_posterior deben ser uno de: ${VALID_TOLERANCE_POLICIES.join(', ')}` });
       }
+      if (!isValidRulesEngineModeOrNull(rules_engine_mode)) {
+        return res.status(400).json({ error: `rules_engine_mode debe ser uno de: ${VALID_RULES_ENGINE_MODES.join(', ')}` });
+      }
+      // rules_engine_mode es NOT NULL en la base (a diferencia de las
+      // columnas de tolerancia) -- si no viene en el body, se preserva el
+      // valor QUE YA TENIA la plantilla, nunca se resetea a 'legacy' en
+      // silencio (mismo bug real que ya paso una vez con overtime_cutoff_time:
+      // "la pongo y no se guarda" / aca seria peor, "la edito y se desactiva sola").
+      const effectiveRulesEngineMode = rules_engine_mode || existing.rules_engine_mode;
       // If marking this template as default, unset other defaults for the tenant
       if (is_default) {
         try {
@@ -302,12 +325,14 @@ function createMotorLaboralAdminRoutes(db) {
          SET tenant_id = ?, name = ?, description = ?, type = ?, active = ?, is_default = ?,
              overtime_cutoff_time = ?, overtime_cap_minutes = ?,
              tolerancia_entrada_minutos = ?, tolerancia_salida_anticipada_minutos = ?,
-             politica_llegada_anticipada = ?, politica_salida_posterior = ?
+             politica_llegada_anticipada = ?, politica_salida_posterior = ?,
+             rules_engine_mode = ?
          WHERE id = ?`,
         [
           tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null,
           tolerancia_entrada_minutos ?? null, tolerancia_salida_anticipada_minutos ?? null,
           politica_llegada_anticipada || null, politica_salida_posterior || null,
+          effectiveRulesEngineMode,
           id
         ]
       );
