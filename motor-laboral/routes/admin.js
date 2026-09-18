@@ -733,6 +733,315 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
+  // ============ Etapa 14 (hallazgo #4 de la auditoria) ============
+  // Hasta ahora, day_type_overtime_rules/labor_conventions/
+  // employee_convention_assignments solo se podian cargar por SQL
+  // directo -- nada de lo construido en las Etapas 8/9 era operable
+  // desde la app. Mismo patron de aislamiento de tenant que el resto de
+  // este archivo (resolveTenantId + 404, nunca 403, para no filtrar
+  // existencia de datos de otra empresa -- hallazgo #7 de la auditoria).
+
+  // --- Convenios (labor_conventions) ---
+
+  router.get('/conventions', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const effectiveTenantId = resolveTenantId(req);
+      const [rows] = effectiveTenantId !== null
+        ? await db.query('SELECT * FROM labor_conventions WHERE tenant_id = ? ORDER BY name ASC', [effectiveTenantId])
+        : await db.query('SELECT * FROM labor_conventions ORDER BY tenant_id ASC, name ASC');
+      res.json(rows);
+    } catch (err) {
+      console.error('Motor Laboral admin conventions error:', err);
+      res.status(500).json({ error: 'Error al leer convenios' });
+    }
+  });
+
+  router.post('/conventions', requirePermission('schedules', 'create'), async (req, res) => {
+    try {
+      const bodyTenantId = req.body.tenant_id ?? req.body.tenantId;
+      const tenantId = req.appUser && !req.appUser.isSuperadmin ? req.appUser.tenantId : bodyTenantId;
+      const { name, description, active } = req.body;
+      if (tenantId === undefined || tenantId === null || !name) {
+        return res.status(400).json({ error: 'tenantId/tenant_id y name son requeridos' });
+      }
+      const [result] = await db.query(
+        'INSERT INTO labor_conventions (tenant_id, name, description, active) VALUES (?, ?, ?, ?)',
+        [tenantId, name, description || null, active === undefined || active ? 1 : 0]
+      );
+      res.status(201).json({ ok: true, id: result.insertId });
+    } catch (err) {
+      console.error('Motor Laboral admin create convention error:', err);
+      res.status(500).json({ error: 'Error al crear convenio' });
+    }
+  });
+
+  router.put('/conventions/:id', requirePermission('schedules', 'update'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const effectiveTenantId = resolveTenantId(req);
+      const [[existing]] = await db.query('SELECT * FROM labor_conventions WHERE id = ?', [id]);
+      if (!existing || (effectiveTenantId !== null && existing.tenant_id !== effectiveTenantId)) {
+        return res.status(404).json({ error: 'Convenio no encontrado' });
+      }
+      const { name, description, active } = req.body;
+      if (!name) {
+        return res.status(400).json({ error: 'name es requerido' });
+      }
+      await db.query(
+        'UPDATE labor_conventions SET name = ?, description = ?, active = ? WHERE id = ?',
+        [name, description || null, active === undefined || active ? 1 : 0, id]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Motor Laboral admin update convention error:', err);
+      res.status(500).json({ error: 'Error al actualizar convenio' });
+    }
+  });
+
+  router.delete('/conventions/:id', requirePermission('schedules', 'delete'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const effectiveTenantId = resolveTenantId(req);
+      const [[existing]] = await db.query('SELECT tenant_id FROM labor_conventions WHERE id = ?', [id]);
+      if (!existing || (effectiveTenantId !== null && existing.tenant_id !== effectiveTenantId)) {
+        return res.status(404).json({ error: 'Convenio no encontrado' });
+      }
+      await db.query('DELETE FROM labor_conventions WHERE id = ?', [id]);
+      res.json({ ok: true });
+    } catch (err) {
+      // FK real hacia day_type_overtime_rules/employee_convention_assignments
+      // -- mensaje claro en vez de un 500 crudo de MySQL si esta en uso.
+      if (err.code === 'ER_ROW_IS_REFERENCED_2' || err.code === 'ER_ROW_IS_REFERENCED') {
+        return res.status(409).json({ error: 'No se puede eliminar: hay reglas de horas extra o encuadramientos de empleados que usan este convenio' });
+      }
+      console.error('Motor Laboral admin delete convention error:', err);
+      res.status(500).json({ error: 'Error al eliminar convenio' });
+    }
+  });
+
+  // --- Reglas de horas extra por tipo de dia (day_type_overtime_rules) ---
+
+  router.get('/day-type-rules', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId === null) {
+        const [rows] = await db.query('SELECT * FROM day_type_overtime_rules ORDER BY tenant_id ASC, day_type ASC');
+        return res.json(rows);
+      }
+      // Un usuario normal ve las reglas de SU tenant, mas las de SUS
+      // propias plantillas/convenios -- nunca las de otra empresa ni las
+      // globales (esas son responsabilidad del superadmin).
+      const [rows] = await db.query(
+        `SELECT r.* FROM day_type_overtime_rules r
+         WHERE r.tenant_id = ?
+            OR r.template_id IN (SELECT id FROM work_schedule_templates WHERE tenant_id = ?)
+            OR r.convention_id IN (SELECT id FROM labor_conventions WHERE tenant_id = ?)
+         ORDER BY r.day_type ASC`,
+        [effectiveTenantId, effectiveTenantId, effectiveTenantId]
+      );
+      res.json(rows);
+    } catch (err) {
+      console.error('Motor Laboral admin day-type-rules error:', err);
+      res.status(500).json({ error: 'Error al leer reglas de horas extra' });
+    }
+  });
+
+  // Valida que (si vienen) template_id/convention_id pertenezcan al
+  // tenant efectivo -- para un superadmin (effectiveTenantId null) no
+  // hay restriccion (puede crear reglas cross-empresa a proposito, ej.
+  // una global). Devuelve un mensaje de error o null si esta todo bien.
+  async function validateDayTypeRuleScope({ effectiveTenantId, tenantId, templateId, conventionId }, db) {
+    if (effectiveTenantId === null) return null;
+    if (tenantId != null && Number(tenantId) !== effectiveTenantId) {
+      return 'tenant_id no coincide con tu empresa';
+    }
+    if (templateId != null) {
+      const [[tpl]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [templateId]);
+      if (!tpl || tpl.tenant_id !== effectiveTenantId) return 'template_id no pertenece a tu empresa';
+    }
+    if (conventionId != null) {
+      const [[conv]] = await db.query('SELECT tenant_id FROM labor_conventions WHERE id = ?', [conventionId]);
+      if (!conv || conv.tenant_id !== effectiveTenantId) return 'convention_id no pertenece a tu empresa';
+    }
+    return null;
+  }
+
+  router.post('/day-type-rules', requirePermission('schedules', 'create'), async (req, res) => {
+    try {
+      const effectiveTenantId = resolveTenantId(req);
+      const { day_type, trigger_type, classification_type, rate, requires_authorization, active } = req.body;
+      let { tenant_id, template_id, convention_id } = req.body;
+      if (!DAY_TYPES.includes(day_type) || !['BEFORE_SCHEDULE', 'AFTER_SCHEDULE', 'ALL_DAY'].includes(trigger_type)) {
+        return res.status(400).json({ error: `day_type/trigger_type invalidos` });
+      }
+      // Un usuario normal siempre crea a nivel de SU tenant salvo que
+      // apunte a una plantilla/convenio propios -- nunca una regla global.
+      if (effectiveTenantId !== null && tenant_id == null && template_id == null && convention_id == null) {
+        tenant_id = effectiveTenantId;
+      }
+      const scopeError = await validateDayTypeRuleScope({ effectiveTenantId, tenantId: tenant_id, templateId: template_id, conventionId: convention_id }, db);
+      if (scopeError) return res.status(400).json({ error: scopeError });
+
+      const [result] = await db.query(
+        `INSERT INTO day_type_overtime_rules
+           (tenant_id, convention_id, template_id, day_type, trigger_type, classification_type, rate, requires_authorization, active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          tenant_id ?? null, convention_id ?? null, template_id ?? null, day_type, trigger_type,
+          classification_type || 'OVERTIME', rate ?? null,
+          requires_authorization === undefined || requires_authorization ? 1 : 0,
+          active === undefined || active ? 1 : 0
+        ]
+      );
+      res.status(201).json({ ok: true, id: result.insertId });
+    } catch (err) {
+      console.error('Motor Laboral admin create day-type-rule error:', err);
+      res.status(500).json({ error: 'Error al crear regla de horas extra' });
+    }
+  });
+
+  router.put('/day-type-rules/:id', requirePermission('schedules', 'update'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const effectiveTenantId = resolveTenantId(req);
+      const [[existing]] = await db.query('SELECT * FROM day_type_overtime_rules WHERE id = ?', [id]);
+      if (!existing) return res.status(404).json({ error: 'Regla no encontrada' });
+      if (effectiveTenantId !== null) {
+        const notFoundError = await validateDayTypeRuleScope(
+          { effectiveTenantId, tenantId: existing.tenant_id, templateId: existing.template_id, conventionId: existing.convention_id }, db
+        );
+        if (notFoundError) return res.status(404).json({ error: 'Regla no encontrada' });
+      }
+      const { day_type, trigger_type, classification_type, rate, requires_authorization, active } = req.body;
+      if (!DAY_TYPES.includes(day_type) || !['BEFORE_SCHEDULE', 'AFTER_SCHEDULE', 'ALL_DAY'].includes(trigger_type)) {
+        return res.status(400).json({ error: 'day_type/trigger_type invalidos' });
+      }
+      await db.query(
+        `UPDATE day_type_overtime_rules
+         SET day_type = ?, trigger_type = ?, classification_type = ?, rate = ?, requires_authorization = ?, active = ?
+         WHERE id = ?`,
+        [
+          day_type, trigger_type, classification_type || 'OVERTIME', rate ?? null,
+          requires_authorization === undefined || requires_authorization ? 1 : 0,
+          active === undefined || active ? 1 : 0,
+          id
+        ]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Motor Laboral admin update day-type-rule error:', err);
+      res.status(500).json({ error: 'Error al actualizar regla de horas extra' });
+    }
+  });
+
+  router.delete('/day-type-rules/:id', requirePermission('schedules', 'delete'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const effectiveTenantId = resolveTenantId(req);
+      const [[existing]] = await db.query('SELECT * FROM day_type_overtime_rules WHERE id = ?', [id]);
+      if (!existing) return res.status(404).json({ error: 'Regla no encontrada' });
+      if (effectiveTenantId !== null) {
+        const notFoundError = await validateDayTypeRuleScope(
+          { effectiveTenantId, tenantId: existing.tenant_id, templateId: existing.template_id, conventionId: existing.convention_id }, db
+        );
+        if (notFoundError) return res.status(404).json({ error: 'Regla no encontrada' });
+      }
+      await db.query('DELETE FROM day_type_overtime_rules WHERE id = ?', [id]);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Motor Laboral admin delete day-type-rule error:', err);
+      res.status(500).json({ error: 'Error al eliminar regla de horas extra' });
+    }
+  });
+
+  // --- Encuadramiento de empleado a convenio (employee_convention_assignments) ---
+
+  router.get('/employees/:employeeId/convention-assignments', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[emp]] = await db.query('SELECT tenant_id FROM employees WHERE id = ?', [employeeId]);
+        if (!emp || emp.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ error: 'Empleado no encontrado' });
+        }
+      }
+      const [rows] = await db.query(
+        `SELECT id, employee_id, tenant_id, convention_id, category_id, valid_from, valid_to, created_at
+         FROM employee_convention_assignments WHERE employee_id = ? ORDER BY valid_from DESC`,
+        [employeeId]
+      );
+      res.json(rows);
+    } catch (err) {
+      console.error('Motor Laboral admin employee convention-assignments error:', err);
+      res.status(500).json({ error: 'Error al leer encuadramiento del empleado' });
+    }
+  });
+
+  router.post('/employees/:employeeId/convention-assignments', requirePermission('schedules', 'update'), async (req, res) => {
+    try {
+      const { employeeId } = req.params;
+      const { convention_id, category_id, valid_from, valid_to } = req.body;
+      if (!convention_id || !valid_from) {
+        return res.status(400).json({ error: 'convention_id y valid_from son requeridos' });
+      }
+      const [[emp]] = await db.query('SELECT id, tenant_id FROM employees WHERE id = ?', [employeeId]);
+      if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null && emp.tenant_id !== effectiveTenantId) {
+        return res.status(404).json({ error: 'Empleado no encontrado' });
+      }
+      const [[convention]] = await db.query('SELECT tenant_id FROM labor_conventions WHERE id = ?', [convention_id]);
+      if (!convention || convention.tenant_id !== emp.tenant_id) {
+        return res.status(400).json({ error: 'El convenio no pertenece a la misma empresa que el empleado' });
+      }
+
+      // Mismo criterio que employee_work_calendars: cerrar cualquier
+      // encuadramiento abierto anterior antes de que empiece el nuevo.
+      await db.query(
+        `UPDATE employee_convention_assignments
+         SET valid_to = DATE_SUB(?, INTERVAL 1 DAY)
+         WHERE employee_id = ? AND valid_to IS NULL AND valid_from < ?`,
+        [valid_from, employeeId, valid_from]
+      );
+
+      const [result] = await db.query(
+        `INSERT INTO employee_convention_assignments (employee_id, tenant_id, convention_id, category_id, valid_from, valid_to)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [employeeId, emp.tenant_id, convention_id, category_id ?? null, valid_from, valid_to || null]
+      );
+      res.status(201).json({ id: result.insertId, employee_id: employeeId, convention_id, category_id: category_id ?? null, valid_from, valid_to: valid_to || null });
+    } catch (err) {
+      console.error('Motor Laboral admin save convention-assignment error:', err);
+      res.status(500).json({ error: 'Error al guardar encuadramiento del empleado' });
+    }
+  });
+
+  router.delete('/employees/:employeeId/convention-assignments/:assignmentId', requirePermission('schedules', 'delete'), async (req, res) => {
+    try {
+      const { employeeId, assignmentId } = req.params;
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[emp]] = await db.query('SELECT tenant_id FROM employees WHERE id = ?', [employeeId]);
+        if (!emp || emp.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ error: 'Encuadramiento no encontrado' });
+        }
+      }
+      const [result] = await db.query(
+        'DELETE FROM employee_convention_assignments WHERE employee_id = ? AND id = ?',
+        [employeeId, assignmentId]
+      );
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: 'Encuadramiento no encontrado' });
+      }
+      res.json({ id: assignmentId, deleted: true });
+    } catch (err) {
+      console.error('Motor Laboral admin delete convention-assignment error:', err);
+      res.status(500).json({ error: 'Error al eliminar encuadramiento del empleado' });
+    }
+  });
+
   // Fase 19: firewall por pais/IP de /api/public -- ver
   // countryFirewallMiddleware.js. Guardado en app_settings (global,
   // tenant_id NULL: esto corre ANTES de que exista ningun tenant, no
