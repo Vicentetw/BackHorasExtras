@@ -4,7 +4,7 @@
 // motor nuevo, SIN cambiar el resultado oficial -- solo se anota la
 // diferencia (day.shadowResult, tabla rule_engine_shadow_diffs).
 //
-// 3 escenarios, 3 plantillas distintas (mismo tenant):
+// 4 escenarios, 3 plantillas distintas (mismo tenant):
 // - LEGACY_TEMPLATE (rules_engine_mode default, sin tocar): shadowResult
 //   debe ser null y no debe insertarse NINGUNA fila en
 //   rule_engine_shadow_diffs -- el modo sombra ni siquiera corre.
@@ -18,6 +18,14 @@
 //   NEW_FEATURE (no POSSIBLE_REGRESSION, porque hay configuracion nueva
 //   de por medio). El resultado OFICIAL (status/late/overtimeHours) no
 //   debe cambiar en NADA para ninguno de los 3 casos.
+// - SHADOW_TEMPLATE_EXCUSED (modo 'shadow', dia con licencia/vacaciones
+//   -- userexclusions, SIN fichajes): Etapa 13 ("Vacaciones"/"Permiso").
+//   El motor nuevo NUNCA corre en un dia Excused (la rama checks.length>0
+//   de /attendance-range, la unica que invoca el motor, ni siquiera se
+//   alcanza) -- shadowResult debe seguir siendo null, igual que en modo
+//   legacy. Salida particular/oficial no se testean aca: son un dato
+//   adicional (hasParticularExit) que no altera fichajes/tolerancias, no
+//   hay nada propio del motor que pueda romperse con eso.
 //
 // Requiere que el backend local este corriendo (node horasdedica2.js,
 // puerto 3000) contra la misma base.
@@ -34,6 +42,7 @@ const TENANT_ID = 999997;
 const DATE_LEGACY = '2026-01-05'; // lunes
 const DATE_SHADOW_NO_DIFF = '2026-01-12'; // lunes
 const DATE_SHADOW_NEW_FEATURE = '2026-01-19'; // lunes
+const DATE_SHADOW_EXCUSED = '2026-01-26'; // lunes
 
 let headers;
 let db;
@@ -90,7 +99,8 @@ before(async () => {
   const scenarios = [
     { date: DATE_LEGACY, templateId: templateLegacyId, checkinTime: '09:00:00' },
     { date: DATE_SHADOW_NO_DIFF, templateId: templateShadowNoDiffId, checkinTime: '09:00:00' },
-    { date: DATE_SHADOW_NEW_FEATURE, templateId: templateShadowNewFeatureId, checkinTime: '09:15:00' }
+    { date: DATE_SHADOW_NEW_FEATURE, templateId: templateShadowNewFeatureId, checkinTime: '09:15:00' },
+    { date: DATE_SHADOW_EXCUSED, templateId: templateShadowNoDiffId, checkinTime: null }
   ];
 
   const seed = Date.now() % 1000000;
@@ -114,10 +124,19 @@ before(async () => {
       `INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to) VALUES (?, ?, ?, ?, NULL)`,
       [employeeId, TENANT_ID, scenario.templateId, scenario.date]
     );
-    await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?)`, [
-      userId, TENANT_ID, `${scenario.date} ${scenario.checkinTime}`,
-      userId, TENANT_ID, `${scenario.date} 18:00:00`
-    ]);
+
+    if (scenario.checkinTime) {
+      await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?)`, [
+        userId, TENANT_ID, `${scenario.date} ${scenario.checkinTime}`,
+        userId, TENANT_ID, `${scenario.date} 18:00:00`
+      ]);
+    } else {
+      // Etapa 13 ("Vacaciones"/"Permiso"): sin fichajes, dia excusado por
+      // licencia -- el empleado ni siquiera entra a la rama checks.length>0
+      // de /attendance-range (la unica que invoca el motor nuevo).
+      await db.query(`INSERT INTO userexclusions (userId, tenant_id, excDate, reason, type) VALUES (?, ?, ?, ?, 'FULL_DAY')`,
+        [userId, TENANT_ID, scenario.date, 'Vacaciones (test)']);
+    }
 
     employees[scenario.date] = { employeeId, badge, userId };
   }
@@ -126,6 +145,7 @@ before(async () => {
 after(async () => {
   for (const { userId, employeeId } of Object.values(employees)) {
     await db.query('DELETE FROM Checkins WHERE USERID = ?', [userId]);
+    await db.query('DELETE FROM userexclusions WHERE userId = ?', [userId]);
     await db.query('DELETE FROM employee_work_calendars WHERE employee_id = ?', [employeeId]);
     await db.query('DELETE FROM user_employee_map WHERE USERID = ?', [userId]);
     await db.query('DELETE FROM users WHERE USERID = ?', [userId]);
@@ -204,4 +224,21 @@ test('modo shadow CON tolerancia de entrada configurada, fichaje 15min tarde: Le
   const [rows] = await db.query('SELECT * FROM rule_engine_shadow_diffs WHERE employee_id = ? ORDER BY field', [employeeId]);
   assert.ok(rows.length >= 1, 'la diferencia debe quedar persistida para revision');
   rows.forEach((r) => assert.equal(r.diff_type, 'NEW_FEATURE'));
+});
+
+test('Etapa 13 (Vacaciones/Permiso): dia excusado (licencia) bajo plantilla en modo shadow -> el motor nuevo NUNCA corre, shadowResult null', async () => {
+  const { badge, employeeId } = employees[DATE_SHADOW_EXCUSED];
+  const res = await fetch(
+    `${BASE_URL}/attendance-range?from=2026-01-01&to=2026-01-31&employeeId=${badge}`,
+    { headers }
+  );
+  const json = await res.json();
+  const row = json.data.find((r) => String(r.employeeId) === String(badge));
+  const day = row.days.find((d) => d.date === DATE_SHADOW_EXCUSED);
+
+  assert.equal(day.status, 'Excused');
+  assert.equal(day.shadowResult, undefined, 'un dia Excused ni siquiera tiene el campo shadowResult -- esa rama no lo agrega');
+
+  const [rows] = await db.query('SELECT * FROM rule_engine_shadow_diffs WHERE employee_id = ?', [employeeId]);
+  assert.equal(rows.length, 0, 'sin fichajes, el motor nuevo no corrio -- no hay nada que comparar ni persistir');
 });
