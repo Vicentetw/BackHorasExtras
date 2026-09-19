@@ -1,0 +1,59 @@
+# CI (Integración Continua): corre los tests solo, en los servidores de
+# GitHub, cada vez que alguien sube código. Si algo se rompe, GitHub lo
+# marca en rojo ANTES de que llegue a producción.
+#
+# Por qué esto importa acá: el 2026-09-18 se pusheó a `main` (que Render
+# despliega solo) sin que nadie hubiera corrido los tests, y encima antes
+# de correr las migraciones. Con este workflow activo + branch protection
+# (ver ESTADO_PROYECTO.md), eso deja de ser posible.
+#
+# ---- Por qué solo corre los tests "puros" y no los 77 ----
+# De los 77 archivos de test, 59 necesitan: una base MySQL con el esquema
+# completo, el backend corriendo en localhost:3000, y credenciales reales
+# de Firebase (los tests piden un token de verdad a Google). Montar todo
+# eso en CI es posible pero es un proyecto en sí mismo -- y hasta que se
+# haga, un CI que falla por infraestructura (y no por un bug real) se
+# vuelve ruido que la gente aprende a ignorar, que es peor que no tenerlo.
+#
+# Los 18 que SÍ corren acá son de lógica pura (sin base, sin servidor, sin
+# red): 207 tests en ~2 segundos. Y no es poca cosa: son justamente los
+# del motor de cálculo -- tolerancias, clasificación de horas extra,
+# turnos partidos, cruces de medianoche, fichajes duplicados. O sea, la
+# parte que define cuánta plata cobra cada persona.
+#
+# Siguiente paso (pendiente, ver ESTADO_PROYECTO.md "Fase 2"): levantar
+# MySQL como service container acá y correr también los de integración.
+name: Tests
+
+# Cuándo se dispara: en cada push a main y en cada Pull Request hacia main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    name: Tests de lógica (sin base de datos)
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Baja el código del repo a la máquina temporal de GitHub.
+      - uses: actions/checkout@v4
+
+      # 2. Instala Node. La versión 20 es la misma que usa el runner de
+      #    migraciones de este repo (ver run-migration.yml).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 3. Instala las dependencias. `npm ci` (en vez de `npm install`)
+      #    instala exactamente lo que dice package-lock.json, sin
+      #    actualizar nada -- es lo que se usa en CI para que el
+      #    resultado sea reproducible.
+      - name: Instalar dependencias
+        run: npm ci
+
+      # 4. Corre los tests. Si alguno falla, este paso devuelve error y
+      #    GitHub marca todo el workflow en rojo.
+      - name: Correr tests de lógica
+        run: npm run test:unit

@@ -4,7 +4,8 @@
   "description": "",
   "main": "db.js",
   "scripts": {
-    "test": "node --test --test-force-exit --test-concurrency=1"
+    "test": "node --test --test-force-exit --test-concurrency=1",
+    "test:unit": "node --test --test-force-exit test/attendance-calculations.test.js test/billing-calculations.test.js test/checkin-normalizer.test.js test/country-firewall-service.test.js test/day-type-rule-resolver.test.js test/leave-days-calculations.test.js test/mercadopago-service.test.js test/movements-calculations.test.js test/overtime-calculations.test.js test/rules-engine-matrix.test.js test/sales-chat-service.test.js test/schedule-resolver.test.js test/security-public-paths.test.js test/shadow-comparator.test.js test/template-config-history-resolver.test.js test/time-classifier.test.js test/tolerance-resolver.test.js test/turnstile-service.test.js"
   },
   "keywords": [],
   "author": "",

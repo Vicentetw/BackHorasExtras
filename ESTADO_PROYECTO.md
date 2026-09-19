@@ -11,6 +11,8 @@ quedó funcionando, y qué falta.
 - **Backend**: `BackHorasExtras` (GitHub: `Vicentetw/BackHorasExtras`), rama `main`. Deploy: Render (`https://academypruebadep.onrender.com`), auto-deploy al pushear a `main`. Base de datos: MySQL en Clever Cloud (credenciales en `.env` de producción del servicio en Render; hay una copia de solo-lectura en `motor-laboral/.env` de este repo, pensada solo para verificaciones puntuales, **nunca** para correr tests contra ella).
 - **Frontend**: `horas-dedica-angular` (GitHub: `Vicentetw/horas-dedica-angular`), rama `main`. Deploy: Firebase Hosting, proyecto `horasdedicacionavp`, sitio real `https://horasdedicacionavp.web.app`. El deploy **no es automático** — hay que correr `npm run deploy:live` a mano después de cada push a `main`.
 - **Base de test local** (para desarrollo/tests, NO es producción): MySQL en `localhost:3307`, base `horas_dedica2`, user `root`, password `0113333`. El `.env` en la raíz de `BackHorasExtras` apunta ahí.
+- **Agente de descarga de fichajes** (programa Python que corre en una PC Windows 10 junto al reloj biométrico, se compila a `.exe` con PyInstaller vía `main.spec` y deja el ejecutable en `dist/`): la copia **vigente** es `C:\angular\horasDedicacionOnline\descarga-fichaje-py`. Además de generar los dos CSV (`CHECKINOUT.csv` y `USERINFO.csv`), **sube los fichajes a la nube** por su cuenta (ver `api_client.py` y `agent_runner.py`).
+  ⚠️ **Ojo**: existe una segunda copia desactualizada en `C:\angular\descarga-fichaje-py` (de principios de septiembre, con un `main.py` bastante más chico). **No usarla.** Conviene borrarla o renombrarla a `descarga-fichaje-py-VIEJO-NO-USAR` para que nadie se confunda: tocar la copia equivocada de un programa que sube fichajes a producción sería un problema serio.
 
 ## Qué es "el motor de reglas configurable"
 
@@ -209,6 +211,74 @@ confirmó que NO es la primera consulta la que falla.
   el plan de Clever Cloud (más conexiones permitidas), o revisar si
   hay conexiones que no se liberan bien en algún camino de código.
 
+## CI — tests automáticos (arrancado 2026-09-18)
+
+### Qué es y por qué
+
+"CI" (integración continua) significa que los tests corren **solos, en
+los servidores de GitHub, cada vez que alguien sube código** — no
+dependen de que alguien se acuerde de correrlos en su máquina. Si algo
+se rompe, GitHub lo marca en rojo.
+
+Esto no es teoría: el 2026-09-18 se pusheó a `main` (que Render
+despliega automáticamente) sin correr los tests y antes de aplicar las
+migraciones. Si alguien hubiera editado una plantilla de horario en esa
+ventana, le habría dado un error de SQL. Con CI + branch protection eso
+deja de ser posible.
+
+### Qué quedó configurado
+
+`.github/workflows/tests.yml` — corre en cada push a `main` y en cada
+Pull Request. Ejecuta `npm run test:unit`.
+
+### Qué cubre y qué NO (importante entender la diferencia)
+
+De los **77** archivos de test del repo:
+
+- **18 son "puros"**: no necesitan base de datos, ni el servidor
+  levantado, ni internet. Son 207 tests que corren en ~2 segundos.
+  **Estos son los que corren en CI hoy.** Y no es poca cosa: son los
+  del motor de cálculo (tolerancias, clasificación de horas extra,
+  turno partido, cruce de medianoche, fichajes duplicados) — o sea, la
+  parte que define cuánto cobra cada persona.
+- **59 son de integración**: necesitan MySQL con el esquema completo,
+  el backend corriendo en `localhost:3000`, y credenciales reales de
+  Firebase (piden un token de verdad a Google). **Estos NO corren en CI
+  todavía** — hacerlo es la "Fase 2" del backlog.
+
+La razón de arrancar solo con los puros: un CI que falla por problemas
+de infraestructura (y no por bugs reales) se vuelve ruido, la gente
+aprende a ignorarlo, y termina siendo peor que no tenerlo. Mejor
+empezar con algo que siempre es señal verdadera, y ampliarlo después.
+
+### Cómo agregar un test nuevo a CI
+
+Si el test nuevo **no** usa base ni servidor (o sea, no tiene
+`require('dotenv')`, ni `require('../db')`, ni `TEST_BASE_URL`, ni
+`mysql.createConnection`), agregá su nombre a la lista del script
+`test:unit` en `package.json`. Si sí los usa, por ahora queda fuera de
+CI y solo corre con `npm test` en local.
+
+### Lo que falta hacer A MANO en GitHub (no se puede por código)
+
+**Branch protection** — hoy cualquiera (incluida una IA, o vos apurado
+un viernes) puede pushear directo a `main` y disparar un deploy. Para
+cerrarlo, en **cada uno de los dos repos**:
+
+1. GitHub → repo → **Settings** → **Branches** → **Add branch ruleset**
+   (o "Add rule" según la versión).
+2. Branch name pattern: `main`.
+3. Tildar **"Require a pull request before merging"** (obliga a que todo
+   cambio pase por un PR, aunque lo apruebes vos mismo).
+4. Tildar **"Require status checks to pass before merging"** y elegir el
+   check **"Tests de lógica (sin base de datos)"** (aparece en la lista
+   recién después del primer push que dispare el workflow).
+5. Guardar.
+
+A partir de ahí: si los tests fallan, GitHub no deja mergear. Y como
+Render despliega desde `main`, no puede llegar a producción algo con
+los tests en rojo.
+
 ## Trabajo pendiente (backlog, ninguno arrancado)
 
 1. **Resolver el problema de lentitud de arriba.**
@@ -216,11 +286,21 @@ confirmó que NO es la primera consulta la que falla.
    `C:\Users\EURO\.claude\plans\staged-sauteeing-starfish.md` en la
    máquina del desarrollador que usó Claude Code — si no se tiene
    acceso a ese archivo, esto resume lo que falta):
-   - **Fase 2**: reescribir ~31 tests que hoy dependen de datos reales
-     de producción, para que el CI corra 100% en una base nueva/limpia.
-   - **Fase 3**: activar branch protection en ambos repos (nadie
-     pushea directo a `main` sin pasar por PR + CI en verde) — esto lo
-     puede activar el usuario mismo desde GitHub, no requiere código.
+   - **Fase 2 (parcialmente hecha)**: ✅ CI andando con los 18 tests
+     puros (ver sección "CI" arriba). ⏳ Falta llevar a CI los 59 tests
+     de integración: hay que levantar MySQL como *service container* en
+     el workflow, cargar el esquema (`schema/full_schema_snapshot.sql`)
+     + todas las migraciones en orden, arrancar el backend en segundo
+     plano, y guardar el service account de Firebase como *secret* del
+     repo (`firebaseTestAuth.js` ya soporta leerlo de la variable de
+     entorno `FIREBASE_SERVICE_ACCOUNT`). Ojo con dos cosas al hacerlo:
+     el test de MercadoPago falla siempre porque llama a la API real
+     (hay que aislarlo o excluirlo), y los tests piden tokens reales a
+     Google, que rate-limitea si se corre la suite muchas veces
+     seguidas (pasó durante el desarrollo).
+   - **Fase 3**: ⏳ activar branch protection en ambos repos — pasos
+     exactos documentados en la sección "CI" de arriba. **Lo tiene que
+     hacer el usuario a mano en GitHub**, no se puede por código.
    - **Fase 4**: disciplina de "definición de terminado" (cada cambio
      con su test antes de mergear) — ya se venía siguiendo de hecho
      durante todo el desarrollo del motor de reglas.
