@@ -82,9 +82,12 @@ migrations/20260923_employee_convention_assignments.sql
 migrations/20260924_rules_engine_mode_and_shadow_diffs.sql
 migrations/20260925_template_config_history.sql
 migrations/20260926_shadow_diffs_unique_key.sql
+migrations/20260927_manual_entries_exclusions_audit.sql   <-- PENDIENTE en producción
 ```
 
-**Ya corridas en producción** (confirmado por el usuario el 2026-09-18).
+Las seis primeras están **ya corridas en producción** (confirmado por el
+usuario el 2026-09-18). La `20260927` es del 2026-09-19 y **todavía no se
+corrió** — ver la sección "Auditoría de cargas manuales" más abajo.
 Para correr una migración nueva contra producción: pestaña **Actions**
 del repo → workflow "Correr migracion SQL en produccion (manual)" →
 `migration_files` con el/los archivo(s), separados por coma. Nadie
@@ -138,10 +141,27 @@ problemas encontrados y sus commits:
    — memoizado con un `WeakMap` por request. Commit `96b2d14`.
 9. **Modo `active` sin ningún test** — agregado junto con el punto 5.
 
-Backend: **513/513 tests** al momento del merge (1 flake preexistente
-de MercadoPago, no relacionado a nada de esto — ver
-`test/billing-client-panel.test.js`, llama a la API real de MercadoPago
-y a veces esa llamada externa falla en este entorno).
+Backend: **513/513 tests** al momento del merge (más 1 que fallaba y que
+se venía anotando como "flake preexistente de MercadoPago").
+
+**Ese "flake" no era un flake** (resuelto el 2026-09-19, commit
+`53223d9`). El endpoint de checkout de MercadoPago chequeaba
+`MERCADOPAGO_ACCESS_TOKEN` **antes** de validar los datos del request, así
+que en cualquier entorno sin ese token (local, CI) un `billing_period`
+inválido devolvía 503 "token no configurado" en lugar del 400 que
+corresponde — y el test que espera 400 fallaba siempre. Nunca llamó a la
+API real: los dos tests que sí la usan ya tenían su guarda
+`if (!process.env.MERCADOPAGO_ACCESS_TOKEN) return`. Se invirtió el orden
+(primero validar lo que manda el cliente, después la configuración del
+servidor), que además es lo correcto: un dato inválido es 400 tenga o no
+tenga el servidor configurado el servicio externo.
+
+**Lección**: un flake de verdad falla a veces; éste fallaba idéntico
+siempre, en las ~15 corridas. Esa consistencia era la pista, y se dejó
+pasar durante días por tenerlo catalogado como "falla conocida". Conviene
+desconfiar de esa etiqueta.
+
+Estado al 2026-09-19: **526/526, la suite completa en verde**.
 
 ## Bugs encontrados DESPUÉS del deploy (ya corregidos)
 
@@ -163,6 +183,76 @@ y a veces esa llamada externa falla en este entorno).
    usado únicamente dentro del `(click)`. **Lección para el futuro**:
    nunca leer una señal que puede ser `null` en una interpolación de
    un `<mat-menu>` compartido — solo dentro de manejadores de evento.
+
+## Auditoría de cargas manuales + agujero de empresa (2026-09-19)
+
+**Qué se hizo y por qué.** Hasta ahora, si alguien cargaba 8 horas extra a
+mano o marcaba un día como Vacaciones, quedaba el dato pero no quedaba
+**quién** lo hizo ni **cuándo**. Ante un reclamo ("yo no pedí esa
+licencia", "esas horas no las autorizó nadie") no había con qué responder.
+Los fichajes manuales ya tenían esto desde la migración `20260920`
+(`manual_checkin_log`); ahora lo tienen también las otras dos cosas que se
+cargan a mano y que impactan en la plata.
+
+**Hallazgo grave que apareció en el camino.** `ManualEntries` **no tenía
+`tenant_id`** y ninguno de sus 4 endpoints validaba la empresa. Un
+administrador de la empresa A podía cargarle horas extra a un empleado de
+la empresa B, o borrarle las suyas, mandando su `USERID` de reloj (que es
+secuencial, o sea adivinable). Es el mismo tipo de hueco ya tapado en las
+tablas crudas del reloj (migración `20260909`); esta tabla se había pasado
+por alto. Verificado leyendo el código anterior con `git show`: cero
+menciones de empresa en esos endpoints.
+
+Los dos temas se arreglaron juntos porque **el primero necesita el
+segundo**: una fila de auditoría sin empresa no sirve para nada.
+
+**Qué se agregó**
+
+- `migrations/20260927_manual_entries_exclusions_audit.sql`:
+  `ManualEntries` suma `tenant_id` (con backfill seguro), `created_by`,
+  `updated_by`, `updatedAt`; `userexclusions` suma `created_by`,
+  `updated_by`, `updatedAt`; y se crean dos tablas de log append-only,
+  `manual_entry_log` y `user_exclusion_log`, con una columna `previous_data`
+  (JSON) que guarda **cómo estaba la fila antes** de cada modificación o
+  borrado.
+- `auditLog.js` (nuevo): el helper que usan los endpoints. Lo importante
+  es `inTransaction`: el cambio de datos y su fila de auditoría se
+  confirman **juntos o ninguno**. Si fueran dos queries sueltas, un error
+  entre medio dejaría una carga sin autor (justo lo que esto viene a
+  evitar) o un historial que miente.
+- 9 puntos de escritura instrumentados en `horasdedica.js` (3 de
+  `ManualEntries`, 6 de `userexclusions`).
+- `test/manual-entries-audit.test.js` (13 tests): el ciclo completo
+  alta→edición→borrado deja el rastro esperado, y los 4 cruces entre
+  empresas dan 404 sin tocar nada.
+
+**Sobre el backfill de `tenant_id`.** `users.USERID` no es único entre
+empresas, así que un `JOIN` directo podría asignar una fila a la empresa
+equivocada. El backfill sólo resuelve los `USERID` que pertenecen a **una
+sola** empresa; las filas ambiguas quedan en `NULL` a propósito. La
+migración informa al final cuántas quedaron así (en desarrollo: 1, de un
+usuario borrado hace tiempo). **Al correrla en producción hay que mirar
+ese número** — esas filas dejan de verse desde la aplicación.
+
+**Efecto secundario correcto, no un bug.** Ahora no se puede borrar un
+`app_users` que tenga historial de auditoría (lo impide la foreign key de
+`performed_by`). En producción eso no molesta: la app nunca borra usuarios,
+los deshabilita (`is_active = 0`, ver `routes/appUsers.js`). Sí afectaba al
+*teardown* de los tests, que sí borran de verdad — resuelto en
+`test-helpers/firebaseTestAuth.js`.
+
+**Código muerto detectado.** `routes/manual.js` y `routes/dashboard.js`
+**no los monta nadie** (el único servidor es `horasdedica.js` y no los
+requiere). Contienen escrituras SQL sin permisos, sin empresa y sin
+auditoría. Ya se había gastado trabajo de seguridad en ellos al pepe: el
+commit `fd36be5` los "arregló" sin que eso protegiera nada real. Quedaron
+marcados con un cartel arriba de todo; **conviene borrarlos** (decisión del
+dueño del repo, git conserva el historial igual).
+
+**Lo que falta**: correr la migración en producción (Actions → "Correr
+migracion SQL en produccion (manual)") y recién después desplegar. Todavía
+no hay pantalla para *ver* el historial — los datos ya se están guardando,
+pero por ahora se consultan por SQL.
 
 ## Problema ABIERTO ahora mismo (sin resolver, 2026-09-18)
 

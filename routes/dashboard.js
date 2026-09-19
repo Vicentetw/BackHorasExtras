@@ -1,3 +1,23 @@
+// ############################################################################
+// ARCHIVO MUERTO -- NO SE USA. NO MONTAR SIN ARREGLARLO ANTES.
+// ############################################################################
+//
+// Igual que routes/manual.js: no lo requiere ni lo monta nadie (el unico
+// servidor es horasdedica.js, y "routes/dashboard" no aparece en ningun lado
+// del repo). Verificado el 2026-09-19.
+//
+// Incluye un INSERT a `userexclusions` que NO deja rastro de auditoria
+// (ni created_by ni user_exclusion_log, ver migracion 20260927). Las rutas
+// vivas equivalentes estan en horasdedica.js (/config/user-exclusions*,
+// /config/toggle-user-exclusion) y esas si auditan.
+//
+// El commit fd36be5 ("8 endpoints de exclusiones podian tocar la
+// justificacion de empleados de OTRA empresa") corrigio codigo de este
+// archivo, que no corre -- o sea que ese arreglo no protegio nada real por
+// este lado.
+//
+// QUE HACER: borrarlo. Se deja por ahora solo porque borrar archivos es
+// decision del dueno del repo; git conserva el historial igual.
 const express = require('express');
 const { resolveTenantId } = require('../appUserMiddleware');
 

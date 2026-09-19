@@ -7,6 +7,10 @@ const path = require('path');
 const { parse } = require('csv-parse/sync');
 const { securityMiddlewares, apiKeyWarning } = require('./security');
 const { resolveTenantId, requirePermission, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
+// Auditoria de cargas manuales (horas extra, licencias, exclusiones): quien
+// las creo/modifico/borro y que decian antes. Ver auditLog.js y la migracion
+// 20260927_manual_entries_exclusions_audit.sql.
+const auditLog = require('./auditLog');
 const importRoutes = require('./routes/import.routes');
 const matchingRoutes = require('./routes/matching.routes');
 const employeesRoutes = require('./routes/employees');
@@ -234,6 +238,37 @@ function toMySQLDatetime(value) {
   return null;
 }
 
+// A que empresa pertenece un registro que se esta creando para `userId`.
+// Para un usuario normal es su propia empresa (ya validada antes con
+// `userBelongsToCallerTenant`). Para el superadmin -- que no tiene empresa
+// propia -- se toma la del usuario del reloj.
+async function resolveOwnerTenantId(userId, req) {
+  const callerTenantId = resolveTenantId(req);
+  if (callerTenantId !== null) return callerTenantId;
+  const [[owner]] = await db.query('SELECT tenant_id FROM `users` WHERE USERID = ? LIMIT 1', [userId]);
+  return owner ? owner.tenant_id : null;
+}
+
+// Lee una entrada manual validando que sea de la empresa de quien llama.
+// Devuelve null si no existe o si es de otra empresa -- los dos casos se
+// responden igual (404) a proposito: contestar "existe pero no es tuya"
+// confirmaria la existencia de datos ajenos.
+async function loadManualEntryForCaller(entryId, req) {
+  const tenantId = resolveTenantId(req);
+  const params = [entryId];
+  let tenantClause = '';
+  if (tenantId !== null) {
+    tenantClause = ' AND tenant_id = ?';
+    params.push(tenantId);
+  }
+  const [[row]] = await db.query(
+    `SELECT id, tenant_id, userId, startDatetime, endDatetime, durationMinutes, type, note
+     FROM ManualEntries WHERE id = ?${tenantClause}`,
+    params
+  );
+  return row || null;
+}
+
 // GET /config/manual-entries?userId=X&date=Y -- entradas manuales de ese
 // usuario para ese dia (HE manual/Licencia/Omitir). Nuevo (Fase 6.3):
 // hacia falta para poder EDITAR una entrada ya cargada desde Presentismo
@@ -246,12 +281,23 @@ app.get('/config/manual-entries', requirePermission('attendance', 'read'), async
     if (!userId || !date) {
       return res.status(400).json({ error: 'userId y date son requeridos' });
     }
+    // Filtro por empresa (migracion 20260927). Hasta esa migracion
+    // ManualEntries no tenia tenant_id y este endpoint devolvia la entrada de
+    // CUALQUIER empresa que tuviera ese mismo USERID -- y `users.USERID` no
+    // es unico entre empresas (migracion 20260909), asi que no era hipotetico.
+    const tenantId = resolveTenantId(req);
+    const params = [userId, date];
+    let tenantClause = '';
+    if (tenantId !== null) {
+      tenantClause = ' AND tenant_id = ?';
+      params.push(tenantId);
+    }
     const [rows] = await db.query(
       `SELECT id, userId, startDatetime, endDatetime, durationMinutes, type, note
        FROM ManualEntries
-       WHERE userId = ? AND DATE(startDatetime) = ?
+       WHERE userId = ? AND DATE(startDatetime) = ?${tenantClause}
        ORDER BY startDatetime ASC`,
-      [userId, date]
+      params
     );
     res.json(rows);
   } catch (err) {
@@ -301,24 +347,49 @@ app.post('/add/manual', requirePermission('attendance', 'create'), async (req, r
       });
     }
 
-    const [result] = await db.query(
-      `INSERT INTO ManualEntries
-       (userId, startDatetime, endDatetime, durationMinutes, type, note)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        Number(userId),
-        start,
-        end,
-        Math.round(durationMinutes),
-        type,
-        note || null
-      ]
-    );
+    // Aislamiento entre empresas: hasta la migracion 20260927 este endpoint
+    // no validaba nada -- un administrador de la empresa A podia cargarle
+    // horas extra a un empleado de la empresa B mandando su userId.
+    if (!(await userBelongsToCallerTenant(Number(userId), req))) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    const tenantId = await resolveOwnerTenantId(Number(userId), req);
+    const performedBy = auditLog.actorId(req);
+
+    // El alta y su fila de auditoria van juntas en una transaccion: nunca
+    // debe quedar una carga de horas sin registro de quien la hizo.
+    const insertId = await auditLog.inTransaction(db, async (conn) => {
+      const [result] = await conn.query(
+        `INSERT INTO ManualEntries
+         (tenant_id, userId, startDatetime, endDatetime, durationMinutes, type, note, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          tenantId,
+          Number(userId),
+          start,
+          end,
+          Math.round(durationMinutes),
+          type,
+          note || null,
+          performedBy
+        ]
+      );
+      await auditLog.logManualEntry(conn, {
+        tenantId,
+        entryId: result.insertId,
+        userId: Number(userId),
+        action: 'created',
+        data: { startDatetime: start, endDatetime: end, durationMinutes: Math.round(durationMinutes), type, note: note || null },
+        previous: null,
+        performedBy
+      });
+      return result.insertId;
+    });
 
     res.json({
       ok: true,
       message: 'Registro manual guardado correctamente',
-      id: result.insertId
+      id: insertId
     });
 
   } catch (err) {
@@ -361,16 +432,35 @@ app.put('/update/manual/:id', requirePermission('attendance', 'update'), async (
       return res.status(400).json({ error: 'endDatetime debe ser mayor que startDatetime' });
     }
 
-    const [result] = await db.query(
-      `UPDATE ManualEntries
-       SET startDatetime = ?, endDatetime = ?, durationMinutes = ?, type = ?, note = ?
-       WHERE id = ?`,
-      [start, end, Math.round(durationMinutes), type, note || null, Number(id)]
-    );
-
-    if (result.affectedRows === 0) {
+    // Se lee la fila ANTES de tocarla, por dos motivos: para validar que sea
+    // de la empresa de quien llama (antes no se validaba nada, se editaba por
+    // id a secas), y para guardar en el log como estaba -- un UPDATE pisa el
+    // valor viejo y sin esa foto nadie puede ver despues que antes decia otra
+    // cosa.
+    const previous = await loadManualEntryForCaller(Number(id), req);
+    if (!previous) {
       return res.status(404).json({ error: 'Registro manual no encontrado' });
     }
+    const performedBy = auditLog.actorId(req);
+
+    await auditLog.inTransaction(db, async (conn) => {
+      await conn.query(
+        `UPDATE ManualEntries
+         SET startDatetime = ?, endDatetime = ?, durationMinutes = ?, type = ?, note = ?,
+             updated_by = ?, updatedAt = NOW()
+         WHERE id = ?`,
+        [start, end, Math.round(durationMinutes), type, note || null, performedBy, Number(id)]
+      );
+      await auditLog.logManualEntry(conn, {
+        tenantId: previous.tenant_id,
+        entryId: Number(id),
+        userId: previous.userId,
+        action: 'updated',
+        data: { startDatetime: start, endDatetime: end, durationMinutes: Math.round(durationMinutes), type, note: note || null },
+        previous,
+        performedBy
+      });
+    });
 
     res.json({ ok: true, id: Number(id) });
   } catch (err) {
@@ -390,14 +480,28 @@ app.delete('/delete/manual/:id', requirePermission('attendance', 'delete'), asyn
   }
 
   try {
-    const [result] = await db.query(
-      `DELETE FROM ManualEntries WHERE id = ?`,
-      [Number(id)]
-    );
-
-    if (result.affectedRows === 0) {
+    // Igual que en el update: se lee antes para validar la empresa y para
+    // dejar la copia completa en el log. Este es el caso donde el log mas
+    // importa -- despues del DELETE la fila no existe mas, y sin esta copia
+    // no quedaria ningun rastro de que esas horas se cargaron alguna vez.
+    const previous = await loadManualEntryForCaller(Number(id), req);
+    if (!previous) {
       return res.status(404).json({ error: 'Registro manual no encontrado' });
     }
+    const performedBy = auditLog.actorId(req);
+
+    await auditLog.inTransaction(db, async (conn) => {
+      await auditLog.logManualEntry(conn, {
+        tenantId: previous.tenant_id,
+        entryId: previous.id,
+        userId: previous.userId,
+        action: 'deleted',
+        data: previous,
+        previous,
+        performedBy
+      });
+      await conn.query(`DELETE FROM ManualEntries WHERE id = ?`, [previous.id]);
+    });
 
     res.json({ ok: true, deletedId: id });
 
@@ -1511,6 +1615,28 @@ async function exclusionBelongsToCallerTenant(exclusionId, req) {
   return !row || row.tenant_id === effectiveTenantId;
 }
 
+// Version "que ademas trae los datos" de la funcion de arriba. La usan el
+// update y el delete, que no solo necesitan saber si pueden tocar la fila
+// sino tambien COMO ESTABA, para dejarlo registrado en user_exclusion_log.
+// Devuelve null tanto si no existe como si es de otra empresa: las dos cosas
+// se responden con el mismo 404, para no confirmar la existencia de datos
+// ajenos.
+async function loadExclusionForCaller(exclusionId, req) {
+  const effectiveTenantId = resolveTenantId(req);
+  const params = [exclusionId];
+  let tenantClause = '';
+  if (effectiveTenantId !== null) {
+    tenantClause = ' AND tenant_id = ?';
+    params.push(effectiveTenantId);
+  }
+  const [[row]] = await db.query(
+    `SELECT id, tenant_id, userId, excDate, reason, type, event_type_id, excFrom, excTo
+     FROM userexclusions WHERE id = ?${tenantClause}`,
+    params
+  );
+  return row || null;
+}
+
 // GET /config/user-exclusions?page=1&limit=20&search=...&status=...
 // Fase 4.6 del plan de migracion a Angular: se suma userId+excDate como
 // filtro exacto opcional -- el frontend (Presentismo/Justificaciones) lo
@@ -1656,10 +1782,22 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
       // tenant_id sale del USUARIO CRUDO (users.tenant_id, migracion
       // 20260909) -- es el dato real, siempre presente aunque el userId
       // este vinculado o no todavia a un empleado.
-      await db.query(`
-        INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type, event_type_id, excFrom, excTo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `, [userId, user.tenant_id, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
+      const performedBy = auditLog.actorId(req);
+      await auditLog.inTransaction(db, async (conn) => {
+        const [result] = await conn.query(`
+          INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type, event_type_id, excFrom, excTo, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [userId, user.tenant_id, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null, performedBy]);
+        await auditLog.logUserExclusion(conn, {
+          tenantId: user.tenant_id,
+          exclusionId: result.insertId,
+          userId,
+          action: 'created',
+          data: { excDate, reason: reason || null, type: type || 'FULL_DAY', eventTypeId: eventTypeId || null, excFrom: excFrom || null, excTo: excTo || null },
+          previous: null,
+          performedBy
+        });
+      });
 
       res.json({ ok: true, message: 'Exclusión creada' });
     } catch (err) {
@@ -1717,12 +1855,29 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
 
     let created = 0;
     const skipped = [];
+    const performedBy = auditLog.actorId(req);
     for (const excDate of dates) {
       try {
-        await db.query(`
-          INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type, event_type_id, excFrom, excTo)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `, [userId, user.tenant_id, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null]);
+        // Una transaccion POR DIA, no una sola para todo el rango. Es a
+        // proposito y respeta lo que ya decia el comentario de arriba: que un
+        // dia ya tuviera exclusion cargada no debe impedir crear el resto.
+        // Con una transaccion unica para los 366 dias, el primer duplicado
+        // tiraria abajo todo lo demas.
+        await auditLog.inTransaction(db, async (conn) => {
+          const [result] = await conn.query(`
+            INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type, event_type_id, excFrom, excTo, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [userId, user.tenant_id, excDate, reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null, performedBy]);
+          await auditLog.logUserExclusion(conn, {
+            tenantId: user.tenant_id,
+            exclusionId: result.insertId,
+            userId,
+            action: 'created',
+            data: { excDate, reason: reason || null, type: type || 'FULL_DAY', eventTypeId: eventTypeId || null, excFrom: excFrom || null, excTo: excTo || null },
+            previous: null,
+            performedBy
+          });
+        });
         created++;
       } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') {
@@ -1746,20 +1901,33 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
     const { id } = req.params;
     const { reason, type, eventTypeId, excFrom, excTo } = req.body;
 
-    if (!(await exclusionBelongsToCallerTenant(id, req))) {
+    // Se lee la fila entera (no solo "¿es de mi empresa?") para poder guardar
+    // en el log como estaba antes: un UPDATE pisa el motivo y el tipo, y esos
+    // son justamente los datos que se discuten en un reclamo.
+    const previous = await loadExclusionForCaller(id, req);
+    if (!previous) {
       return res.status(404).json({ error: 'Exclusión no encontrada' });
     }
+    const performedBy = auditLog.actorId(req);
 
-    const [result] = await db.query(`
-      UPDATE \`userexclusions\`
-      SET reason = ?, type = ?, event_type_id = ?, excFrom = ?, excTo = ?
-      WHERE id = ?
-    `, [reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null, id]);
-    
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Exclusión no encontrada' });
-    }
-    
+    await auditLog.inTransaction(db, async (conn) => {
+      await conn.query(`
+        UPDATE \`userexclusions\`
+        SET reason = ?, type = ?, event_type_id = ?, excFrom = ?, excTo = ?,
+            updated_by = ?, updatedAt = NOW()
+        WHERE id = ?
+      `, [reason || null, type || 'FULL_DAY', eventTypeId || null, excFrom || null, excTo || null, performedBy, id]);
+      await auditLog.logUserExclusion(conn, {
+        tenantId: previous.tenant_id,
+        exclusionId: previous.id,
+        userId: previous.userId,
+        action: 'updated',
+        data: { excDate: previous.excDate, reason: reason || null, type: type || 'FULL_DAY', eventTypeId: eventTypeId || null, excFrom: excFrom || null, excTo: excTo || null },
+        previous,
+        performedBy
+      });
+    });
+
     res.json({ ok: true, message: 'Exclusión actualizada' });
   } catch (err) {
     console.error('ERROR updating exclusion:', err);
@@ -1777,19 +1945,34 @@ app.delete('/config/user-exclusions/:id', requirePermission('exclusions', 'delet
   try {
     const { id } = req.params;
 
-    if (!(await exclusionBelongsToCallerTenant(id, req))) {
+    // La copia al log va ANTES del DELETE: despues la fila no existe mas y
+    // no habria de donde sacar los datos.
+    const previous = await loadExclusionForCaller(id, req);
+    if (!previous) {
       return res.status(404).json({ error: 'Exclusión no encontrada' });
     }
+    const performedBy = auditLog.actorId(req);
 
-    const [result] = await db.query(
-      `DELETE FROM \`userexclusions\` WHERE id = ?`,
-      [id]
-    );
-    
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Exclusión no encontrada' });
-    }
-    
+    await auditLog.inTransaction(db, async (conn) => {
+      await auditLog.logUserExclusion(conn, {
+        tenantId: previous.tenant_id,
+        exclusionId: previous.id,
+        userId: previous.userId,
+        action: 'deleted',
+        data: {
+          excDate: previous.excDate,
+          reason: previous.reason,
+          type: previous.type,
+          eventTypeId: previous.event_type_id,
+          excFrom: previous.excFrom,
+          excTo: previous.excTo
+        },
+        previous,
+        performedBy
+      });
+      await conn.query(`DELETE FROM \`userexclusions\` WHERE id = ?`, [previous.id]);
+    });
+
     res.json({ ok: true, message: 'Exclusión eliminada' });
   } catch (err) {
     console.error('ERROR deleting exclusion:', err);
@@ -2018,13 +2201,26 @@ app.post('/config/toggle-user-exclusion', requirePermission('exclusions', 'updat
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
+    const performedBy = auditLog.actorId(req);
+
     if (exclude) {
       // Agregar exclusión
       try {
-        await db.query(`
-          INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type)
-          VALUES (?, ?, ?, ?, ?)
-        `, [userId, rawUser.tenant_id, excDate, reason || 'Manual exclusion', type || 'FULL_DAY']);
+        await auditLog.inTransaction(db, async (conn) => {
+          const [result] = await conn.query(`
+            INSERT INTO \`userexclusions\` (userId, tenant_id, excDate, reason, type, created_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [userId, rawUser.tenant_id, excDate, reason || 'Manual exclusion', type || 'FULL_DAY', performedBy]);
+          await auditLog.logUserExclusion(conn, {
+            tenantId: rawUser.tenant_id,
+            exclusionId: result.insertId,
+            userId,
+            action: 'created',
+            data: { excDate, reason: reason || 'Manual exclusion', type: type || 'FULL_DAY' },
+            previous: null,
+            performedBy
+          });
+        });
 
         res.json({ ok: true, message: 'Usuario excluido', excluded: true });
       } catch (err) {
@@ -2036,10 +2232,42 @@ app.post('/config/toggle-user-exclusion', requirePermission('exclusions', 'updat
     } else {
       // Eliminar exclusión -- Fase 19: se suma AND tenant_id, userId ya no
       // es unico entre empresas (migracion 20260909).
-      await db.query(`
-        DELETE FROM \`userexclusions\`
+      //
+      // Este borrado es por (userId, excDate, tenant_id), no por id, asi que
+      // puede alcanzar MAS DE UNA fila (la clave unica incluye tambien el
+      // `type`). Por eso se leen todas primero y se registra una fila de log
+      // por cada una: un solo registro "se borro algo" no alcanzaria para
+      // reconstruir que habia.
+      const [toDelete] = await db.query(`
+        SELECT id, tenant_id, userId, excDate, reason, type, event_type_id, excFrom, excTo
+        FROM \`userexclusions\`
         WHERE userId = ? AND excDate = ? AND tenant_id = ?
       `, [userId, excDate, rawUser.tenant_id]);
+
+      await auditLog.inTransaction(db, async (conn) => {
+        for (const row of toDelete) {
+          await auditLog.logUserExclusion(conn, {
+            tenantId: row.tenant_id,
+            exclusionId: row.id,
+            userId: row.userId,
+            action: 'deleted',
+            data: {
+              excDate: row.excDate,
+              reason: row.reason,
+              type: row.type,
+              eventTypeId: row.event_type_id,
+              excFrom: row.excFrom,
+              excTo: row.excTo
+            },
+            previous: row,
+            performedBy
+          });
+        }
+        await conn.query(`
+          DELETE FROM \`userexclusions\`
+          WHERE userId = ? AND excDate = ? AND tenant_id = ?
+        `, [userId, excDate, rawUser.tenant_id]);
+      });
 
       res.json({ ok: true, message: 'Usuario incluido', excluded: false });
     }

@@ -1,3 +1,34 @@
+// ############################################################################
+// ARCHIVO MUERTO -- NO SE USA. NO MONTAR SIN ARREGLARLO ANTES.
+// ############################################################################
+//
+// Este router no lo requiere ni lo monta NADIE. El unico servidor del
+// proyecto es horasdedica.js (es el unico archivo con `app.listen`) y su
+// lista de `require('./routes/...')` no lo incluye. Verificado el 2026-09-19
+// buscando "routes/manual" en todo el repo: 0 resultados fuera de este
+// archivo.
+//
+// Las rutas que SI se usan para entradas manuales son, en horasdedica.js:
+//   POST   /add/manual
+//   PUT    /update/manual/:id
+//   DELETE /delete/manual/:id
+//
+// POR QUE NO ALCANZA CON IGNORARLO. Si alguien lo monta tal como esta,
+// entrega de una tres problemas que las rutas de verdad ya no tienen:
+//   1. No tiene NINGUN middleware de permisos (las reales usan
+//      requirePermission('attendance', ...)).
+//   2. No filtra ni guarda `tenant_id`, asi que escribe y borra entradas de
+//      cualquier empresa (ver migracion 20260927).
+//   3. No deja rastro de auditoria: ni created_by ni manual_entry_log.
+//
+// Ya paso una vez que se gasto trabajo aca al pedo: el commit fd36be5
+// ("8 endpoints de exclusiones podian tocar la justificacion de empleados de
+// OTRA empresa") corrigio codigo de este archivo y de routes/dashboard.js,
+// que no corre. Un arreglo de seguridad aplicado a codigo muerto da una
+// sensacion de seguridad que no existe.
+//
+// QUE HACER: borrarlo. Se deja por ahora solo porque borrar archivos es
+// decision del dueno del repo; git conserva el historial igual.
 const express = require('express');
 
 module.exports = function(db, upload) {

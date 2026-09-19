@@ -75,9 +75,37 @@ async function getTestAuthHeaders(uid, { isSuperadmin = true, tenantId = null, p
   };
 }
 
+// Borra el usuario de prueba de Firebase y de app_users.
+//
+// El orden importa desde la migracion 20260927: varias tablas apuntan a
+// app_users con foreign key para registrar QUIEN hizo cada cosa
+// (`created_by`, `updated_by`, `performed_by` en los tres logs de
+// auditoria). Mientras quede una fila apuntando al usuario, MySQL no deja
+// borrarlo -- y eso esta bien, es justamente lo que evita que alguien borre
+// su propio rastro en produccion. Ahi los usuarios no se borran nunca: se
+// deshabilitan (`is_active = 0`, ver routes/appUsers.js). Pero los tests si
+// los borran de verdad, asi que primero hay que sacar lo que los referencia.
+//
+// (Esto aparecio como un test en rojo: user-exclusions-tenant-guard fallaba
+// al final con ER_ROW_IS_REFERENCED_2 al borrar el tenant, porque
+// deleteTestUser no habia podido borrar el app_user -- el error quedaba
+// tapado por el .catch() de abajo y recien se notaba una linea despues.)
 async function deleteTestUser(uid) {
   initAdmin();
   await admin.auth().deleteUser(uid).catch(() => {});
+
+  const [[appUser]] = await db.query('SELECT id FROM app_users WHERE firebase_uid = ?', [uid]);
+  if (appUser) {
+    for (const table of ['manual_entry_log', 'user_exclusion_log', 'manual_checkin_log']) {
+      await db.query(`DELETE FROM ${table} WHERE performed_by = ?`, [appUser.id]).catch(() => {});
+    }
+    await db.query('UPDATE ManualEntries SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE ManualEntries SET updated_by = NULL WHERE updated_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE userexclusions SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE userexclusions SET updated_by = NULL WHERE updated_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE Checkins SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
+  }
+
   await db.query('DELETE FROM app_users WHERE firebase_uid = ?', [uid]).catch(() => {});
 }
 
