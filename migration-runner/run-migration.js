@@ -38,6 +38,36 @@ async function main() {
     }
   }
 
+  // Chequeo de credenciales ANTES de intentar conectar.
+  //
+  // Sin esto, cuando los secrets del repo no estan cargados, mysql2 recibe
+  // host/user/password en `undefined`, asume localhost, y se estrella
+  // contra un contenedor de GitHub donde no hay ninguna base escuchando.
+  // El error que tira Node en ese caso llega con `.message` vacio, asi que
+  // el workflow terminaba mostrando literalmente "ERROR:" y nada mas --
+  // imposible de diagnosticar. Paso de verdad el 2026-09-19.
+  //
+  // (El script equivalente para correr a mano, run-sql.js en la raiz, ya
+  // tenia esta validacion desde siempre; este runner se habia quedado sin
+  // ella.)
+  const requiredEnv = ['MYSQL_ADDON_HOST', 'MYSQL_ADDON_USER', 'MYSQL_ADDON_PASSWORD', 'MYSQL_ADDON_DB'];
+  const missingEnv = requiredEnv.filter((k) => !process.env[k]);
+  if (missingEnv.length) {
+    console.error('');
+    console.error('No hay credenciales de base de datos: ' + missingEnv.join(', ') + ' llegaron vacias.');
+    console.error('');
+    console.error('Casi seguro faltan los secrets de ESTE repositorio. Se cargan en:');
+    console.error('  Settings > Secrets and variables > Actions > New repository secret');
+    console.error('Hacen falta los cinco: MYSQL_ADDON_HOST, MYSQL_ADDON_USER,');
+    console.error('MYSQL_ADDON_PASSWORD, MYSQL_ADDON_DB, MYSQL_ADDON_PORT.');
+    console.error('');
+    console.error('Los valores son los mismos que ya tiene configurados el servicio');
+    console.error('de backend en Render (Environment), o se sacan del panel de Clever Cloud.');
+    console.error('Ojo: cada repositorio tiene su propio almacen de secrets -- apuntar a');
+    console.error('la misma base no los comparte automaticamente.');
+    process.exit(1);
+  }
+
   const db = await mysql.createConnection({
     host: process.env.MYSQL_ADDON_HOST,
     user: process.env.MYSQL_ADDON_USER,
@@ -64,6 +94,13 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('ERROR:', err.message);
+  // `err.message` puede venir vacio (por ejemplo, los AggregateError que tira
+  // Node cuando falla la conexion probando IPv6 e IPv4 a la vez). En ese caso
+  // se imprime el error completo, porque un "ERROR:" pelado no sirve para
+  // diagnosticar nada.
+  console.error('ERROR:', err && err.message ? err.message : err);
+  if (err && Array.isArray(err.errors)) {
+    err.errors.forEach((e) => console.error('  causa:', e && e.message ? e.message : e));
+  }
   process.exit(1);
 });

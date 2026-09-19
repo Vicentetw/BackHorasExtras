@@ -93,7 +93,21 @@ del repo → workflow "Correr migracion SQL en produccion (manual)" →
 `migration_files` con el/los archivo(s), separados por coma. Nadie
 (ni el asistente de IA) tiene acceso directo a escribir en la base de
 producción por fuera de ese workflow — es una restricción de entorno
-intencional.
+intencional. El `.env` local apunta a `localhost` (MySQL de desarrollo),
+no a Clever Cloud.
+
+> **Requisito que se descubrió el 2026-09-19**: ese workflow necesita que
+> **este repositorio** tenga cargados sus cinco secrets
+> (`MYSQL_ADDON_HOST`, `MYSQL_ADDON_USER`, `MYSQL_ADDON_PASSWORD`,
+> `MYSQL_ADDON_DB`, `MYSQL_ADDON_PORT`) en *Settings → Secrets and
+> variables → Actions*. Cada repositorio tiene su propio almacén: apuntar
+> a la misma base que otro repo **no** los comparte. Al intentar correr la
+> migración `20260927` llegaron los cinco vacíos y el workflow moría
+> mostrando literalmente `ERROR:` y nada más, porque `run-migration.js` no
+> validaba las credenciales y el error de conexión de Node venía con el
+> mensaje vacío. Eso ya está corregido: ahora explica exactamente qué
+> falta y dónde cargarlo. Los valores son los mismos que ya tiene el
+> servicio de backend en Render (pestaña Environment).
 
 ### Frontend nuevo (en `horas-dedica-angular`, todo bajo `src/app/motor-laboral/`)
 
