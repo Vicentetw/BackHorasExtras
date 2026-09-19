@@ -1,0 +1,45 @@
+# Dependencias del agente de descarga de fichajes.
+#
+# Este archivo NO existia: el proyecto venia dependiendo de que el entorno
+# virtual (.venv) siguiera vivo en la maquina de desarrollo. Si esa carpeta
+# se borraba o se cambiaba de PC, no quedaba forma de saber que instalar
+# para volver a compilar el .exe. Las versiones de aca se sacaron leyendo
+# el .venv que estaba en uso el 2026-09-19, no de memoria.
+#
+# Para reconstruir el entorno desde cero (Windows, PowerShell):
+#   python -m venv .venv
+#   .\.venv\Scripts\Activate.ps1
+#   pip install -r requirements.txt
+#
+# Para compilar el ejecutable:
+#   pyinstaller main.spec
+# (deja main.exe en dist/)
+
+# --- Lo que necesita el programa para funcionar ---
+
+# Habla con el reloj biometrico ZKTeco por red. Es LA dependencia central:
+# sin esto no hay descarga de fichajes. En zk_service.py el import esta
+# dentro de un try, asi que si falta, el programa arranca igual pero no
+# puede conectarse a ningun reloj.
+pyzk==0.9
+
+# Base de datos de husos horarios. En Windows, el modulo zoneinfo de la
+# libreria estandar (que usa exporter.py) NO trae los datos incluidos como
+# en Linux: sin este paquete, convertir a una zona horaria falla.
+tzdata==2026.3
+
+# Tema visual oscuro de la ventana. Es OPCIONAL a proposito: en main.py el
+# import esta dentro de un try y, si falta, la ventana se dibuja con el
+# aspecto clasico de Tk. No lo saques pensando que rompe algo.
+sv-ttk==2.6.1
+
+# Solo lo usa enrolar.py (la ventana para dar de alta una huella), que
+# maneja el reloj por COM con pythoncom/win32com. Sin version fija porque
+# el entorno donde estaba instalado no la declara de forma legible; si hace
+# falta reproducirlo exacto, conviene fijarla la proxima vez que se instale.
+pywin32
+
+# --- Solo para compilar, no para correr ---
+
+# Arma el .exe a partir de main.spec.
+pyinstaller==6.22.2

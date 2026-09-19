@@ -1,0 +1,44 @@
+# Que NO entra a git, y por que.
+#
+# En el repo anterior (horas-dedica-completo) esta carpeta se habia
+# commiteado ENTERA: los dos entornos virtuales, dist/ y los CSV sumaban
+# ~97 MB de los 100 MB totales, y cada `git status` escupia cientos de
+# archivos de pip como modificados. El codigo de verdad son ~75 KB.
+
+# --- Entornos virtuales ---
+# Se reconstruyen con `pip install -r requirements.txt`. Versionarlos no
+# sirve: son miles de archivos, dependen del sistema operativo y de la
+# version de Python, y quedan desactualizados igual.
+.venv/
+zk-env/
+env/
+venv/
+
+# --- Resultado de compilar ---
+# `pyinstaller main.spec` los regenera. El .exe pesa decenas de MB y
+# cambia entero en cada build, que es lo peor que le podes dar a git.
+build/
+dist/
+*.exe
+
+# --- Datos reales, NO codigo ---
+# CHECKINOUT.csv y USERINFO.csv son las exportaciones que produce el
+# programa: nombres de empleados y sus fichajes. Son datos personales de
+# gente real y no tienen por que estar en un repositorio.
+*.csv
+*.db
+
+# --- Configuracion con credenciales ---
+# config.ini SI se versiona, pero solo como plantilla con `url =` y
+# `clave =` VACIOS (asi esta hoy). La clave de agente de cada empresa se
+# carga en la PC donde corre el agente y no debe subirse nunca.
+# Si alguna vez se necesita una variante local con datos reales, va aca:
+config.local.ini
+
+# --- Ruido ---
+__pycache__/
+*.pyc
+*.old
+*.old2
+*.log
+*.stackdump
