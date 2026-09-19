@@ -270,11 +270,20 @@ module.exports = function (db) {
   // segura sin que el cliente lo pueda manipular).
   router.post('/subscriptions/:tenantId/mercadopago-checkout', requireSuperadmin, async (req, res) => {
     try {
-      const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
-      if (!accessToken) {
-        return res.status(503).json({ error: 'MERCADOPAGO_ACCESS_TOKEN no está configurado en el servidor' });
-      }
-
+      // ORDEN DELIBERADO: primero se valida lo que manda el cliente y
+      // recien despues se chequea la configuracion del servidor.
+      //
+      // Al reves (como estaba hasta el 2026-09-19), un billing_period
+      // invalido devolvia 503 "MERCADOPAGO_ACCESS_TOKEN no esta
+      // configurado" en cualquier ambiente sin ese token. Dos problemas:
+      // el mensaje enganaba a quien llama (el problema es SU request, no
+      // la configuracion del server), y el test de este endpoint fallaba
+      // SIEMPRE en local y en CI, donde ese token no existe. Ese fallo se
+      // venia arrastrando catalogado como "flake de MercadoPago" cuando
+      // en realidad era determinista y no llamaba a ninguna API externa.
+      //
+      // Regla general: un dato invalido del cliente es 400, tenga o no
+      // tenga el servidor configurado el servicio externo.
       const { tenantId } = req.params;
       const { payer_email, monthly_amount, currency_id, billing_period } = req.body;
       if (!payer_email || !monthly_amount) {
@@ -282,6 +291,11 @@ module.exports = function (db) {
       }
       if (billing_period !== undefined && !['monthly', 'quarterly', 'semiannual', 'annual'].includes(billing_period)) {
         return res.status(400).json({ error: "billing_period debe ser 'monthly', 'quarterly', 'semiannual' o 'annual'" });
+      }
+
+      const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+      if (!accessToken) {
+        return res.status(503).json({ error: 'MERCADOPAGO_ACCESS_TOKEN no está configurado en el servidor' });
       }
 
       const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
