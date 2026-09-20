@@ -419,6 +419,33 @@ Qué cambió en `routes/matching.routes.js`:
    vínculo. Los casos `sin_nombre` y `no_coincide` vienen con
    `preselected: false`: se muestran, pero exigen que alguien los mire.
 
+5. **Contra qué dato se compara el Badgenumber, configurable por empresa.**
+   El `Badgenumber` es la identidad, pero *identidad según qué*: cada
+   empresa decide qué le carga al reloj al dar de alta a una persona, y
+   puede ser el legajo o el DNI. Se guarda en `app_settings` como
+   `matchingIdentityField` (`legajo` | `documento`), con `legajo` por
+   defecto.
+
+   - `GET /api/matching/identity-field` devuelve la opción elegida **y
+     cuántos candidatos daría cada una** contra los datos reales. En AVP:
+     `Legajo: 478 · Documento (DNI): 0`. La idea es no preguntar "¿es el
+     legajo o el DNI?" a secas —que invita a adivinar— sino mostrar la
+     evidencia y que la respuesta se vea sola. Configurar mal este campo
+     es el error más caro posible en esta pantalla: vincularía a la
+     persona equivocada.
+   - `PUT /api/matching/identity-field` lo cambia, validado contra una
+     lista blanca.
+   - El nombre de la columna **nunca** sale del pedido: se busca en
+     `IDENTITY_FIELDS` y cualquier valor desconocido cae en el default, así
+     que no hay forma de interpolar texto arbitrario en la consulta. Hay
+     tests que lo verifican explícitamente.
+   - `/auto` devuelve `identityField` en la respuesta: quien revisa tiene
+     que saber si está mirando coincidencias por legajo o por documento
+     antes de aceptar nada.
+
+   En AVP los largos confirman la elección sin lugar a dudas: los badges
+   tienen 4 caracteres (440 de 499) y los DNI 8 (389 de 441).
+
 **Falta la pantalla**: el backend ya devuelve la evidencia, pero el
 frontend todavía no la muestra ni permite aceptar vínculo por vínculo.
 

@@ -11,8 +11,44 @@ const {
   classifyNameEvidence,
   rankCandidateUsers,
   buildMatchProposals,
-  NAME_EVIDENCE
+  resolveIdentityField,
+  identityColumn,
+  NAME_EVIDENCE,
+  DEFAULT_IDENTITY_FIELD
 } = require('../matchingRules');
+
+// ---------------------------------------------------------------------------
+// QUE DATO CARGO LA EMPRESA EN EL RELOJ (legajo o documento)
+// ---------------------------------------------------------------------------
+// El Badgenumber es la identidad, pero identidad SEGUN QUE: cada empresa
+// decide que le tipea al reloj. Estos tests cuidan sobre todo que el nombre
+// de columna que termina en la consulta SQL salga de una lista blanca y
+// nunca del texto que mando el cliente.
+
+test('legajo y documento se traducen a la columna correcta de employees', () => {
+  assert.equal(identityColumn('legajo'), 'employee_id');
+  assert.equal(identityColumn('documento'), 'documento');
+});
+
+test('el default es legajo', () => {
+  assert.equal(DEFAULT_IDENTITY_FIELD, 'legajo');
+  assert.equal(resolveIdentityField(null), 'legajo');
+  assert.equal(resolveIdentityField(''), 'legajo');
+  assert.equal(resolveIdentityField(undefined), 'legajo');
+});
+
+test('tolera mayusculas y espacios', () => {
+  assert.equal(resolveIdentityField('  DOCUMENTO '), 'documento');
+  assert.equal(resolveIdentityField('Legajo'), 'legajo');
+});
+
+test('un valor desconocido NUNCA llega a la consulta: cae en el default', () => {
+  // Si esto fallara, un valor del cliente terminaria interpolado en SQL.
+  assert.equal(resolveIdentityField('nombre'), 'legajo');
+  assert.equal(resolveIdentityField('id'), 'legajo');
+  assert.equal(identityColumn('employee_id; DROP TABLE users'), 'employee_id');
+  assert.equal(identityColumn({ malicioso: true }), 'employee_id');
+});
 
 // ---------------------------------------------------------------------------
 // EL DESEMPATE -- es el test mas importante del archivo

@@ -37,6 +37,53 @@
 // NADA SE APLICA SOLO. Estas funciones proponen; siempre acepta una persona,
 // vinculo por vinculo.
 
+// ============================================================================
+// QUE DATO CARGO LA EMPRESA EN EL RELOJ
+// ============================================================================
+//
+// El Badgenumber es la identidad, si -- pero identidad SEGUN QUE. Cada
+// empresa decide que le carga al reloj cuando da de alta a una persona:
+// puede ser el legajo, o puede ser el DNI. El reloj no sabe ni le importa;
+// guarda el numero que le tipearon.
+//
+// Por eso esto es configurable por empresa y no una constante. En AVP se
+// midio y es inequivoco: 478 Badgenumber coinciden con el legajo y 0 con el
+// documento; ademas los badges tienen 4 digitos y los DNI 8. Pero la
+// proxima empresa puede tener lo contrario.
+//
+// SEGURIDAD: estos nombres de columna se meten en una consulta SQL, asi que
+// NUNCA se toma el valor que venga de afuera tal cual. Se busca en este
+// mapa y, si no esta, se usa el default. Es una lista blanca, no una
+// interpolacion.
+const IDENTITY_FIELDS = {
+  legajo: {
+    column: 'employee_id',
+    label: 'Legajo',
+    description: 'El Badgenumber del reloj es el numero de legajo del empleado'
+  },
+  documento: {
+    column: 'documento',
+    label: 'Documento (DNI)',
+    description: 'El Badgenumber del reloj es el documento del empleado'
+  }
+};
+
+const DEFAULT_IDENTITY_FIELD = 'legajo';
+
+/**
+ * Traduce la opcion elegida a la columna de `employees` contra la que hay
+ * que comparar. Cualquier valor desconocido (o vacio) cae en el default --
+ * nunca llega a la consulta SQL algo que no este en la lista blanca.
+ */
+function resolveIdentityField(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return IDENTITY_FIELDS[key] ? key : DEFAULT_IDENTITY_FIELD;
+}
+
+function identityColumn(value) {
+  return IDENTITY_FIELDS[resolveIdentityField(value)].column;
+}
+
 // Deja el nombre comparable: sin acentos, sin puntuacion, en minusculas y
 // con las palabras ordenadas (asi "PEREZ, Juan" y "Juan Perez" dan igual).
 function normalizeName(name) {
@@ -221,6 +268,10 @@ module.exports = {
   classifyNameEvidence,
   rankCandidateUsers,
   buildMatchProposals,
+  resolveIdentityField,
+  identityColumn,
   NAME_EVIDENCE,
-  TRUSTWORTHY_EVIDENCE
+  TRUSTWORTHY_EVIDENCE,
+  IDENTITY_FIELDS,
+  DEFAULT_IDENTITY_FIELD
 };

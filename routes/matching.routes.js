@@ -3,7 +3,14 @@ const router = express.Router();
 const db = require('../db');
 const pool = db;
 const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
-const { buildMatchProposals } = require('../matchingRules');
+const {
+  buildMatchProposals,
+  resolveIdentityField,
+  identityColumn,
+  IDENTITY_FIELDS,
+  DEFAULT_IDENTITY_FIELD
+} = require('../matchingRules');
+const { getAppSetting, setAppSetting } = require('../motor-laboral/repositories/appSettingsRepository');
 
 const normalizeValue = (val) => String(val || '').trim().toLowerCase();
 
@@ -50,7 +57,43 @@ const normalizeName = (name) => {
 //   - Se agrega `nameEvidence`: el nombre no decide (el reloj casi siempre
 //     guarda solo el apellido), pero sirve para corroborar y para que la
 //     pantalla muestre de que color es cada caso.
-async function findMatchCandidates(effectiveTenantId) {
+// Lee de app_settings contra que campo del empleado hay que comparar el
+// Badgenumber en esta empresa. Default: legajo.
+async function getIdentityField(effectiveTenantId) {
+  const stored = await getAppSetting('matchingIdentityField', effectiveTenantId, db);
+  return resolveIdentityField(stored);
+}
+
+// Cuenta cuantos candidatos daria CADA opcion. Sirve para que la pantalla
+// muestre la evidencia en vez de pedir que alguien adivine: en AVP da
+// "legajo: 478 / documento: 0", y la eleccion se vuelve obvia. Configurar
+// mal este campo es el error mas caro posible en esta pantalla, porque
+// vincularia a la persona equivocada.
+async function countCandidatesPerIdentityField(effectiveTenantId) {
+  const out = {};
+  for (const [key, def] of Object.entries(IDENTITY_FIELDS)) {
+    const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ? AND u.tenant_id = ?' : '';
+    const params = effectiveTenantId !== null ? [effectiveTenantId, effectiveTenantId] : [];
+    const [[row]] = await db.query(`
+      SELECT COUNT(*) AS n
+      FROM users u
+      JOIN employees e
+        ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.\`${def.column}\`) AS CHAR) COLLATE utf8mb4_unicode_ci
+        AND u.tenant_id = e.tenant_id
+      WHERE u.USERID > 10
+        AND TRIM(COALESCE(e.\`${def.column}\`, '')) <> ''
+        ${tenantClause}
+    `, params);
+    out[key] = { label: def.label, description: def.description, candidates: row.n };
+  }
+  return out;
+}
+
+async function findMatchCandidates(effectiveTenantId, identityFieldKey) {
+  // El nombre de columna NO viene del pedido: sale de la lista blanca de
+  // IDENTITY_FIELDS (ver matchingRules.js). Cualquier valor desconocido cae
+  // en el default, asi que aca nunca se interpola texto arbitrario en SQL.
+  const column = identityColumn(identityFieldKey);
   const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ? AND u.tenant_id = ?' : '';
   const params = effectiveTenantId !== null ? [effectiveTenantId, effectiveTenantId] : [];
   const [rows] = await db.query(`
@@ -66,7 +109,7 @@ async function findMatchCandidates(effectiveTenantId) {
       'employee_id' as match_type
     FROM users u
     JOIN employees e
-      ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
+      ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.\`${column}\`) AS CHAR) COLLATE utf8mb4_unicode_ci
       AND u.tenant_id = e.tenant_id
     LEFT JOIN (
       SELECT tenant_id, USERID, COUNT(*) n, MAX(CHECKTIME) ultimo
@@ -75,6 +118,8 @@ async function findMatchCandidates(effectiveTenantId) {
     ) ck ON ck.USERID = u.USERID AND ck.tenant_id = u.tenant_id
     WHERE u.USERID > 10
       AND e.activo = 1
+      -- Sin esto, dos empleados con el documento vacio "coincidirian" entre si.
+      AND TRIM(COALESCE(e.\`${column}\`, '')) <> ''
       ${tenantClause}
       AND NOT EXISTS (SELECT 1 FROM user_employee_map m WHERE m.USERID = u.USERID AND m.tenant_id = u.tenant_id)
   `, params);
@@ -116,7 +161,9 @@ const findMatchingUserForEmployee = (employee, users) => {
  */
 router.post('/auto', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const predictions = await findMatchCandidates(resolveTenantId(req));
+    const tenantId = resolveTenantId(req);
+    const identityField = await getIdentityField(tenantId);
+    const predictions = await findMatchCandidates(tenantId, identityField);
 
     res.json({
       success: true,
@@ -127,12 +174,65 @@ router.post('/auto', requirePermission('matching', 'read'), async (req, res) => 
       // escribe en user_employee_map es POST /manual, de a un vinculo.
       applied: 0,
       requiresConfirmation: true,
+      // Contra que campo se emparejo. Que viaje en la respuesta no es un
+      // detalle: quien revisa tiene que saber si esta mirando coincidencias
+      // por legajo o por documento antes de aceptar nada.
+      identityField,
+      identityFieldLabel: IDENTITY_FIELDS[identityField].label,
       preselectedCount: predictions.filter((p) => p.preselected).length,
       predictions
     });
 
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * ⚙️ QUE DATO CARGO LA EMPRESA EN EL RELOJ
+ *
+ * Devuelve la opcion elegida y, sobre todo, CUANTOS CANDIDATOS daria cada
+ * una contra los datos reales. La idea es no preguntar "¿el badge es el
+ * legajo o el DNI?" a secas -- que invita a adivinar-- sino mostrar
+ * "legajo: 478 · documento: 0" y que la respuesta se vea sola.
+ */
+router.get('/identity-field', requirePermission('matching', 'read'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const [current, options] = await Promise.all([
+      getIdentityField(tenantId),
+      countCandidatesPerIdentityField(tenantId)
+    ]);
+    // Sugerencia: la opcion con mas candidatos, siempre que tenga alguno.
+    const best = Object.entries(options).sort((a, b) => b[1].candidates - a[1].candidates)[0];
+    res.json({
+      current,
+      default: DEFAULT_IDENTITY_FIELD,
+      suggested: best && best[1].candidates > 0 ? best[0] : null,
+      options
+    });
+  } catch (err) {
+    console.error('ERROR leyendo identity-field:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * ⚙️ ELEGIR ESE DATO (por empresa)
+ */
+router.put('/identity-field', requirePermission('matching', 'create'), async (req, res) => {
+  try {
+    const raw = String(req.body.identityField ?? '').trim().toLowerCase();
+    if (!IDENTITY_FIELDS[raw]) {
+      return res.status(400).json({
+        error: `identityField debe ser uno de: ${Object.keys(IDENTITY_FIELDS).join(', ')}`
+      });
+    }
+    await setAppSetting('matchingIdentityField', resolveTenantId(req), raw, db);
+    res.json({ ok: true, identityField: raw, label: IDENTITY_FIELDS[raw].label });
+  } catch (err) {
+    console.error('ERROR guardando identity-field:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -314,7 +414,9 @@ router.post('/manual', requirePermission('matching', 'create'), async (req, res)
  */
 router.post('/manual-bulk', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const predictions = await findMatchCandidates(resolveTenantId(req));
+    const tenantId = resolveTenantId(req);
+    const identityField = await getIdentityField(tenantId);
+    const predictions = await findMatchCandidates(tenantId, identityField);
     // `created: 0` no es un error ni un pendiente: es el comportamiento
     // buscado. Este endpoint propone; vincular es siempre una accion
     // explicita, vinculo por vinculo, via POST /manual.
@@ -489,7 +591,9 @@ router.get('/diagnosis/report', requirePermission('matching', 'read'), async (re
  */
 router.post('/predict', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const predictions = await findMatchCandidates(resolveTenantId(req));
+    const tenantId = resolveTenantId(req);
+    const identityField = await getIdentityField(tenantId);
+    const predictions = await findMatchCandidates(tenantId, identityField);
 
     res.json({
       ok: true,
