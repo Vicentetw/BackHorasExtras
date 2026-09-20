@@ -8,7 +8,9 @@ quedó funcionando, y qué falta.
 
 ## Repos y deploys
 
-- **Backend**: `BackHorasExtras` (GitHub: `Vicentetw/BackHorasExtras`), rama `main`. Deploy: Render (`https://academypruebadep.onrender.com`), auto-deploy al pushear a `main`. Base de datos: MySQL en Clever Cloud (credenciales en `.env` de producción del servicio en Render; hay una copia de solo-lectura en `motor-laboral/.env` de este repo, pensada solo para verificaciones puntuales, **nunca** para correr tests contra ella).
+- **Backend**: `BackHorasExtras` (GitHub: `Vicentetw/BackHorasExtras`), rama `main`. Deploy: Render (`https://academypruebadep.onrender.com`), auto-deploy al pushear a `main`. Base de datos: MySQL en Clever Cloud (credenciales en `.env` de producción del servicio en Render).
+
+  ⚠️ **`motor-laboral/.env` tiene acceso TOTAL a producción, no de solo lectura.** Este documento decía antes que era "una copia de solo-lectura"; se verificó el 2026-09-19 con `SHOW GRANTS` y es falso: el usuario tiene `ALL PRIVILEGES` sobre la base entera, o sea que puede modificar y borrar cualquier cosa. El archivo está fuera de git (lo cubre el `.gitignore`), pero **cualquier script que se corra apuntando a ese `.env` está escribiendo en producción**. Nunca correr tests contra él. Si se quiere que sea de verdad de solo lectura, hay que crear un usuario aparte en Clever Cloud con permiso `SELECT` solamente y usar ese.
 - **Frontend**: `horas-dedica-angular` (GitHub: `Vicentetw/horas-dedica-angular`), rama `main`. Deploy: Firebase Hosting, proyecto `horasdedicacionavp`, sitio real `https://horasdedicacionavp.web.app`. El deploy **no es automático** — hay que correr `npm run deploy:live` a mano después de cada push a `main`.
 - **Base de test local** (para desarrollo/tests, NO es producción): MySQL en `localhost:3307`, base `horas_dedica2`, user `root`, password `0113333`. El `.env` en la raíz de `BackHorasExtras` apunta ahí. **El `.env` local NO tiene credenciales de producción** — Clever Cloud solo se toca desde el workflow de migraciones.
 - **Repo viejo `horas-dedica-completo`** (local: `C:\angular\horasDedicacionOnline`): era el monorepo donde vivía todo junto. **Ya no se usa para el backend.** Quedó en el commit del 2026-09-17 y su carpeta `backendonline2/` está congelada en la migración `20260920` — le faltan las 7 migraciones siguientes y todo el motor de reglas. El backend se separó a `BackHorasExtras` para el deploy en Render, y el frontend a `horas-dedica-angular` para la migración a Angular. **No portar cambios hacia atrás**: si algo falta ahí, es a propósito.
@@ -274,10 +276,54 @@ commit `fd36be5` los "arregló" sin que eso protegiera nada real. Quedaron
 marcados con un cartel arriba de todo; **conviene borrarlos** (decisión del
 dueño del repo, git conserva el historial igual).
 
-**Lo que falta**: correr la migración en producción (Actions → "Correr
-migracion SQL en produccion (manual)") y recién después desplegar. Todavía
-no hay pantalla para *ver* el historial — los datos ya se están guardando,
-pero por ahora se consultan por SQL.
+**Migración aplicada en producción el 2026-09-19.** Resultado verificado:
+7 columnas nuevas, las 2 tablas de log, el índice y las 4 foreign keys de
+autoría creados; 26 de 27 filas de `ManualEntries` quedaron asignadas a la
+empresa 6 (AVP); y **ningún campo preexistente cambió** (se comparó fila
+por fila contra una copia tomada antes de migrar). Falta **desplegar el
+código** para que el filtro de empresa y el log empiecen a actuar.
+
+Todavía no hay pantalla para *ver* el historial: una vez desplegado los
+datos se guardan, pero por ahora se consultan por SQL.
+
+**Una fila quedó sin empresa** y hay que decidir qué hacer:
+`ManualEntries` id 40 — `userId` 2926, 2 h de HE del 2026-06-05, nota
+"corte de energía". Su `USERID` no existe en `users`, por eso el backfill
+no pudo resolverla. Como producción tiene **una sola empresa** (id 6,
+AVP), asignarle `tenant_id = 6` es casi seguro lo correcto; mientras siga
+en `NULL` esa entrada no se ve desde la aplicación.
+
+## 🔴 Hallazgo GRAVE sin resolver (2026-09-19): fichajes sin usuario
+
+Encontrado por casualidad al investigar la fila huérfana de arriba.
+**81.622 de los 156.732 fichajes de producción (52 %) pertenecen a 104
+`USERID` que no tienen ninguna fila en `users`.** No es un problema de
+empresa mal asignada: se verificó que esos `USERID` no existen en `users`
+para *ninguna* empresa (0 casos de desajuste de `tenant_id`). Tampoco
+están en `user_employee_map`, o sea que no se pueden resolver a ningún
+empleado.
+
+Lo preocupante es que **no son historia vieja**: 96 de esos 104 ficharon
+en los últimos 60 días (10.533 fichajes), varios el 2026-09-18.
+
+Por qué importa: toda la cadena de reportes va
+`Checkins → users → user_employee_map → employees`. Si falta el eslabón
+`users`, esos fichajes no aparecen en Presentismo ni en los cálculos de
+horas extra. Y peor: la pantalla de **Matching**, que existe justamente
+para detectar usuarios de reloj sin vincular, lee de `users` — así que
+estos casos **no aparecen ni siquiera como pendientes**. Son invisibles
+para la herramienta hecha para encontrarlos.
+
+Hipótesis a verificar (no confirmada): el agente inserta fichajes con
+`insertCheckinsBatch` para `USERID` que `upsertUsersBatch` no cubrió —
+por ejemplo si la subida de la lista de usuarios falla o viene parcial
+mientras la de fichajes sigue. Ver `checkinsIngestService.js` y
+`routes/agent.js`.
+
+Primer paso sugerido: contrastar esos 104 `USERID` contra la nómina real.
+Si son empleados actuales, hay horas trabajadas que no se están
+liquidando. Números de contexto: 499 filas en `users`, 457 vínculos en
+`user_employee_map`, 160 empleados con `activo = 1`.
 
 ## Problema ABIERTO ahora mismo (sin resolver, 2026-09-18)
 
