@@ -11,6 +11,9 @@ const {
   DEFAULT_IDENTITY_FIELD
 } = require('../matchingRules');
 const { getAppSetting, setAppSetting } = require('../motor-laboral/repositories/appSettingsRepository');
+// `inTransaction` (reparar un vinculo toca 5 tablas: o se hacen todas o
+// ninguna) y `actorId` (quien lo hizo, para el registro).
+const auditLog = require('../auditLog');
 
 const normalizeValue = (val) => String(val || '').trim().toLowerCase();
 
@@ -185,6 +188,199 @@ router.post('/auto', requirePermission('matching', 'read'), async (req, res) => 
 
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// VINCULOS SOSPECHOSOS
+// ---------------------------------------------------------------------------
+//
+// El caso que la pantalla de matching NO podia mostrar, y que por eso estuvo
+// meses sin detectarse: el empleado SI esta vinculado -- pero a un usuario de
+// reloj que nunca ficho. Sus fichajes reales entran con otro numero, que no
+// tiene fila en `users`, asi que no llegan a ningun reporte.
+//
+// Como se reconoce, sin adivinar:
+//   1. el usuario al que esta vinculado hoy tiene CERO fichajes, y
+//   2. existe un USERID igual a su dato de identidad (legajo o documento)
+//      que SI tiene fichajes y NO tiene fila en `users` (huerfano).
+//
+// Las dos condiciones juntas no dejan lugar a dudas: alguien ficha con ese
+// numero todos los dias y el sistema no sabe quien es.
+//
+// En produccion, al escribir esto: 100 casos, 95 de empleados activos,
+// 61.375 fichajes sin llegar a los reportes.
+async function findSuspiciousLinks(effectiveTenantId, identityFieldKey) {
+  const column = identityColumn(identityFieldKey);
+  const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ?' : '';
+  const params = effectiveTenantId !== null ? [effectiveTenantId] : [];
+  const [rows] = await db.query(`
+    SELECT
+      e.id              AS employeeId,
+      e.\`${column}\`     AS identityValue,
+      e.employee_id     AS empLegajo,
+      e.nombre          AS employeeName,
+      e.activo          AS employeeActive,
+      m.USERID          AS linkedUserId,
+      lu.Name           AS linkedUserName,
+      huerfano.USERID   AS suggestedUserId,
+      huerfano.n        AS suggestedCheckinCount,
+      huerfano.ultimo   AS suggestedLastCheckin
+    FROM employees e
+    JOIN user_employee_map m ON m.employee_id = e.id AND m.tenant_id = e.tenant_id
+    LEFT JOIN \`users\` lu ON lu.USERID = m.USERID AND lu.tenant_id = m.tenant_id
+    LEFT JOIN (
+      SELECT tenant_id, USERID, COUNT(*) n FROM Checkins GROUP BY tenant_id, USERID
+    ) ck ON ck.USERID = m.USERID AND ck.tenant_id = m.tenant_id
+    JOIN (
+      SELECT c.tenant_id, c.USERID, COUNT(*) n, MAX(c.CHECKTIME) ultimo
+      FROM Checkins c
+      LEFT JOIN \`users\` u ON u.USERID = c.USERID AND u.tenant_id = c.tenant_id
+      WHERE u.USERID IS NULL
+      GROUP BY c.tenant_id, c.USERID
+    ) huerfano
+      ON CAST(huerfano.USERID AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.\`${column}\`) AS CHAR) COLLATE utf8mb4_unicode_ci
+      AND huerfano.tenant_id = e.tenant_id
+    WHERE COALESCE(ck.n, 0) = 0
+      ${tenantClause}
+    ORDER BY huerfano.n DESC
+  `, params);
+  return rows;
+}
+
+/**
+ * 🔎 VINCULOS SOSPECHOSOS (solo lectura)
+ */
+router.get('/suspicious', requirePermission('matching', 'read'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const identityField = await getIdentityField(tenantId);
+    const rows = await findSuspiciousLinks(tenantId, identityField);
+    res.json({
+      identityField,
+      count: rows.length,
+      activeCount: rows.filter((r) => Number(r.employeeActive) === 1).length,
+      recoverableCheckins: rows.reduce((s, r) => s + Number(r.suggestedCheckinCount || 0), 0),
+      items: rows
+    });
+  } catch (err) {
+    console.error('ERROR buscando vinculos sospechosos:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 🔧 CORREGIR UN VINCULO SOSPECHOSO (de a uno, nunca en lote)
+ *
+ * Lo que hace, todo dentro de una transaccion para que no quede a medias:
+ *   1. libera el legajo que ocupa la fila fantasma (le pone un badge OLD-…),
+ *   2. crea la fila de `users` que falta, con el USERID que usa el reloj de
+ *      verdad y el nombre del empleado,
+ *   3. re-apunta las justificaciones, exclusiones especiales y horas extra
+ *      manuales que colgaban del fantasma,
+ *   4. cambia el vinculo del empleado al usuario correcto,
+ *   5. borra la fila fantasma.
+ *
+ * El efecto: los fichajes que estaban huerfanos vuelven a resolverse a una
+ * persona, sin tocar un solo registro de `Checkins`.
+ *
+ * Se exige que el cliente mande el `suggestedUserId` que vio en pantalla: si
+ * los datos cambiaron desde entonces, la operacion se rechaza en vez de
+ * aplicar algo distinto de lo que la persona aprobo.
+ */
+router.post('/repair', requirePermission('matching', 'create'), async (req, res) => {
+  const employeeId = Number(req.body.employeeId);
+  const expectedUserId = Number(req.body.suggestedUserId);
+  if (!Number.isFinite(employeeId) || !Number.isFinite(expectedUserId)) {
+    return res.status(400).json({ error: 'employeeId y suggestedUserId son requeridos' });
+  }
+
+  try {
+    const tenantId = resolveTenantId(req);
+    const identityField = await getIdentityField(tenantId);
+    const candidatos = await findSuspiciousLinks(tenantId, identityField);
+    const caso = candidatos.find((c) => Number(c.employeeId) === employeeId);
+
+    if (!caso) {
+      return res.status(404).json({ error: 'Ese empleado ya no figura como vínculo sospechoso' });
+    }
+    if (Number(caso.suggestedUserId) !== expectedUserId) {
+      return res.status(409).json({
+        error: 'Los datos cambiaron desde que se mostró la pantalla. Volvé a cargar antes de corregir.',
+        suggestedUserId: caso.suggestedUserId
+      });
+    }
+
+    const performedBy = auditLog.actorId(req);
+    const [[emp]] = await db.query('SELECT tenant_id, nombre FROM employees WHERE id = ?', [employeeId]);
+    const targetTenantId = emp.tenant_id;
+
+    await auditLog.inTransaction(db, async (conn) => {
+      // 1. La fila fantasma ocupa el legajo y la clave (tenant_id,
+      //    Badgenumber) es unica, asi que hay que liberarla ANTES de crear la
+      //    correcta. Se renombra en vez de borrarla ya, porque todavia puede
+      //    tener justificaciones colgando (foreign key).
+      await conn.query(
+        'UPDATE `users` SET Badgenumber = ? WHERE USERID = ? AND tenant_id = ?',
+        [`OLD-${caso.linkedUserId}`, caso.linkedUserId, targetTenantId]
+      );
+
+      // 2. La fila que faltaba. El nombre sale de la nomina: es mejor dato
+      //    que el del reloj (que a veces es el propio legajo). Cuando el
+      //    agente sincronice, lo reemplaza por el del reloj.
+      await conn.query(
+        'INSERT INTO `users` (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)',
+        [caso.suggestedUserId, targetTenantId, String(caso.identityValue).trim(), emp.nombre]
+      );
+
+      // 3. Lo que colgaba del fantasma pasa al usuario real.
+      await conn.query(
+        'UPDATE `userexclusions` SET userId = ? WHERE userId = ? AND tenant_id = ?',
+        [caso.suggestedUserId, caso.linkedUserId, targetTenantId]
+      );
+      await conn.query(
+        'UPDATE `specialusers` SET userId = ? WHERE userId = ? AND tenant_id = ?',
+        [caso.suggestedUserId, caso.linkedUserId, targetTenantId]
+      );
+      await conn.query(
+        'UPDATE ManualEntries SET userId = ? WHERE userId = ? AND tenant_id = ?',
+        [caso.suggestedUserId, caso.linkedUserId, targetTenantId]
+      );
+
+      // 4. El vinculo del empleado.
+      await conn.query(
+        'DELETE FROM user_employee_map WHERE employee_id = ? AND tenant_id = ?',
+        [employeeId, targetTenantId]
+      );
+      await conn.query(
+        `INSERT INTO user_employee_map (USERID, employee_id, match_type, tenant_id)
+         VALUES (?, ?, 'reparado', ?)`,
+        [caso.suggestedUserId, employeeId, targetTenantId]
+      );
+
+      // 5. Ya no queda nada apuntando al fantasma.
+      await conn.query(
+        'DELETE FROM `users` WHERE USERID = ? AND tenant_id = ?',
+        [caso.linkedUserId, targetTenantId]
+      );
+    });
+
+    console.log(
+      `[MATCHING] Vinculo reparado: empleado ${employeeId} (${emp.nombre}) ` +
+      `#${caso.linkedUserId} -> #${caso.suggestedUserId} ` +
+      `(${caso.suggestedCheckinCount} fichajes recuperados) por app_user ${performedBy}`
+    );
+
+    res.json({
+      ok: true,
+      employeeId,
+      previousUserId: caso.linkedUserId,
+      newUserId: caso.suggestedUserId,
+      recoveredCheckins: Number(caso.suggestedCheckinCount)
+    });
+  } catch (err) {
+    console.error('ERROR reparando vinculo:', err);
     res.status(500).json({ error: err.message });
   }
 });
