@@ -134,6 +134,44 @@ test('un valor invalido se rechaza con 400 y no cambia nada', async () => {
   assert.equal(a.current, 'legajo', 'debe haber quedado como estaba');
 });
 
+test('la propuesta trae TODOS los campos que lee la pantalla', async () => {
+  // Contrato con el frontend: src/app/matching/matching.ts, interfaz
+  // `Prediction`. Si alguien renombra un campo del backend, este test se
+  // pone en rojo ACA en vez de dejar la pantalla mostrando "undefined"
+  // (que es como se descubren normalmente estos errores: en produccion).
+  const json = await (await fetch(`${BASE_URL}/api/matching/auto`, { method: 'POST', headers: headersA })).json();
+  const p = json.predictions[0];
+  assert.ok(p, 'deberia haber al menos una propuesta');
+
+  for (const campo of [
+    'USERID', 'user_badgenumber', 'user_name',   // el usuario del reloj
+    'employee_id', 'emp_legajo', 'employee_name', // el empleado
+    'checkinCount', 'lastCheckin',                // la evidencia de uso
+    'nameEvidence', 'preselected', 'alternatives' // la corroboracion
+  ]) {
+    assert.ok(campo in p, `falta el campo "${campo}" que la pantalla necesita`);
+  }
+
+  assert.equal(typeof p.checkinCount, 'number');
+  assert.equal(typeof p.preselected, 'boolean');
+  assert.ok(Array.isArray(p.alternatives));
+  assert.ok(
+    ['exacto', 'contiene', 'acentos', 'sin_nombre', 'no_coincide'].includes(p.nameEvidence),
+    `nameEvidence inesperado: ${p.nameEvidence}`
+  );
+
+  // El endpoint de configuracion tambien tiene su contrato.
+  const info = await (await fetch(`${BASE_URL}/api/matching/identity-field`, { headers: headersA })).json();
+  for (const campo of ['current', 'default', 'suggested', 'options']) {
+    assert.ok(campo in info, `falta "${campo}" en identity-field`);
+  }
+  for (const opcion of Object.values(info.options)) {
+    for (const campo of ['label', 'description', 'candidates']) {
+      assert.ok(campo in opcion, `falta "${campo}" en una opcion de identity-field`);
+    }
+  }
+});
+
 test('/auto sigue sin vincular nada: solo propone', async () => {
   const json = await (await fetch(`${BASE_URL}/api/matching/auto`, { method: 'POST', headers: headersA })).json();
   assert.equal(json.applied, 0);
