@@ -386,6 +386,73 @@ Después: volver a mostrar a los empleados que se habían ocultado, y
 **revisar horas extra retroactivas** — son ~95 personas cuyas horas no se
 estaban calculando.
 
+### Reglas de vinculación reforzadas (2026-09-20) — hecho
+
+Nuevo módulo **`matchingRules.js`** (puro, 13 tests en `npm run test:unit`,
+o sea que los corre el CI). Deja escrito el modelo que hay que respetar:
+
+> **`USERID` es la llave interna del reloj: sólo une los fichajes con la
+> fila de `users`. No identifica a nadie y no debe decidir nada.
+> `Badgenumber` es el legajo real, y esa es la identidad.**
+
+Qué cambió en `routes/matching.routes.js`:
+
+1. **Desempate obligatorio**: si hay varios usuarios de reloj con el mismo
+   legajo, gana **el que tiene fichajes**; a igualdad, el del fichaje más
+   reciente; y sólo al final el `USERID` más bajo (para que el resultado
+   sea repetible). El bug viejo saltaba directo a ese último paso. Hay un
+   test que reproduce el caso Mendoza y se pone en rojo si alguien lo
+   rompe.
+2. **Una propuesta por empleado**, no una por usuario de reloj. Los
+   candidatos descartados viajan en `alternatives` — verlos es lo que
+   permite detectar que hay dos usuarios para la misma persona.
+3. **El nombre corrobora, no decide.** Se midió contra los 478 pares
+   reales: exigir nombre idéntico rechazaría el **83 %** de los vínculos
+   buenos, porque el reloj casi siempre guarda sólo el apellido. Cada
+   propuesta trae `nameEvidence`: `exacto` (82 casos) · `contiene` (363) ·
+   `acentos` · `sin_nombre` · `no_coincide`.
+4. **Nada se aplica solo.** Decisión explícita del dueño del producto: *"el
+   matching impulsivo no será bueno, deberá ser el usuario que acepte cada
+   matching"*. `/auto` y `/manual-bulk` sólo proponen y ahora lo dicen en
+   la respuesta (`applied: 0`, `requiresConfirmation: true`). El único
+   endpoint que escribe en `user_employee_map` es `POST /manual`, de a un
+   vínculo. Los casos `sin_nombre` y `no_coincide` vienen con
+   `preselected: false`: se muestran, pero exigen que alguien los mire.
+
+**Falta la pantalla**: el backend ya devuelve la evidencia, pero el
+frontend todavía no la muestra ni permite aceptar vínculo por vínculo.
+
+### Bug de codificación del agente (2026-09-20) — corregido
+
+Los nombres con eñe o acento llegaban **con la letra borrada**:
+`CAÑETE → CAETE`, `AGÜERO → AGERO`, `Rubén → Rubn`. La letra no salía
+cambiada, desaparecía — esa es la firma del problema.
+
+Causa: `pyzk` decodifica con
+`name.decode(self.encoding, errors='ignore')` y `encoding` es `'UTF-8'`
+por defecto (`zk/base.py:1095`). El reloj guarda en una codificación de un
+byte, así que la `Ñ` es `0xD1`, inválido en UTF-8 → **descartado en
+silencio**.
+
+Arreglo en `descarga-fichaje-py/zk_service.py`: se conecta con
+`encoding='cp1252'`, que nunca descarta un byte. Y como hay relojes que sí
+usan UTF-8 (leídos así saldrían como `CAÃETE`), `reparar_mojibake()`
+detecta ese caso y lo deshace — el agente funciona con los dos tipos sin
+configurar nada.
+
+Verificado con `descarga-fichaje-py/test_encoding.py` (`python
+test_encoding.py`), que reproduce el bug original y prueba los dos
+escenarios sin necesitar el reloj.
+
+**Los nombres ya guardados no se corrigen solos**: se arreglan cuando el
+agente vuelva a subir la lista de usuarios. Mientras tanto, el matching
+los tolera con el nivel `acentos`.
+
+De paso quedó documentado el origen de los usuarios llamados `"9370"` o
+`"2489"`: al enrolar una huella, `zk_service.py` escribe el legajo como
+nombre (`conn.set_user(name=str(user_id))`). Mejora pendiente: pasarle el
+nombre real del empleado.
+
 ### Para que no vuelva a pasar
 
 - `scripts/cleanup-duplicate-users.js`: no debe borrar un `USERID` sin mover antes sus `Checkins`, y no debe elegir cuál conservar con `GROUP_CONCAT`. Hasta arreglarlo, **no correrlo**.

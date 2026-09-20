@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const pool = db;
 const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
+const { buildMatchProposals } = require('../matchingRules');
 
 const normalizeValue = (val) => String(val || '').trim().toLowerCase();
 
@@ -31,10 +32,28 @@ const normalizeName = (name) => {
 // proponer el usuario crudo de OTRA empresa como match) y el "ya
 // vinculado" se chequea tambien por tenant (un USERID ya vinculado en
 // OTRA empresa no cuenta como vinculado para esta).
-async function findAutoMatchPredictions(effectiveTenantId) {
+// Busca CANDIDATOS a vincular y les adjunta la evidencia para que una
+// persona pueda decidir. NO vincula nada: esta funcion es de solo lectura.
+//
+// Que cambio el 2026-09-20 y por que (ver ESTADO_PROYECTO.md y
+// matchingRules.js):
+//   - Antes devolvia una fila por CADA usuario de reloj que compartiera
+//     legajo con un empleado, sin ordenarlas ni distinguirlas. Quien
+//     consumiera eso terminaba quedandose con "la primera", que en la
+//     practica era la del USERID mas bajo: justamente la fila importada de
+//     un CSV que nunca habia fichado. Asi 95 empleados quedaron vinculados a
+//     un usuario fantasma y 81.622 fichajes no llegaban a ningun reporte.
+//   - Ahora se traen los fichajes de cada candidato (cuantos y el ultimo) y
+//     `buildMatchProposals` devuelve UNA propuesta por empleado, eligiendo
+//     al que efectivamente ficha y dejando los descartados a la vista en
+//     `alternatives`.
+//   - Se agrega `nameEvidence`: el nombre no decide (el reloj casi siempre
+//     guarda solo el apellido), pero sirve para corroborar y para que la
+//     pantalla muestre de que color es cada caso.
+async function findMatchCandidates(effectiveTenantId) {
   const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ? AND u.tenant_id = ?' : '';
   const params = effectiveTenantId !== null ? [effectiveTenantId, effectiveTenantId] : [];
-  const [predictions] = await db.query(`
+  const [rows] = await db.query(`
     SELECT
       u.USERID,
       u.Badgenumber as user_badgenumber,
@@ -42,17 +61,35 @@ async function findAutoMatchPredictions(effectiveTenantId) {
       e.id as employee_id,
       e.employee_id as emp_legajo,
       e.nombre as employee_name,
+      COALESCE(ck.n, 0) as checkinCount,
+      ck.ultimo as lastCheckin,
       'employee_id' as match_type
     FROM users u
     JOIN employees e
       ON CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
       AND u.tenant_id = e.tenant_id
+    LEFT JOIN (
+      SELECT tenant_id, USERID, COUNT(*) n, MAX(CHECKTIME) ultimo
+      FROM Checkins
+      GROUP BY tenant_id, USERID
+    ) ck ON ck.USERID = u.USERID AND ck.tenant_id = u.tenant_id
     WHERE u.USERID > 10
       AND e.activo = 1
       ${tenantClause}
       AND NOT EXISTS (SELECT 1 FROM user_employee_map m WHERE m.USERID = u.USERID AND m.tenant_id = u.tenant_id)
   `, params);
-  return predictions;
+
+  // Se devuelven tambien los nombres de campo viejos para no romper la
+  // pantalla actual mientras se actualiza.
+  return buildMatchProposals(rows).map((p) => ({
+    ...p,
+    employee_id: p.employeeId,
+    emp_legajo: p.empLegajo,
+    employee_name: p.employeeName,
+    user_badgenumber: p.userBadgenumber,
+    user_name: p.userName,
+    match_type: 'employee_id'
+  }));
 }
 
 const findMatchingUserForEmployee = (employee, users) => {
@@ -79,11 +116,18 @@ const findMatchingUserForEmployee = (employee, users) => {
  */
 router.post('/auto', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const predictions = await findAutoMatchPredictions(resolveTenantId(req));
+    const predictions = await findMatchCandidates(resolveTenantId(req));
 
     res.json({
       success: true,
       would_match: predictions.length,
+      // Se dice explicito: este endpoint NO vincula. Decision del dueño del
+      // producto (2026-09-20): "el matching impulsivo no será bueno, deberá
+      // ser el usuario que acepte cada matching". El unico endpoint que
+      // escribe en user_employee_map es POST /manual, de a un vinculo.
+      applied: 0,
+      requiresConfirmation: true,
+      preselectedCount: predictions.filter((p) => p.preselected).length,
       predictions
     });
 
@@ -270,8 +314,18 @@ router.post('/manual', requirePermission('matching', 'create'), async (req, res)
  */
 router.post('/manual-bulk', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const predictions = await findAutoMatchPredictions(resolveTenantId(req));
-    res.json({ success: true, created: 0, matches: predictions, would_match: predictions.length });
+    const predictions = await findMatchCandidates(resolveTenantId(req));
+    // `created: 0` no es un error ni un pendiente: es el comportamiento
+    // buscado. Este endpoint propone; vincular es siempre una accion
+    // explicita, vinculo por vinculo, via POST /manual.
+    res.json({
+      success: true,
+      created: 0,
+      applied: 0,
+      requiresConfirmation: true,
+      matches: predictions,
+      would_match: predictions.length
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -435,7 +489,7 @@ router.get('/diagnosis/report', requirePermission('matching', 'read'), async (re
  */
 router.post('/predict', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const predictions = await findAutoMatchPredictions(resolveTenantId(req));
+    const predictions = await findMatchCandidates(resolveTenantId(req));
 
     res.json({
       ok: true,

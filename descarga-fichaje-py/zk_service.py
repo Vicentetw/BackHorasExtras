@@ -5,6 +5,59 @@ except Exception:
     ZK = None
 
 
+# ============================================================================
+# CODIFICACION DE LOS NOMBRES DEL RELOJ
+# ============================================================================
+#
+# EL BUG (detectado el 2026-09-20 mirando datos reales de produccion):
+# los nombres con enie o acento llegaban MUTILADOS, con la letra faltante:
+#
+#     "CAÑETE, Nestor"  ->  "CAETE"
+#     "AGÜERO, Paola"   ->  "AGERO"
+#     "Gonzalez Rubén"  ->  "Gonzalez Rubn"
+#     "LIZARRALDE, Iñaky" -> "LIZARRALDE, Iaky"
+#
+# Fijate que la letra no sale cambiada: DESAPARECE. Esa es la firma del
+# problema. La libreria pyzk decodifica asi (zk/base.py:1095):
+#
+#     name = (name.split(b'\x00')[0]).decode(self.encoding, errors='ignore')
+#
+# y `self.encoding` es 'UTF-8' por defecto. El reloj guarda los nombres en
+# una codificacion de UN byte por caracter (latin-1 / cp1252): la "Ñ" es el
+# byte 0xD1, que en UTF-8 no es un comienzo valido. Con errors='ignore' ese
+# byte se descarta en silencio y el nombre queda sin la letra.
+#
+# Ese destrozo despues rompia el matching: "CAETE" no se parece a "CAÑETE",
+# asi que el empleado quedaba sin vincular.
+#
+# EL ARREGLO: leer en cp1252, que NUNCA descarta un byte (los 256 valores
+# tienen caracter). Asi la "Ñ" vuelve a ser "Ñ".
+#
+# LA PRECAUCION: hay relojes que SI guardan en UTF-8. Leidos como cp1252,
+# esos nombres salen al reves -- "CAÑETE" se ve como "CAÃETE" (lo que se
+# suele llamar "mojibake"). `reparar_mojibake` detecta ese caso y lo
+# deshace, asi que el agente funciona con los dos tipos de reloj sin que
+# haya que configurar nada.
+NAME_ENCODING = 'cp1252'
+
+
+def reparar_mojibake(texto):
+    """Deshace el caso 'texto UTF-8 leido como cp1252'.
+
+    Si el reloj guardaba UTF-8 y lo leimos como cp1252, "Ñ" aparece como
+    "Ã‘" y "é" como "Ã©". Se detecta por esos caracteres delatores; si al
+    re-codificar el texto a bytes cp1252 y releerlo como UTF-8 el resultado
+    es valido, era mojibake y se devuelve corregido. Si algo falla, se
+    devuelve el texto original sin tocar: ante la duda, no empeorar.
+    """
+    if not texto or not any(c in texto for c in ('Ã', 'Â', 'â€')):
+        return texto
+    try:
+        return texto.encode('cp1252').decode('utf-8')
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return texto
+
+
 def descargar_reloj(ip, puerto=4370, timeout=5, password='', callback_progreso=None):
     """Conecta con un reloj ZK y devuelve (users, attendances, error_msg).
     Si todo OK, error_msg es None. Se intentan capturar errores comunes.
@@ -18,7 +71,9 @@ def descargar_reloj(ip, puerto=4370, timeout=5, password='', callback_progreso=N
         pwd = 0
 
     try:
-        zk = ZK(ip, port=puerto, timeout=timeout, password=pwd)
+        # encoding=cp1252: ver el comentario de NAME_ENCODING arriba. Sin
+        # esto, los nombres con enie o acento llegan con la letra borrada.
+        zk = ZK(ip, port=puerto, timeout=timeout, password=pwd, encoding=NAME_ENCODING)
         conn = zk.connect()
         conn.disable_device()
 
@@ -29,6 +84,17 @@ def descargar_reloj(ip, puerto=4370, timeout=5, password='', callback_progreso=N
                 pass
 
         users = conn.get_users()
+
+        # Segunda red de seguridad: si este reloj guardaba en UTF-8, leerlo
+        # como cp1252 deja los nombres al reves ("CAÃETE"). Se detecta y se
+        # corrige aca, para que el resto del programa reciba siempre el
+        # nombre bien escrito, venga del reloj que venga.
+        for u in users or []:
+            try:
+                if getattr(u, 'name', None):
+                    u.name = reparar_mojibake(u.name)
+            except Exception:
+                pass
 
         if callback_progreso:
             try:
@@ -123,7 +189,7 @@ def registrar_huella(ip, puerto=4370, admin_password='', user_id=None, dedo=1):
         pwd = 0
 
     try:
-        zk = ZK(ip, port=puerto, timeout=5, password=pwd)
+        zk = ZK(ip, port=puerto, timeout=5, password=pwd, encoding=NAME_ENCODING)
         conn = zk.connect()
         conn.disable_device()
 
@@ -135,6 +201,16 @@ def registrar_huella(ip, puerto=4370, admin_password='', user_id=None, dedo=1):
 
         if not usuario:
             # crear usuario con uid=user_id, nombre=user_id y privilege 0
+            #
+            # OJO: poner el legajo como NOMBRE tiene una consecuencia rio
+            # abajo. En produccion hay usuarios de reloj llamados "9370" o
+            # "2489" -- salieron de aca. Despues, al vincular el usuario del
+            # reloj con el empleado, el nombre no sirve para corroborar nada
+            # y esos casos quedan marcados como "sin_nombre" (ver
+            # matchingRules.js en el backend): se pueden vincular igual, pero
+            # obligan a una revision manual.
+            # Mejora pendiente: recibir el nombre real del empleado como
+            # parametro y escribirlo aca.
             try:
                 conn.set_user(uid=int(user_id), name=str(user_id), privilege=0)
             except Exception:
