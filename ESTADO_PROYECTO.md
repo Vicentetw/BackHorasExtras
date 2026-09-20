@@ -314,9 +314,35 @@ para detectar usuarios de reloj sin vincular, lee de `users` — así que
 estos casos **no aparecen ni siquiera como pendientes**. Son invisibles
 para la herramienta hecha para encontrarlos.
 
-### CAUSA CONFIRMADA (2026-09-20)
+### CAUSA CONFIRMADA (2026-09-20): dos bugs que se potencian
 
-El culpable es **`scripts/cleanup-duplicate-users.js`**. Ese script busca
+Son **dos** fallas distintas, y ninguna sola explica el cuadro completo.
+Las dos son, de fondo, **el mismo error: elegir una fila arbitraria de un
+conjunto donde la elección importa.**
+
+**Bug A — el matching automático vinculó al usuario equivocado.**
+Confirmado con datos: **99 de los 100 vínculos rotos tienen
+`match_type = 'auto_employee_id'`**, que es el que escribía
+`endpoints-employees.js` (hoy archivo muerto, no lo monta nadie):
+
+```js
+const [users] = await db.query(
+  'SELECT USERID FROM users WHERE Badgenumber = ? AND USERID > 10', [emp.employee_id]);
+if (users.length === 0) continue;
+const userId = users[0].USERID;   // <-- sin ORDER BY: fila arbitraria
+```
+
+Cuando había DOS filas con el mismo legajo —la vieja importada por CSV y
+la del reloj— `users[0]` sin `ORDER BY` devuelve la del `USERID` más bajo
+(orden de clave primaria). O sea: eligió siempre la importada, que nunca
+fichó, y nunca la del reloj. Se ve en los datos: el `USERID` vinculado es
+*siempre* menor que el que ficha (435 < 1400, 440 < 9467, 246 < 649).
+
+Contexto que lo hace posible: de las 499 filas de `users`, **243 tienen
+`USERID` igual a su legajo** (origen reloj) y **256 no** (origen
+importación). Dos poblaciones mezcladas en la misma tabla.
+
+**Bug B — el script de limpieza borró la fila que sí se usaba.** Ese script busca
 `Badgenumber` repetidos en `users`, **se queda con el primer `USERID` que
 devuelve `GROUP_CONCAT` (o sea, uno arbitrario) y borra los demás**. Al
 borrarlos limpia `specialusers`, `userexclusions`, `dailyattendance`,
@@ -362,7 +388,9 @@ estaban calculando.
 
 ### Para que no vuelva a pasar
 
-- `scripts/cleanup-duplicate-users.js`: no debe borrar un `USERID` sin mover antes sus `Checkins`. Hasta arreglarlo, **no correrlo**.
+- `scripts/cleanup-duplicate-users.js`: no debe borrar un `USERID` sin mover antes sus `Checkins`, y no debe elegir cuál conservar con `GROUP_CONCAT`. Hasta arreglarlo, **no correrlo**.
+- **El matching vivo tiene el mismo agujero de desempate.** En `routes/matching.routes.js`, `findAutoMatchPredictions` junta `users` con `employees` por legajo sin `ORDER BY` ni criterio de desempate, y `findMatchingUserForEmployee` usa `users.find(...)`, que devuelve el primero del array. Si vuelve a haber dos filas de `users` con el mismo legajo, puede repetir el error. **El desempate correcto es preferir la fila que TIENE fichajes** (y, a igualdad, la de fichaje más reciente) — nunca la primera que aparezca. Hoy no se dispara porque no quedan legajos duplicados, pero es una bomba de tiempo.
+- Los dos archivos culpables (`endpoints-employees.js` y `scripts/cleanup-duplicate-users.js`) son **código muerto o de uso manual**: no los monta el servidor. Conviene borrar el primero; el segundo, arreglarlo o borrarlo.
 - La ingesta debe **avisar** cuando llega un fichaje de un `USERID` que no existe en `users`, en vez de guardarlo en silencio. Hoy `insertCheckinsBatch` lo acepta sin chistar y nadie se entera nunca.
 - Ese contador ("fichajes que no se pueden resolver a un empleado") debería estar a la vista en la pantalla de Matching o en el panel de sincronización.
 
