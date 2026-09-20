@@ -314,16 +314,57 @@ para detectar usuarios de reloj sin vincular, lee de `users` — así que
 estos casos **no aparecen ni siquiera como pendientes**. Son invisibles
 para la herramienta hecha para encontrarlos.
 
-Hipótesis a verificar (no confirmada): el agente inserta fichajes con
-`insertCheckinsBatch` para `USERID` que `upsertUsersBatch` no cubrió —
-por ejemplo si la subida de la lista de usuarios falla o viene parcial
-mientras la de fichajes sigue. Ver `checkinsIngestService.js` y
-`routes/agent.js`.
+### CAUSA CONFIRMADA (2026-09-20)
 
-Primer paso sugerido: contrastar esos 104 `USERID` contra la nómina real.
-Si son empleados actuales, hay horas trabajadas que no se están
-liquidando. Números de contexto: 499 filas en `users`, 457 vínculos en
-`user_employee_map`, 160 empleados con `activo = 1`.
+El culpable es **`scripts/cleanup-duplicate-users.js`**. Ese script busca
+`Badgenumber` repetidos en `users`, **se queda con el primer `USERID` que
+devuelve `GROUP_CONCAT` (o sea, uno arbitrario) y borra los demás**. Al
+borrarlos limpia `specialusers`, `userexclusions`, `dailyattendance`,
+`dayassignments` y `user_employee_map`… **pero nunca toca `Checkins`, ni
+reasigna esos fichajes al `USERID` que conserva**. Ahí nacen los
+huérfanos. Además, al final agrega una clave única por `Badgenumber`, que
+impide que el agente vuelva a crear la fila borrada (hoy esa clave existe
+como `uq_users_tenant_badge (tenant_id, Badgenumber)`).
+
+Y eligió mal cuál conservar. En este reloj **el `USERID` es igual al
+legajo**. Los fichajes reales entran con `USERID` = legajo, pero el script
+conservó unas filas viejas con otro `USERID` que el reloj no usa:
+
+```
+MENDOZA, Bruno Ezequiel  legajo 9467: ficha como USERID 9467 (2011 fichajes)
+                                      pero está vinculado al USERID 440 (0 fichajes)
+LATTANZI, Roberto        legajo 1400: ficha como USERID 1400 (494 fichajes)
+                                      pero está vinculado al USERID 435 (0 fichajes)
+```
+
+Números que cierran el caso:
+- **103 de los 104** `USERID` huérfanos coinciden exactamente con el legajo de un empleado; **95 son empleados activos**.
+- **100 casos** en los que el `USERID` viejo ocupa el badge del legajo **y tiene 0 fichajes** — son filas fantasma.
+- **62.507 fichajes recuperables** por esta vía.
+- Solo **79 de las 499** filas de `users` recibieron algún fichaje en los últimos 60 días.
+- De 160 empleados activos, **96 no tienen ni un fichaje resoluble**; 95 de ellos son estos casos.
+
+**Por qué no se notó**: al no llegar los fichajes, esas personas aparecían
+como ausentes; se las ocultó del informe ("para no tener 300 ausentes").
+El parche escondió el síntoma, así que el problema dejó de verse. Era una
+reacción razonable con la información que había.
+
+### Plan de reparación (NO ejecutado, requiere aprobación)
+
+Por cada empleado afectado, dentro de una transacción:
+1. Borrar la fila fantasma de `users` (el `USERID` viejo, 0 fichajes) — libera el badge.
+2. Insertar `users` con `USERID` = legajo, `Badgenumber` = legajo, `Name` = nombre del empleado, `tenant_id` = 6.
+3. Re-apuntar `user_employee_map` del `USERID` viejo al nuevo.
+
+Después: volver a mostrar a los empleados que se habían ocultado, y
+**revisar horas extra retroactivas** — son ~95 personas cuyas horas no se
+estaban calculando.
+
+### Para que no vuelva a pasar
+
+- `scripts/cleanup-duplicate-users.js`: no debe borrar un `USERID` sin mover antes sus `Checkins`. Hasta arreglarlo, **no correrlo**.
+- La ingesta debe **avisar** cuando llega un fichaje de un `USERID` que no existe en `users`, en vez de guardarlo en silencio. Hoy `insertCheckinsBatch` lo acepta sin chistar y nadie se entera nunca.
+- Ese contador ("fichajes que no se pueden resolver a un empleado") debería estar a la vista en la pantalla de Matching o en el panel de sincronización.
 
 ## Problema ABIERTO ahora mismo (sin resolver, 2026-09-18)
 
