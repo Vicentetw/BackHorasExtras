@@ -138,6 +138,18 @@ async function findMatchCandidates(effectiveTenantId, identityFieldKey) {
   }));
 }
 
+// CODIGO MUERTO (verificado el 2026-09-20: no lo llama nadie, en ningun
+// archivo del repo). Se deja anotado en vez de borrarlo porque tiene el
+// mismo error que costo caro en este proyecto, y conviene que quede el
+// cartel:
+//
+//   `users.find(...)` devuelve EL PRIMERO del array, sin desempate. Si dos
+//   usuarios de reloj comparten legajo, elige uno al azar -- y el que hay
+//   que elegir es EL QUE FICHA. Ver `rankCandidateUsers` en
+//   matchingRules.js, que hace ese desempate y tiene tests.
+//
+// Si alguna vez se necesita esta funcion, no se reactiva como esta: se
+// reemplaza por rankCandidateUsers.
 const findMatchingUserForEmployee = (employee, users) => {
   const candidateIds = [employee.employee_id, employee.legajo_alt]
     .filter(Boolean)
