@@ -611,7 +611,7 @@ nombre real del empleado.
 
 ### Para que no vuelva a pasar
 
-- `scripts/cleanup-duplicate-users.js`: no debe borrar un `USERID` sin mover antes sus `Checkins`, y no debe elegir cuál conservar con `GROUP_CONCAT`. Hasta arreglarlo, **no correrlo**.
+- ✅ `scripts/cleanup-duplicate-users.js` — **ARREGLADO el 2026-09-20**. Ahora elige cuál conservar por evidencia (gana el que ficha, vía `rankCandidateUsers`), **mueve** los `Checkins` antes de borrar, **mueve en vez de borrar** las justificaciones y horas extra, trabaja por empresa (`--tenant=N`), no agrega ninguna UNIQUE KEY, y **simula por defecto** (hace falta `--aplicar`). Ya se puede correr.
 - **El matching vivo tiene el mismo agujero de desempate.** En `routes/matching.routes.js`, `findAutoMatchPredictions` junta `users` con `employees` por legajo sin `ORDER BY` ni criterio de desempate, y `findMatchingUserForEmployee` usa `users.find(...)`, que devuelve el primero del array. Si vuelve a haber dos filas de `users` con el mismo legajo, puede repetir el error. **El desempate correcto es preferir la fila que TIENE fichajes** (y, a igualdad, la de fichaje más reciente) — nunca la primera que aparezca. Hoy no se dispara porque no quedan legajos duplicados, pero es una bomba de tiempo.
 - Los dos archivos culpables (`endpoints-employees.js` y `scripts/cleanup-duplicate-users.js`) son **código muerto o de uso manual**: no los monta el servidor. Conviene borrar el primero; el segundo, arreglarlo o borrarlo.
 - La ingesta debe **avisar** cuando llega un fichaje de un `USERID` que no existe en `users`, en vez de guardarlo en silencio. Hoy `insertCheckinsBatch` lo acepta sin chistar y nadie se entera nunca.
