@@ -94,9 +94,16 @@ $sello   = Get-Date -Format 'yyyy-MM-dd_HHmm'
 $sql     = Join-Path $Destino "backup-$($cfg['MYSQL_ADDON_DB'])-$sello.sql"
 $zip     = [System.IO.Path]::ChangeExtension($sql, '.zip')
 
+$inicio = Get-Date
 Write-Host "Base:    $($cfg['MYSQL_ADDON_DB']) en $($cfg['MYSQL_ADDON_HOST'])"
 Write-Host "Destino: $zip"
-Write-Host "Generando el dump..." -NoNewline
+Write-Host "Inicio:  $($inicio.ToString('HH:mm:ss'))"
+Write-Host ""
+# La duracion varia MUCHO segun como este la conexion a Clever Cloud: en
+# pruebas dio entre 40 segundos y 4,5 minutos para los mismos 17 MB. Durante
+# ese rato la pantalla queda quieta y no hay barra de progreso -- es normal.
+# La señal de que termino bien es el cartel verde del final.
+Write-Host "Descargando la base... (puede tardar varios minutos, la pantalla queda quieta)"
 
 # --no-tablespaces: sin esto mysqldump falla con
 #     "Access denied; you need (at least one of) the PROCESS privilege(s)
@@ -108,6 +115,15 @@ Write-Host "Generando el dump..." -NoNewline
 #
 # La contrasena va por variable de entorno y no como argumento: los
 # argumentos de un proceso los puede ver cualquier otro programa de la PC.
+# Se invoca directo, sin Start-Process.
+#
+# Hubo un intento de mostrar el avance en vivo lanzandolo con
+# Start-Process -PassThru y mirando el tamaño del archivo. Salio mal y vale
+# la pena dejarlo anotado: `$proc.ExitCode` quedaba VACIO, el script lo leia
+# como distinto de cero, y borraba un backup de 17 MB que estaba perfecto.
+# Una "mejora" cosmetica destruyendo justo lo que el script tiene que
+# cuidar. La version directa devuelve bien $LASTEXITCODE y es la que
+# funciona.
 $env:MYSQL_PWD = $cfg['MYSQL_ADDON_PASSWORD']
 try {
   & $dump `
@@ -129,7 +145,7 @@ if ($codigo -ne 0) {
   if (Test-Path $sql) { Remove-Item $sql -Force }
   throw "mysqldump fallo (codigo $codigo). No se genero ningun backup."
 }
-Write-Host " listo."
+Write-Host "Descarga terminada ($([int]((Get-Date) - $inicio).TotalSeconds)s)."
 
 # --- Verificacion: ¿el dump esta completo? ---
 $ultimas = Get-Content $sql -Tail 5 -ErrorAction SilentlyContinue
@@ -164,7 +180,19 @@ Get-ChildItem $Destino -Filter 'backup-*.zip' | ForEach-Object {
 }
 
 $total = (Get-ChildItem $Destino -Filter 'backup-*.zip').Count
-Write-Host "Rotacion: $borrados borrados, $total backups guardados."
+Write-Host "Rotacion:   $borrados borrados, $total backups guardados."
+
+$duracion = [int]((Get-Date) - $inicio).TotalSeconds
 Write-Host ""
+Write-Host "============================================================" -ForegroundColor Green
+Write-Host " BACKUP TERMINADO CORRECTAMENTE" -ForegroundColor Green
+Write-Host "============================================================" -ForegroundColor Green
+Write-Host " Archivo:  $zip"
+Write-Host " Tamanio:  $mbZip MB  ($tablas tablas)"
+Write-Host " Duracion: $duracion segundos"
+Write-Host " Hora:     $((Get-Date).ToString('HH:mm:ss'))"
+Write-Host "============================================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "Si NO ves este cartel verde, el backup no se completo." -ForegroundColor Yellow
 Write-Host "RECORDATORIO: proba restaurar uno en una base de prueba." -ForegroundColor Yellow
 Write-Host "Un backup que nunca se restauro es una esperanza, no un backup."
