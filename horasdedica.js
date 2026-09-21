@@ -3191,6 +3191,35 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       checkinsRangeQuery += ` AND c.tenant_id = ?`;
       checkinsRangeParams.push(tenantId);
     }
+
+    // Traer SOLO lo pedido. Cuando se abre el detalle de UNA persona
+    // (?employeeId=...), antes se traian igual los fichajes de TODA la
+    // empresa -- 77.947 filas para un año, de las cuales interesaban ~900 --
+    // y recien despues se descartaba en memoria. La lista de empleados ya se
+    // filtraba mas arriba; las fichadas no.
+    //
+    // Se incluyen ademas los usuarios de reloj SIN empleado, porque ahi estan
+    // los marcadores de salida particular y de horas extra (badges 5, 6, 9,
+    // 10): son fichajes que no son de nadie pero que detectMovements
+    // necesita para armar los eventos del dia. Son pocos, y dejarlos afuera
+    // haria desaparecer las salidas particulares del detalle.
+    if (detailEmployeeId) {
+      const numerosPermitidos = new Set();
+      for (const u of clockUserRows) {
+        const esDeLaPersona = u.employeeId != null && String(u.employeeId) === detailEmployeeId;
+        const esMarcador = u.employeeId == null;
+        if (!esDeLaPersona && !esMarcador) continue;
+        numerosPermitidos.add(Number(u.USERID));
+        if (u.Badgenumber != null && String(u.Badgenumber).trim() !== '') {
+          const badge = Number(String(u.Badgenumber).trim());
+          if (Number.isFinite(badge)) numerosPermitidos.add(badge);
+        }
+      }
+      if (numerosPermitidos.size > 0) {
+        checkinsRangeQuery += ` AND c.USERID IN (?)`;
+        checkinsRangeParams.push([...numerosPermitidos]);
+      }
+    }
     // El orden cronologico importa: los fichajes de cada dia tienen que
     // quedar ordenados para que el emparejamiento entrada/salida funcione.
     checkinsRangeQuery += ` ORDER BY c.CHECKTIME`;
