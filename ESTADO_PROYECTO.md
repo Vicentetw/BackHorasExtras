@@ -1,4 +1,78 @@
-# Estado del proyecto — Motor de reglas de asistencia configurable
+# Estado del proyecto — Horas Dedica
+
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-09-20)
+>
+> ### En qué carpeta se trabaja
+>
+> ```
+> C:\angular\horasdedicacion-back-deploy\BackHorasExtras     ← BACKEND. Todo acá.
+> C:\angular\horasDedicacionOnlineAngular\horas-dedica-angular  ← FRONTEND Angular
+> C:\angular\horasDedicacionOnline                           ← OBSOLETO, no usar
+> ```
+>
+> La tercera es el monorepo viejo (`horas-dedica-completo`). **Suele ser el
+> directorio por defecto de la sesión**, así que el `git status` inicial
+> muestra SUS archivos aunque el trabajo real sea en las otras dos. Su
+> `backendonline2/` quedó congelado en la migración `20260920`. No portarle
+> nada.
+>
+> ### Cómo se despliega
+>
+> | | |
+> |---|---|
+> | Backend | `git push origin main` → Render despliega solo |
+> | Frontend | `git push origin main` + **`npm run deploy:live`** (no es automático) |
+> | Migraciones | Actions → *"Correr migracion SQL en produccion (manual)"*. **Antes** del deploy, nunca después |
+>
+> Verificá el deploy comparando el hash del bundle, no asumas:
+> `main-XXXX.js` del `dist/` local vs. el de `https://horasdedicacionavp.web.app/index.html`.
+>
+> ### Estado al 2026-09-20
+>
+> - Backend: **558/558 tests**. Producción al día, sin migraciones pendientes.
+> - Frontend: build limpio, desplegado.
+> - Repo del backend: **PÚBLICO** (decisión del dueño por ahora). Los otros dos, privados.
+>
+> ### Lo que falta (en orden)
+>
+> 1. **Las dos listas lado a lado** en Matching (reloj ↔ empleados) para
+>    vincular a mano. Pedido explícito del dueño: *"debe ser fácil… piensa
+>    cómo puede ser lo más fácil e intuitivo para un empleado que no sabe
+>    usar el sistema"*. Hoy resolvería pocos casos, pero hace falta al sumar
+>    una empresa nueva.
+> 2. **Cambiar la contraseña del MySQL local** — estuvo en este archivo, que
+>    está en un repo público, y sigue en el historial de git.
+> 3. **Branch protection** en ambos repos (a mano en GitHub, ver más abajo).
+> 4. **Lentitud intermitente** en Presentismo, sin resolver desde el 18/09.
+> 5. Backlog: monitoreo de errores (Sentry), backend de staging, tests de
+>    integración en CI, consolidar los tres motores de asistencia.
+>
+> ### ⚠️ Lo que hay que leer antes de tocar matching
+>
+> El 2026-09-19 se declaró un hallazgo "GRAVE" que era **falso**: se dijo que
+> 81.622 fichajes no llegaban a los informes. Sí llegaban. La causa del error
+> fue **suponer la cadena de JOINs en vez de leerla**. Está todo explicado en
+> la sección *"⚠️ CORRECCIÓN (2026-09-20)"* más abajo. Leela antes de sacar
+> conclusiones sobre datos que "faltan": **la consulta que arma el informe es
+> `horasdedica.js:3109`** y resuelve con
+> `(u.USERID = c.USERID OR u.Badgenumber = c.USERID)`.
+>
+> ### Reglas del dominio que no están en el código (las dio el dueño)
+>
+> - `USERID` es la llave interna del reloj. **No identifica a nadie.**
+> - `Badgenumber` es la identidad: el legajo **o el DNI**, según qué cargó
+>   cada empresa en el reloj. Por eso es configurable.
+> - **Los `USERID` ≤ 10 no son personas**: son marcadores ficticios del
+>   reloj. El 1 es el administrador.
+> - **Nada de matching se aplica solo.** *"El matching impulsivo no será
+>   bueno, deberá ser el usuario que acepte cada matching"*.
+> - No interesa recuperar el historial viejo de fichajes: *"lo que me
+>   interesa es que el código actual funcione bien para poder empezar a
+>   ofrecer el servicio"*.
+
+---
+
+## Motor de reglas de asistencia configurable
 
 Última actualización: 2026-09-18
 
