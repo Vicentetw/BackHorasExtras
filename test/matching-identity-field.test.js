@@ -1,4 +1,4 @@
-// Elegir contra que dato del empleado se compara el Badgenumber del reloj.
+﻿// Elegir contra que dato del empleado se compara el Badgenumber del reloj.
 //
 // Por que existe esta opcion: el Badgenumber es la identidad, pero identidad
 // SEGUN QUE. Cada empresa decide que le carga al reloj al dar de alta a una
@@ -16,8 +16,8 @@ const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
-const TENANT_A = 999976;
-const TENANT_B = 999977;
+const TENANT_A = 999923;
+const TENANT_B = 999924;
 const UID_A = 'test-matching-identity-a';
 const UID_B = 'test-matching-identity-b';
 const USERID_A = 8890050;
@@ -180,3 +180,4 @@ test('/auto sigue sin vincular nada: solo propone', async () => {
   const [rows] = await db.query('SELECT USERID FROM user_employee_map WHERE USERID = ?', [USERID_A]);
   assert.equal(rows.length, 0, 'proponer NO debe crear el vinculo');
 });
+

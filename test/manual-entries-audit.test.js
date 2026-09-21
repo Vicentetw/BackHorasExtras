@@ -1,4 +1,4 @@
-// Auditoria de cargas manuales + aislamiento entre empresas de ManualEntries.
+﻿// Auditoria de cargas manuales + aislamiento entre empresas de ManualEntries.
 // Ver auditLog.js y migrations/20260927_manual_entries_exclusions_audit.sql.
 //
 // QUE SE PRUEBA ACA Y POR QUE
@@ -15,7 +15,7 @@
 //    USERID de reloj (que es secuencial). Los tests de cross-tenant de abajo
 //    fallan contra el codigo anterior a esa migracion.
 //
-// Tenants descartables propios (999974/999975), NUNCA AVP. USERIDs de reloj
+// Tenants descartables propios (999921/999922), NUNCA AVP. USERIDs de reloj
 // descartables (8890040+), fuera de cualquier rango real.
 require('dotenv').config();
 const { test, before, after } = require('node:test');
@@ -24,8 +24,8 @@ const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
-const TENANT_A = 999974;
-const TENANT_B = 999975;
+const TENANT_A = 999921;
+const TENANT_B = 999922;
 const UID_A = 'test-manual-entries-audit-a';
 const USERID_A = 8890040;
 const USERID_B = 8890041;
@@ -358,3 +358,4 @@ test('un intento fallido contra OTRA empresa no escribe nada en el log', async (
   const [rows] = await db.query('SELECT id FROM userexclusions WHERE id = ?', [exclusionBId]);
   assert.equal(rows.length, 1, 'la licencia de la otra empresa debe seguir existiendo');
 });
+

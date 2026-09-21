@@ -452,8 +452,22 @@ router.get('/unmatched', requirePermission('matching', 'read'), async (req, res)
     const tenantClause = effectiveTenantId !== null ? 'AND u.tenant_id = ?' : '';
     const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
     const [rows] = await pool.query(`
-      SELECT u.*
+      SELECT u.*,
+             COALESCE(ck.n, 0) AS checkinCount,
+             ck.ultimo AS lastCheckin,
+             -- ¿Hay un empleado cuyo legajo sea este mismo numero? Permite
+             -- que la pantalla resalte la pareja sin que nadie compare
+             -- numeros a mano.
+             (SELECT e2.id FROM employees e2
+               WHERE CAST(TRIM(e2.employee_id) AS CHAR) COLLATE utf8mb4_unicode_ci
+                   = CAST(TRIM(u.Badgenumber) AS CHAR) COLLATE utf8mb4_unicode_ci
+                 AND e2.tenant_id = u.tenant_id
+               LIMIT 1) AS suggestedEmployeeId
       FROM users u
+      LEFT JOIN (
+        SELECT tenant_id, USERID, COUNT(*) n, MAX(CHECKTIME) ultimo
+        FROM Checkins GROUP BY tenant_id, USERID
+      ) ck ON ck.USERID = u.USERID AND ck.tenant_id = u.tenant_id
       LEFT JOIN user_employee_map m ON u.USERID = m.USERID AND m.tenant_id = u.tenant_id
       WHERE m.USERID IS NULL
         AND u.USERID > 10
