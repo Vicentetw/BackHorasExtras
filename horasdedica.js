@@ -11,6 +11,9 @@ const { resolveTenantId, requirePermission, requireSuperadmin, requireActiveSubs
 // las creo/modifico/borro y que decian antes. Ver auditLog.js y la migracion
 // 20260927_manual_entries_exclusions_audit.sql.
 const auditLog = require('./auditLog');
+// Monitoreo de errores. Apagado salvo que exista SENTRY_DSN -- ver monitoreo.js.
+const { iniciarMonitoreo, reportarError } = require('./monitoreo');
+iniciarMonitoreo();
 const importRoutes = require('./routes/import.routes');
 const matchingRoutes = require('./routes/matching.routes');
 const employeesRoutes = require('./routes/employees');
@@ -4504,6 +4507,9 @@ app.use((err, req, res, next) => {
     return res.status(413).json({ error: message });
   }
   console.error('[UNHANDLED ERROR]:', err);
+  // Avisar en vez de esperar a que el cliente llame. Si SENTRY_DSN no esta
+  // configurado, esto no hace absolutamente nada. Ver monitoreo.js.
+  reportarError(err, req);
   res.status(500).json({ error: 'Error interno del servidor' });
 });
 

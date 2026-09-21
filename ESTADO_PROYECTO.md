@@ -33,6 +33,21 @@
 > - Frontend: build limpio, desplegado.
 > - Repo del backend: **PÚBLICO** (decisión del dueño por ahora). Los otros dos, privados.
 >
+> ### Para encender el monitoreo de errores (5 minutos, pendiente)
+>
+> El código ya está (`monitoreo.js`), **apagado hasta que exista la variable
+> `SENTRY_DSN`**. Sin ella no hace nada: ni se conecta, ni puede romper un
+> pedido.
+>
+> 1. cuenta gratis en **sentry.io**, proyecto tipo **Node.js**
+> 2. copiar el DSN (`https://xxxx@o0.ingest.sentry.io/0`)
+> 3. pegarlo en **Render → el backend → Environment → `SENTRY_DSN`**
+>
+> A partir de ahí, cada error no atrapado avisa con archivo y línea, qué
+> empresa y qué usuario lo sufrió, y cuántas veces pasó. No se mandan
+> cookies, ni headers de autorización, ni cuerpos de pedido
+> (`sendDefaultPii: false`): son datos de asistencia de personas reales.
+>
 > ### Lo que falta (en orden)
 >
 > 1. **Las dos listas lado a lado** en Matching (reloj ↔ empleados) para
@@ -43,7 +58,20 @@
 > 2. **Cambiar la contraseña del MySQL local** — estuvo en este archivo, que
 >    está en un repo público, y sigue en el historial de git.
 > 3. **Branch protection** en ambos repos (a mano en GitHub, ver más abajo).
-> 4. **Lentitud intermitente** en Presentismo, sin resolver desde el 18/09.
+> 4. ~~Lentitud intermitente en Presentismo~~ — **RESUELTA el 2026-09-21.**
+>    No era el plan gratuito de Render. El `JOIN` traía los fichajes con
+>    `ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))`:
+>    ese `OR` entre dos columnas más el `CAST` anula cualquier índice, y el
+>    `EXPLAIN` mostraba que por **cada** fichada MySQL recorría las 499 filas
+>    de `users` (39 millones de comparaciones para un año). Se resolvió con
+>    tres cambios medidos contra producción: el mapa usuario→empleado se arma
+>    una vez y la correspondencia se hace en memoria; un índice
+>    `(tenant_id, CHECKTIME)` (migración `20260929`); y el detalle de una
+>    persona trae **sólo sus fichadas**, no las de los 480. Resultado:
+>    **~19 s → ~1,5 s** en el detalle anual, con resultados idénticos.
+>    Lo que queda de ese segundo y medio son mayormente las pulsaciones de
+>    los marcadores (badges 5, 6, 9, 10), que acumulan las de toda la
+>    empresa y hacen falta para detectar salidas particulares.
 > 5. Backlog: monitoreo de errores (Sentry), backend de staging, tests de
 >    integración en CI, consolidar los tres motores de asistencia.
 >
