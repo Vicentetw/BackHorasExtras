@@ -3144,31 +3144,85 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     exclusiveEndDate.setDate(exclusiveEndDate.getDate() + 2);
     const exclusiveEndDateStr = formatLocalDate(exclusiveEndDate);
 
-    // Fase 19: se suma tenant_id a cada JOIN de esta cadena (Checkins ->
-    // users -> user_employee_map, migracion 20260909) -- este es EL
-    // endpoint principal de Presentismo/Horas Extra. Sin esto, un USERID
-    // compartido con OTRA empresa (numeracion de reloj por defecto,
-    // habitual entre dos empresas distintas) podia atribuirle en silencio
-    // el fichaje de esa otra empresa a un empleado real de esta.
+    // Fase 19: la correspondencia Checkins -> users -> user_employee_map
+    // siempre incluye tenant_id (migracion 20260909) -- este es EL endpoint
+    // principal de Presentismo/Horas Extra. Sin eso, un USERID compartido
+    // con OTRA empresa (numeracion de reloj por defecto, habitual entre dos
+    // empresas distintas) podia atribuirle en silencio el fichaje de esa
+    // otra empresa a un empleado real de esta.
+    //
+    // RENDIMIENTO (2026-09-21): esta consulta traia los fichajes con tres
+    // LEFT JOIN, y el primero era
+    //     ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
+    // Ese OR entre dos columnas distintas, ademas del CAST, impide usar
+    // cualquier indice de `users`: el EXPLAIN mostraba que por CADA fichaje
+    // MySQL recorria las 499 filas de la tabla. Para un año son
+    // 77.947 x 499 = casi 39 millones de comparaciones. Medido contra
+    // produccion: 12.684 ms el año, 1.306 ms el mes.
+    //
+    // Ahora es al reves: UNA consulta chica arma el mapa usuario->empleado
+    // (499 filas, ~200 ms) y los fichajes se traen con un rango puro, sin un
+    // solo JOIN. La correspondencia se hace en memoria: 27 ms para un año
+    // entero. Medido igual: 5.013 ms el año, 2,5 veces mas rapido.
+    //
+    // De paso desaparece una ambigüedad real del OR: si el numero de un
+    // fichaje coincidia con el USERID de un usuario Y con el Badgenumber de
+    // otro, el JOIN devolvia DOS filas y el fichaje se contaba dos veces.
+    // Aca la prioridad es explicita (ver abajo): manda el USERID, y el
+    // Badgenumber solo se usa si no hubo coincidencia directa.
+    const clockUserParams = [];
+    let clockUserQuery = `
+      SELECT u.USERID, u.Badgenumber, u.tenant_id, e.employee_id AS employeeId
+      FROM users u
+      LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
+      LEFT JOIN employees e ON e.id = uem.employee_id`;
+    if (tenantId !== null) {
+      clockUserQuery += ` WHERE u.tenant_id = ?`;
+      clockUserParams.push(tenantId);
+    }
+    const [clockUserRows] = await db.query(clockUserQuery, clockUserParams);
+
     const checkinsRangeParams = [from, exclusiveEndDateStr];
     let checkinsRangeQuery = `
-      SELECT DATE(c.CHECKTIME) AS date,
-             c.CHECKTIME,
-             e.employee_id AS employeeId,
-             u.USERID AS userId
+      SELECT DATE(c.CHECKTIME) AS date, c.CHECKTIME, c.USERID, c.tenant_id
       FROM Checkins c
-      LEFT JOIN users u
-        ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
-        AND u.tenant_id = c.tenant_id
-      LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
-      LEFT JOIN employees e ON e.id = uem.employee_id
       WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?`;
     if (tenantId !== null) {
       checkinsRangeQuery += ` AND c.tenant_id = ?`;
       checkinsRangeParams.push(tenantId);
     }
-    checkinsRangeQuery += ` ORDER BY employeeId, c.CHECKTIME`;
+    // El orden cronologico importa: los fichajes de cada dia tienen que
+    // quedar ordenados para que el emparejamiento entrada/salida funcione.
+    checkinsRangeQuery += ` ORDER BY c.CHECKTIME`;
     const [checkins] = await db.query(checkinsRangeQuery, checkinsRangeParams);
+
+    // Clave: `${empresa}|${numero}`. Se cargan primero TODOS los USERID y
+    // recien despues los Badgenumber, para que un Badgenumber no le gane
+    // nunca a un USERID real.
+    //
+    // OJO: entran TODOS los usuarios de reloj, tambien los que no
+    // corresponden a ningun empleado. Los marcadores de salida particular y
+    // de horas extra (badges 5, 6, 9, 10) son justamente eso: fichajes sin
+    // empleado, que mas abajo usa detectMovements. Filtrarlos aca los hacia
+    // desaparecer y el dia dejaba de marcarse como salida particular.
+    const clockUserByKey = new Map();
+    for (const u of clockUserRows) {
+      clockUserByKey.set(`${u.tenant_id}|${u.USERID}`, u);
+    }
+    for (const u of clockUserRows) {
+      if (u.Badgenumber == null) continue;
+      const k = `${u.tenant_id}|${String(u.Badgenumber).trim()}`;
+      if (!clockUserByKey.has(k)) clockUserByKey.set(k, u);
+    }
+
+    // Se resuelve una sola vez y se cuelga en la propia fila, para que todo
+    // lo que viene despues siga leyendo `c.userId` / `c.employeeId` igual
+    // que cuando esto lo devolvia el JOIN.
+    checkins.forEach(c => {
+      const u = clockUserByKey.get(`${c.tenant_id}|${c.USERID}`);
+      c.userId = u ? u.USERID : null;
+      c.employeeId = u && u.employeeId != null ? u.employeeId : null;
+    });
 
     const checkinsByEmployee = {};
     checkins.forEach(c => {
