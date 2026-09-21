@@ -293,7 +293,62 @@ no pudo resolverla. Como producción tiene **una sola empresa** (id 6,
 AVP), asignarle `tenant_id = 6` es casi seguro lo correcto; mientras siga
 en `NULL` esa entrada no se ve desde la aplicación.
 
-## 🔴 Hallazgo GRAVE sin resolver (2026-09-19): fichajes sin usuario
+## ⚠️ CORRECCIÓN (2026-09-20): el hallazgo de abajo estaba MAL
+
+**Todo lo que sigue en esta sección se escribió sobre una suposición falsa y
+se corrigió al día siguiente. Léelo con esta advertencia delante.**
+
+Afirmé que 81.622 fichajes (52 %) no llegaban a ningún informe y que ~95
+empleados activos tenían horas sin liquidar. **Es falso.** Supuse que el
+informe resolvía cada fichaje por la cadena
+`Checkins → users → user_employee_map → employees`, y **nunca verifiqué la
+consulta real**. La de `/attendance-range` (`horasdedica.js:3109`) hace:
+
+```sql
+LEFT JOIN users u
+  ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
+```
+
+Ese `OR ... Badgenumber` es el puente que me faltaba. El fichaje entra con
+`USERID = 9412`, la fila del usuario de reloj 66 tiene `Badgenumber = '9412'`,
+y engancha igual. **Verificado contra producción**: las 52 fichadas de
+septiembre del legajo 9412 dan exactamente los 13 días que muestra
+Presentismo.
+
+Lo detectó el dueño del producto mirando su propia pantalla: *"¿este Malerba?
+Ya estaba, me parece"*.
+
+**Medición correcta** (producción, 2026-09-20):
+
+| | |
+|---|---:|
+| Fichajes totales | 156.732 |
+| Llegan a un empleado | **99.995 (63,8 %)** |
+| No llegan a nadie | **56.737 (36,2 %)** |
+
+Y los que no llegan **no son los 100 que señalé**: en su mayoría son `USERID`
+bajos (4, 5, 6, 10, 105, 10001) que **no corresponden a ningún legajo** —
+usuarios de administración o del propio reloj (el `USERID` 10 solo junta
+19.115). De los más recientes sin empleado, apenas 2 corresponden a un legajo
+real. Sólo 18 `USERID` distintos sin empleado tuvieron actividad en 60 días.
+
+O sea: **hay un hueco, pero es mucho más chico y de otra naturaleza.** Queda
+pendiente analizarlo de nuevo.
+
+**Qué se retiró por esto**: el bloque *"Fichadas que no le están llegando a
+nadie"* de la pantalla de matching (publicado y retirado el mismo día) y su
+botón de reparación. Los endpoints `GET /api/matching/suspicious` y
+`POST /api/matching/repair` siguen existiendo pero **no deben usarse**: la
+"reparación" tocaría 100 vínculos que no están rotos.
+
+**La lección**: antes de declarar que un dato no llega a destino, hay que
+leer la consulta que lo lleva. Construí un diagnóstico, lo escribí como
+hallazgo grave, lo guardé en memoria y desplegué una función entera — todo
+sobre una cadena de JOINs que supuse en vez de verificar.
+
+---
+
+## 🔴 Hallazgo GRAVE sin resolver (2026-09-19): fichajes sin usuario — ⚠️ VER CORRECCIÓN ARRIBA
 
 Encontrado por casualidad al investigar la fila huérfana de arriba.
 **81.622 de los 156.732 fichajes de producción (52 %) pertenecen a 104
