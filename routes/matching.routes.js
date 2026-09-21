@@ -8,7 +8,9 @@ const {
   resolveIdentityField,
   identityColumn,
   IDENTITY_FIELDS,
-  DEFAULT_IDENTITY_FIELD
+  DEFAULT_IDENTITY_FIELD,
+  classifyPuncher,
+  PUNCHER_STATUS_INFO
 } = require('../matchingRules');
 const { getAppSetting, setAppSetting } = require('../motor-laboral/repositories/appSettingsRepository');
 // `inTransaction` (reparar un vinculo toca 5 tablas: o se hacen todas o
@@ -42,24 +44,6 @@ const normalizeName = (name) => {
 // proponer el usuario crudo de OTRA empresa como match) y el "ya
 // vinculado" se chequea tambien por tenant (un USERID ya vinculado en
 // OTRA empresa no cuenta como vinculado para esta).
-// Busca CANDIDATOS a vincular y les adjunta la evidencia para que una
-// persona pueda decidir. NO vincula nada: esta funcion es de solo lectura.
-//
-// Que cambio el 2026-09-20 y por que (ver ESTADO_PROYECTO.md y
-// matchingRules.js):
-//   - Antes devolvia una fila por CADA usuario de reloj que compartiera
-//     legajo con un empleado, sin ordenarlas ni distinguirlas. Quien
-//     consumiera eso terminaba quedandose con "la primera", que en la
-//     practica era la del USERID mas bajo: justamente la fila importada de
-//     un CSV que nunca habia fichado. Asi 95 empleados quedaron vinculados a
-//     un usuario fantasma y 81.622 fichajes no llegaban a ningun reporte.
-//   - Ahora se traen los fichajes de cada candidato (cuantos y el ultimo) y
-//     `buildMatchProposals` devuelve UNA propuesta por empleado, eligiendo
-//     al que efectivamente ficha y dejando los descartados a la vista en
-//     `alternatives`.
-//   - Se agrega `nameEvidence`: el nombre no decide (el reloj casi siempre
-//     guarda solo el apellido), pero sirve para corroborar y para que la
-//     pantalla muestre de que color es cada caso.
 // Lee de app_settings contra que campo del empleado hay que comparar el
 // Badgenumber en esta empresa. Default: legajo.
 async function getIdentityField(effectiveTenantId) {
@@ -92,6 +76,20 @@ async function countCandidatesPerIdentityField(effectiveTenantId) {
   return out;
 }
 
+// Busca CANDIDATOS a vincular y les adjunta la evidencia para que una
+// persona pueda decidir. NO vincula nada: es de solo lectura.
+//
+// Devuelve UNA propuesta por empleado, no una por usuario de reloj. Cuando
+// hay varios usuarios con el mismo legajo, `buildMatchProposals` elige al
+// que efectivamente ficha (ver el desempate en matchingRules.js) y deja los
+// descartados a la vista en `alternatives`. Antes se devolvian todos sin
+// ordenar, y quien consumiera eso se quedaba con "el primero", que en la
+// practica era el USERID mas bajo -- normalmente una fila importada de un
+// CSV que nunca habia fichado.
+//
+// `nameEvidence` corrobora pero no decide: el reloj casi siempre guarda solo
+// el apellido, asi que exigir nombre identico rechazaria la mayoria de los
+// vinculos buenos.
 async function findMatchCandidates(effectiveTenantId, identityFieldKey) {
   // El nombre de columna NO viene del pedido: sale de la lista blanca de
   // IDENTITY_FIELDS (ver matchingRules.js). Cualquier valor desconocido cae
@@ -193,197 +191,14 @@ router.post('/auto', requirePermission('matching', 'read'), async (req, res) => 
 });
 
 // ---------------------------------------------------------------------------
-// VINCULOS SOSPECHOSOS
-// ---------------------------------------------------------------------------
-//
-// El caso que la pantalla de matching NO podia mostrar, y que por eso estuvo
-// meses sin detectarse: el empleado SI esta vinculado -- pero a un usuario de
-// reloj que nunca ficho. Sus fichajes reales entran con otro numero, que no
-// tiene fila en `users`, asi que no llegan a ningun reporte.
-//
-// Como se reconoce, sin adivinar:
-//   1. el usuario al que esta vinculado hoy tiene CERO fichajes, y
-//   2. existe un USERID igual a su dato de identidad (legajo o documento)
-//      que SI tiene fichajes y NO tiene fila en `users` (huerfano).
-//
-// Las dos condiciones juntas no dejan lugar a dudas: alguien ficha con ese
-// numero todos los dias y el sistema no sabe quien es.
-//
-// En produccion, al escribir esto: 100 casos, 95 de empleados activos,
-// 61.375 fichajes sin llegar a los reportes.
-async function findSuspiciousLinks(effectiveTenantId, identityFieldKey) {
-  const column = identityColumn(identityFieldKey);
-  const tenantClause = effectiveTenantId !== null ? 'AND e.tenant_id = ?' : '';
-  const params = effectiveTenantId !== null ? [effectiveTenantId] : [];
-  const [rows] = await db.query(`
-    SELECT
-      e.id              AS employeeId,
-      e.\`${column}\`     AS identityValue,
-      e.employee_id     AS empLegajo,
-      e.nombre          AS employeeName,
-      e.activo          AS employeeActive,
-      m.USERID          AS linkedUserId,
-      lu.Name           AS linkedUserName,
-      huerfano.USERID   AS suggestedUserId,
-      huerfano.n        AS suggestedCheckinCount,
-      huerfano.ultimo   AS suggestedLastCheckin
-    FROM employees e
-    JOIN user_employee_map m ON m.employee_id = e.id AND m.tenant_id = e.tenant_id
-    LEFT JOIN \`users\` lu ON lu.USERID = m.USERID AND lu.tenant_id = m.tenant_id
-    LEFT JOIN (
-      SELECT tenant_id, USERID, COUNT(*) n FROM Checkins GROUP BY tenant_id, USERID
-    ) ck ON ck.USERID = m.USERID AND ck.tenant_id = m.tenant_id
-    JOIN (
-      SELECT c.tenant_id, c.USERID, COUNT(*) n, MAX(c.CHECKTIME) ultimo
-      FROM Checkins c
-      LEFT JOIN \`users\` u ON u.USERID = c.USERID AND u.tenant_id = c.tenant_id
-      WHERE u.USERID IS NULL
-      GROUP BY c.tenant_id, c.USERID
-    ) huerfano
-      ON CAST(huerfano.USERID AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(TRIM(e.\`${column}\`) AS CHAR) COLLATE utf8mb4_unicode_ci
-      AND huerfano.tenant_id = e.tenant_id
-    WHERE COALESCE(ck.n, 0) = 0
-      ${tenantClause}
-    ORDER BY huerfano.n DESC
-  `, params);
-  return rows;
-}
-
-/**
- * 🔎 VINCULOS SOSPECHOSOS (solo lectura)
- */
-router.get('/suspicious', requirePermission('matching', 'read'), async (req, res) => {
-  try {
-    const tenantId = resolveTenantId(req);
-    const identityField = await getIdentityField(tenantId);
-    const rows = await findSuspiciousLinks(tenantId, identityField);
-    res.json({
-      identityField,
-      count: rows.length,
-      activeCount: rows.filter((r) => Number(r.employeeActive) === 1).length,
-      recoverableCheckins: rows.reduce((s, r) => s + Number(r.suggestedCheckinCount || 0), 0),
-      items: rows
-    });
-  } catch (err) {
-    console.error('ERROR buscando vinculos sospechosos:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * 🔧 CORREGIR UN VINCULO SOSPECHOSO (de a uno, nunca en lote)
- *
- * Lo que hace, todo dentro de una transaccion para que no quede a medias:
- *   1. libera el legajo que ocupa la fila fantasma (le pone un badge OLD-…),
- *   2. crea la fila de `users` que falta, con el USERID que usa el reloj de
- *      verdad y el nombre del empleado,
- *   3. re-apunta las justificaciones, exclusiones especiales y horas extra
- *      manuales que colgaban del fantasma,
- *   4. cambia el vinculo del empleado al usuario correcto,
- *   5. borra la fila fantasma.
- *
- * El efecto: los fichajes que estaban huerfanos vuelven a resolverse a una
- * persona, sin tocar un solo registro de `Checkins`.
- *
- * Se exige que el cliente mande el `suggestedUserId` que vio en pantalla: si
- * los datos cambiaron desde entonces, la operacion se rechaza en vez de
- * aplicar algo distinto de lo que la persona aprobo.
- */
-router.post('/repair', requirePermission('matching', 'create'), async (req, res) => {
-  const employeeId = Number(req.body.employeeId);
-  const expectedUserId = Number(req.body.suggestedUserId);
-  if (!Number.isFinite(employeeId) || !Number.isFinite(expectedUserId)) {
-    return res.status(400).json({ error: 'employeeId y suggestedUserId son requeridos' });
-  }
-
-  try {
-    const tenantId = resolveTenantId(req);
-    const identityField = await getIdentityField(tenantId);
-    const candidatos = await findSuspiciousLinks(tenantId, identityField);
-    const caso = candidatos.find((c) => Number(c.employeeId) === employeeId);
-
-    if (!caso) {
-      return res.status(404).json({ error: 'Ese empleado ya no figura como vínculo sospechoso' });
-    }
-    if (Number(caso.suggestedUserId) !== expectedUserId) {
-      return res.status(409).json({
-        error: 'Los datos cambiaron desde que se mostró la pantalla. Volvé a cargar antes de corregir.',
-        suggestedUserId: caso.suggestedUserId
-      });
-    }
-
-    const performedBy = auditLog.actorId(req);
-    const [[emp]] = await db.query('SELECT tenant_id, nombre FROM employees WHERE id = ?', [employeeId]);
-    const targetTenantId = emp.tenant_id;
-
-    await auditLog.inTransaction(db, async (conn) => {
-      // 1. La fila fantasma ocupa el legajo y la clave (tenant_id,
-      //    Badgenumber) es unica, asi que hay que liberarla ANTES de crear la
-      //    correcta. Se renombra en vez de borrarla ya, porque todavia puede
-      //    tener justificaciones colgando (foreign key).
-      await conn.query(
-        'UPDATE `users` SET Badgenumber = ? WHERE USERID = ? AND tenant_id = ?',
-        [`OLD-${caso.linkedUserId}`, caso.linkedUserId, targetTenantId]
-      );
-
-      // 2. La fila que faltaba. El nombre sale de la nomina: es mejor dato
-      //    que el del reloj (que a veces es el propio legajo). Cuando el
-      //    agente sincronice, lo reemplaza por el del reloj.
-      await conn.query(
-        'INSERT INTO `users` (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, ?)',
-        [caso.suggestedUserId, targetTenantId, String(caso.identityValue).trim(), emp.nombre]
-      );
-
-      // 3. Lo que colgaba del fantasma pasa al usuario real.
-      await conn.query(
-        'UPDATE `userexclusions` SET userId = ? WHERE userId = ? AND tenant_id = ?',
-        [caso.suggestedUserId, caso.linkedUserId, targetTenantId]
-      );
-      await conn.query(
-        'UPDATE `specialusers` SET userId = ? WHERE userId = ? AND tenant_id = ?',
-        [caso.suggestedUserId, caso.linkedUserId, targetTenantId]
-      );
-      await conn.query(
-        'UPDATE ManualEntries SET userId = ? WHERE userId = ? AND tenant_id = ?',
-        [caso.suggestedUserId, caso.linkedUserId, targetTenantId]
-      );
-
-      // 4. El vinculo del empleado.
-      await conn.query(
-        'DELETE FROM user_employee_map WHERE employee_id = ? AND tenant_id = ?',
-        [employeeId, targetTenantId]
-      );
-      await conn.query(
-        `INSERT INTO user_employee_map (USERID, employee_id, match_type, tenant_id)
-         VALUES (?, ?, 'reparado', ?)`,
-        [caso.suggestedUserId, employeeId, targetTenantId]
-      );
-
-      // 5. Ya no queda nada apuntando al fantasma.
-      await conn.query(
-        'DELETE FROM `users` WHERE USERID = ? AND tenant_id = ?',
-        [caso.linkedUserId, targetTenantId]
-      );
-    });
-
-    console.log(
-      `[MATCHING] Vinculo reparado: empleado ${employeeId} (${emp.nombre}) ` +
-      `#${caso.linkedUserId} -> #${caso.suggestedUserId} ` +
-      `(${caso.suggestedCheckinCount} fichajes recuperados) por app_user ${performedBy}`
-    );
-
-    res.json({
-      ok: true,
-      employeeId,
-      previousUserId: caso.linkedUserId,
-      newUserId: caso.suggestedUserId,
-      recoveredCheckins: Number(caso.suggestedCheckinCount)
-    });
-  } catch (err) {
-    console.error('ERROR reparando vinculo:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+// NOTA (2026-09-20): aca vivian findSuspiciousLinks(), GET /suspicious y
+// POST /repair. Se quitaron porque el diagnostico que los motivaba era
+// FALSO: se creia que los fichajes de esos empleados no llegaban a los
+// informes, pero /attendance-range los resuelve igual gracias al
+// `OR u.Badgenumber = c.USERID` de horasdedica.js:3109. Ver la correccion
+// completa en ESTADO_PROYECTO.md. Lo que SI hacia falta -- avisar cuando
+// alguien ficha y no esta en la lista activa -- esta mas abajo, en
+// GET /punching-not-listed.
 
 /**
  * ⚙️ QUE DATO CARGO LA EMPRESA EN EL RELOJ
@@ -429,6 +244,156 @@ router.put('/identity-field', requirePermission('matching', 'create'), async (re
     res.json({ ok: true, identityField: raw, label: IDENTITY_FIELDS[raw].label });
   } catch (err) {
     console.error('ERROR guardando identity-field:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * 🔔 ALGUIEN FICHA Y NO ESTÁ EN LA LISTA
+ *
+ * Avisa cuando las fichadas de una persona no van a llegar a ningún informe,
+ * sea porque está dada de baja, porque se la ocultó, porque nunca se la
+ * asoció a su usuario del reloj, o porque ficha un número que no es de nadie.
+ *
+ * Mira SOLO los últimos `dias` (30 por defecto): es un aviso operativo para
+ * enterarse antes de cerrar el mes, no un inventario del historial.
+ *
+ * La resolución usa EXACTAMENTE el mismo JOIN que /attendance-range
+ * (`u.USERID = c.USERID OR u.Badgenumber = c.USERID`). Que sea el mismo no es
+ * un detalle: si este aviso resolviera distinto que el informe, marcaría como
+ * problema gente que en realidad aparece bien -- que es exactamente el error
+ * que se cometió el 2026-09-19 al suponer la cadena de JOINs en vez de
+ * leerla.
+ */
+router.get('/punching-not-listed', requirePermission('matching', 'read'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const identityField = await getIdentityField(tenantId);
+    const column = identityColumn(identityField);
+    const dias = Math.min(365, Math.max(1, Number(req.query.dias) || 30));
+
+    const tenantClause = tenantId !== null ? 'AND c.tenant_id = ?' : '';
+    const params = [dias];
+    if (tenantId !== null) params.push(tenantId);
+
+    const [rows] = await db.query(`
+      SELECT
+        p.USERID              AS clockUserId,
+        p.punches,
+        p.lastPunch,
+        u.Name                AS clockUserName,
+        e.id                  AS resolvedEmployeeId,
+        e.nombre              AS resolvedEmployeeName,
+        e.employee_id         AS resolvedLegajo,
+        e.activo              AS resolvedActivo,
+        e.exclude_from_report AS resolvedHidden,
+        ei.id                 AS identityEmployeeId,
+        ei.nombre             AS identityEmployeeName,
+        ei.employee_id        AS identityLegajo,
+        ei.activo             AS identityActivo,
+        ei.exclude_from_report AS identityHidden
+      FROM (
+        SELECT c.USERID, c.tenant_id, COUNT(*) AS punches, MAX(c.CHECKTIME) AS lastPunch
+        FROM Checkins c
+        WHERE c.CHECKTIME >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+          -- USERID <= 10: marcadores ficticios del reloj, no personas.
+          AND c.USERID > 10
+          ${tenantClause}
+        GROUP BY c.USERID, c.tenant_id
+      ) p
+      LEFT JOIN users u
+        ON (u.USERID = p.USERID OR CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(p.USERID AS CHAR) COLLATE utf8mb4_unicode_ci)
+        AND u.tenant_id = p.tenant_id
+      LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
+      LEFT JOIN employees e ON e.id = uem.employee_id
+      LEFT JOIN employees ei
+        ON CAST(TRIM(ei.\`${column}\`) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(p.USERID AS CHAR) COLLATE utf8mb4_unicode_ci
+        AND ei.tenant_id = p.tenant_id
+      ORDER BY p.lastPunch DESC
+    `, params);
+
+    // El OR del JOIN puede devolver mas de una fila por USERID; se queda la
+    // primera que resuelva a un empleado (si alguna lo hace).
+    const porUsuario = new Map();
+    for (const r of rows) {
+      const actual = porUsuario.get(r.clockUserId);
+      if (!actual || (!actual.resolvedEmployeeId && r.resolvedEmployeeId)) {
+        porUsuario.set(r.clockUserId, r);
+      }
+    }
+
+    const avisos = [];
+    for (const r of porUsuario.values()) {
+      const resolved = r.resolvedEmployeeId
+        ? { id: r.resolvedEmployeeId, activo: r.resolvedActivo, exclude_from_report: r.resolvedHidden }
+        : null;
+      const identity = r.identityEmployeeId
+        ? { id: r.identityEmployeeId, activo: r.identityActivo, exclude_from_report: r.identityHidden }
+        : null;
+
+      const status = classifyPuncher(resolved, identity);
+      if (!status) continue; // llega bien, no se avisa
+
+      const info = PUNCHER_STATUS_INFO[status];
+      avisos.push({
+        clockUserId: r.clockUserId,
+        clockUserName: r.clockUserName,
+        punches: Number(r.punches),
+        lastPunch: r.lastPunch,
+        status,
+        titulo: info.titulo,
+        accion: info.accion,
+        employeeId: r.resolvedEmployeeId || r.identityEmployeeId || null,
+        employeeName: r.resolvedEmployeeName || r.identityEmployeeName || null,
+        legajo: r.resolvedLegajo || r.identityLegajo || null
+      });
+    }
+
+    res.json({
+      dias,
+      identityField,
+      count: avisos.length,
+      items: avisos
+    });
+  } catch (err) {
+    console.error('ERROR buscando quien ficha sin estar en la lista:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * ✅ ACTIVAR / MOSTRAR a alguien que ficha y no estaba en la lista
+ *
+ * Una sola cosa por vez y siempre pedida a mano: reactiva al empleado, lo
+ * vuelve a mostrar en los informes, o las dos. No crea vinculos ni toca
+ * fichadas.
+ */
+router.post('/activate-employee', requirePermission('employees', 'update'), async (req, res) => {
+  const employeeId = Number(req.body.employeeId);
+  if (!Number.isFinite(employeeId)) {
+    return res.status(400).json({ error: 'employeeId es requerido' });
+  }
+  try {
+    const tenantId = resolveTenantId(req);
+    const [[emp]] = await db.query(
+      'SELECT id, tenant_id, nombre, activo, exclude_from_report FROM employees WHERE id = ?',
+      [employeeId]
+    );
+    if (!emp || (tenantId !== null && emp.tenant_id !== tenantId)) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+
+    await db.query(
+      'UPDATE employees SET activo = 1, exclude_from_report = 0 WHERE id = ?',
+      [employeeId]
+    );
+    console.log(
+      `[MATCHING] ${emp.nombre} reactivado/mostrado por app_user ${auditLog.actorId(req)} ` +
+      `(antes: activo=${emp.activo}, oculto=${emp.exclude_from_report})`
+    );
+    res.json({ ok: true, employeeId, nombre: emp.nombre });
+  } catch (err) {
+    console.error('ERROR activando empleado:', err);
     res.status(500).json({ error: err.message });
   }
 });

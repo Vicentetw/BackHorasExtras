@@ -262,7 +262,85 @@ function buildMatchProposals(rows) {
   return proposals;
 }
 
+// ============================================================================
+// AVISO: ALGUIEN FICHA Y NO ESTA EN LA LISTA
+// ============================================================================
+//
+// Pedido del dueño del producto (2026-09-20): "si está fichando y no está en
+// la lista, o está desactivado o ignorado, sería bueno que salga un aviso
+// para activarlo".
+//
+// Es lo que hay que mirar para que el sistema sea confiable de acá en
+// adelante: no importa tanto el historial viejo, importa que MAÑANA, si una
+// persona ficha y sus horas no van a ir a ningún lado, alguien se entere
+// ANTES de cerrar el mes.
+//
+// Los USERID <= 10 no entran: en este reloj son marcadores ficticios, no
+// personas (el 1 es el administrador del reloj). Dato del dueño del
+// producto; el codigo ya los filtraba en varios lados.
+
+const PUNCHER_STATUS = {
+  /** El empleado existe pero esta dado de baja. Ficha igual. */
+  INACTIVE: 'dado_de_baja',
+  /** El empleado existe y esta activo, pero se lo oculto del informe. */
+  HIDDEN: 'oculto',
+  /** El empleado existe y esta visible, pero nadie lo vinculo al reloj. */
+  UNLINKED: 'sin_vincular',
+  /** Ficha alguien cuyo numero no corresponde a ningun empleado. */
+  UNKNOWN: 'sin_empleado'
+};
+
+/**
+ * Decide por que las fichadas de alguien no estan llegando a un informe.
+ *
+ * Importante: `resolvedEmployee` es el empleado al que el INFORME llega hoy
+ * (resuelto con la misma logica que usa /attendance-range). Si ese dato
+ * existe y el empleado esta activo y visible, no hay nada que avisar --
+ * justamente lo que me falto verificar cuando di por perdidos 81.622
+ * fichajes que en realidad llegaban bien.
+ *
+ * @param {object|null} resolvedEmployee empleado al que llega hoy, o null
+ * @param {object|null} identityEmployee empleado cuyo legajo/documento coincide
+ *                                       con el numero que ficha, si existe
+ */
+function classifyPuncher(resolvedEmployee, identityEmployee) {
+  if (resolvedEmployee) {
+    if (Number(resolvedEmployee.activo) === 0) return PUNCHER_STATUS.INACTIVE;
+    if (Number(resolvedEmployee.exclude_from_report) === 1) return PUNCHER_STATUS.HIDDEN;
+    return null; // llega bien: no hay nada que avisar
+  }
+  if (identityEmployee) {
+    if (Number(identityEmployee.activo) === 0) return PUNCHER_STATUS.INACTIVE;
+    if (Number(identityEmployee.exclude_from_report) === 1) return PUNCHER_STATUS.HIDDEN;
+    return PUNCHER_STATUS.UNLINKED;
+  }
+  return PUNCHER_STATUS.UNKNOWN;
+}
+
+/** Que hacer con cada caso, en palabras que entienda cualquiera. */
+const PUNCHER_STATUS_INFO = {
+  [PUNCHER_STATUS.INACTIVE]: {
+    titulo: 'Está dado de baja, pero sigue fichando',
+    accion: 'Reactivar'
+  },
+  [PUNCHER_STATUS.HIDDEN]: {
+    titulo: 'Está oculto en los informes, pero sigue fichando',
+    accion: 'Volver a mostrar'
+  },
+  [PUNCHER_STATUS.UNLINKED]: {
+    titulo: 'Ficha, pero no está asociado a su usuario del reloj',
+    accion: 'Asociar'
+  },
+  [PUNCHER_STATUS.UNKNOWN]: {
+    titulo: 'Ficha un número que no corresponde a ningún empleado',
+    accion: 'Revisar a mano'
+  }
+};
+
 module.exports = {
+  classifyPuncher,
+  PUNCHER_STATUS,
+  PUNCHER_STATUS_INFO,
   normalizeName,
   dropAccentedLetters,
   classifyNameEvidence,

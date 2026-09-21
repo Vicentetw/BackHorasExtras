@@ -14,7 +14,10 @@ const {
   resolveIdentityField,
   identityColumn,
   NAME_EVIDENCE,
-  DEFAULT_IDENTITY_FIELD
+  DEFAULT_IDENTITY_FIELD,
+  classifyPuncher,
+  PUNCHER_STATUS,
+  PUNCHER_STATUS_INFO
 } = require('../matchingRules');
 
 // ---------------------------------------------------------------------------
@@ -48,6 +51,62 @@ test('un valor desconocido NUNCA llega a la consulta: cae en el default', () => 
   assert.equal(resolveIdentityField('id'), 'legajo');
   assert.equal(identityColumn('employee_id; DROP TABLE users'), 'employee_id');
   assert.equal(identityColumn({ malicioso: true }), 'employee_id');
+});
+
+// ---------------------------------------------------------------------------
+// AVISO: ALGUIEN FICHA Y NO ESTA EN LA LISTA
+// ---------------------------------------------------------------------------
+
+test('si las fichadas YA llegan a un empleado activo, NO se avisa nada', () => {
+  // Este es EL test que faltaba el 2026-09-19. Ese dia se dio por perdidos
+  // 81.622 fichajes que en realidad llegaban perfecto al informe, porque se
+  // supuso la cadena de JOINs en vez de leerla. Si el aviso marca como
+  // problema a alguien que aparece bien en Presentismo, esta roto.
+  const empleadoOk = { id: 1, activo: 1, exclude_from_report: 0 };
+  assert.equal(classifyPuncher(empleadoOk, null), null);
+  assert.equal(classifyPuncher(empleadoOk, empleadoOk), null);
+});
+
+test('ficha pero esta dado de baja -> avisar', () => {
+  assert.equal(
+    classifyPuncher({ id: 1, activo: 0, exclude_from_report: 0 }, null),
+    PUNCHER_STATUS.INACTIVE
+  );
+});
+
+test('ficha pero esta oculto del informe -> avisar', () => {
+  assert.equal(
+    classifyPuncher({ id: 1, activo: 1, exclude_from_report: 1 }, null),
+    PUNCHER_STATUS.HIDDEN
+  );
+});
+
+test('ficha, el empleado existe y esta bien, pero nadie lo asocio -> avisar', () => {
+  assert.equal(
+    classifyPuncher(null, { id: 2, activo: 1, exclude_from_report: 0 }),
+    PUNCHER_STATUS.UNLINKED
+  );
+});
+
+test('ficha un numero que no es de ningun empleado -> avisar para revisar', () => {
+  assert.equal(classifyPuncher(null, null), PUNCHER_STATUS.UNKNOWN);
+});
+
+test('si no esta asociado Y ademas esta de baja, manda el motivo de fondo', () => {
+  // Decirle "asocialo" a alguien que esta dado de baja no sirve: primero hay
+  // que reactivarlo.
+  assert.equal(
+    classifyPuncher(null, { id: 2, activo: 0, exclude_from_report: 0 }),
+    PUNCHER_STATUS.INACTIVE
+  );
+});
+
+test('cada aviso tiene texto y accion en castellano llano', () => {
+  for (const estado of Object.values(PUNCHER_STATUS)) {
+    const info = PUNCHER_STATUS_INFO[estado];
+    assert.ok(info, `falta el texto para "${estado}"`);
+    assert.ok(info.titulo && info.accion);
+  }
 });
 
 // ---------------------------------------------------------------------------
