@@ -574,6 +574,21 @@ router.post('/manual', requirePermission('matching', 'create'), async (req, res)
     }
     const targetTenantId = employee.tenant_id;
 
+    // Faltaba validar EL OTRO lado. Se comprobaba que el empleado fuera de
+    // la empresa de quien llama, pero no que el usuario del reloj existiera
+    // en esa misma empresa: se podia crear un vinculo hacia un USERID de
+    // otra empresa, o hacia uno inexistente. El vinculo quedaba colgado y el
+    // empleado sin sus fichadas, sin ningun aviso.
+    const [[clockUser]] = await pool.query(
+      'SELECT USERID FROM `users` WHERE USERID = ? AND tenant_id = ?',
+      [userId, targetTenantId]
+    );
+    if (!clockUser) {
+      return res.status(404).json({
+        error: 'Ese usuario del reloj no existe en esta empresa'
+      });
+    }
+
     // Fase 19: el DELETE anterior borraba por USERID solo -- con USERID ya
     // no unico entre empresas (migracion 20260909), eso podria borrar el
     // vinculo de OTRA empresa que comparta el mismo USERID crudo. Se suma

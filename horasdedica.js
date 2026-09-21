@@ -1491,15 +1491,34 @@ app.delete('/config/special-users/:userId', requirePermission('settings', 'delet
 });
 
 // 2. HORARIO EMPRESA
-app.get('/config/schedule/:date', async (req, res) => {
+//
+// Busca el horario de ESTA empresa para la fecha y, si no tiene uno propio,
+// cae en la fila global (tenant_id NULL). Mismo criterio que app_settings:
+// primero lo propio, despues el default.
+//
+// Antes (hasta la migracion 20260928) la tabla no tenia tenant_id: el
+// horario de una empresa lo leian y lo pisaban todas las demas. Y como
+// alimenta el calculo de asistencia cuando el empleado no tiene plantilla,
+// eso le cambiaba las liquidaciones a la otra empresa.
+async function findCompanyScheduleForDate(date, tenantId) {
+  const [rows] = await db.query(
+    `SELECT * FROM companyschedule
+     WHERE scheduleDate = ? AND (tenant_id <=> ? OR tenant_id IS NULL)
+     ORDER BY (tenant_id IS NULL) ASC
+     LIMIT 1`,
+    [date, tenantId]
+  );
+  return rows[0] || null;
+}
+
+// Faltaba el requirePermission: cualquier usuario logueado, de cualquier
+// empresa y sin ningun permiso, podia leer el horario configurado.
+app.get('/config/schedule/:date', requirePermission('schedules', 'read'), async (req, res) => {
   try {
     const { date } = req.params;
-    const [schedule] = await db.query(
-      `SELECT * FROM companyschedule WHERE scheduleDate = ?`,
-      [date]
-    );
-    
-    res.json(schedule[0] || {
+    const row = await findCompanyScheduleForDate(date, resolveTenantId(req));
+
+    res.json(row || {
       timeEntrance: '07:00:00',
       timeExit: '13:40:00',
       isWorkDay: true
@@ -1522,16 +1541,22 @@ app.post('/config/schedule', requirePermission('schedules', 'update'), async (re
   try {
     const { scheduleDate, timeEntrance, timeExit, isWorkDay, description } = req.body;
     
+    // Se graba SIEMPRE con la empresa de quien llama (migracion 20260928).
+    // La clave unica pasó a ser (tenant_id, scheduleDate), asi que el
+    // ON DUPLICATE KEY UPDATE ahora pisa la fila propia y no la de otra
+    // empresa -- que es lo que pasaba antes, cuando la clave era la fecha
+    // sola.
+    const scheduleTenantId = resolveTenantId(req);
     await db.query(`
-      INSERT INTO companyschedule (scheduleDate, timeEntrance, timeExit, isWorkDay, description)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO companyschedule (tenant_id, scheduleDate, timeEntrance, timeExit, isWorkDay, description)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         timeEntrance = VALUES(timeEntrance),
         timeExit = VALUES(timeExit),
         isWorkDay = VALUES(isWorkDay),
         description = VALUES(description)
-    `, [scheduleDate, timeEntrance, timeExit, isWorkDay, description]);
-    
+    `, [scheduleTenantId, scheduleDate, timeEntrance, timeExit, isWorkDay, description]);
+
     res.json({ ok: true });
   } catch (err) {
     console.error('ERROR saving schedule:', err);
@@ -1544,7 +1569,10 @@ app.post('/config/schedule', requirePermission('schedules', 'update'), async (re
   }
 });
 
-app.get('/config/theme', async (req, res) => {
+// Los datos del tema ya estaban aislados por empresa (app_settings +
+// resolveTenantId), pero a las dos rutas les faltaba el chequeo de permiso:
+// cualquier usuario logueado podia leerlo y cambiarlo.
+app.get('/config/theme', requirePermission('settings', 'read'), async (req, res) => {
   try {
     // Antes era una unica fila GLOBAL (ver appSettingsRepository.js) -- el
     // tema que alguien tocaba en la Empresa A se lo cambiaba a la Empresa B
@@ -1563,7 +1591,7 @@ app.get('/config/theme', async (req, res) => {
   }
 });
 
-app.post('/config/theme', async (req, res) => {
+app.post('/config/theme', requirePermission('settings', 'update'), async (req, res) => {
   try {
     const { theme = '' } = req.body;
     await setAppSetting('theme', resolveTenantId(req), theme, db);
@@ -2962,15 +2990,34 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     }
     const defaultTemplate = await scheduleRepository.findTenantTemplate(null, null, db);
 
+    // El horario de empresa es el RESPALDO cuando un empleado no tiene
+    // plantilla: alimenta directo el calculo de asistencia y horas extra.
+    // Hasta la migracion 20260928 se leia sin filtrar por empresa, asi que
+    // el horario cargado por una le cambiaba las liquidaciones a las otras.
+    //
+    // Ahora se indexa por (empresa, fecha), y `companyScheduleGlobalByDate`
+    // guarda aparte las filas sin empresa (tenant_id NULL), que son el valor
+    // por defecto para quien todavia no cargo el suyo -- mismo criterio que
+    // app_settings.
     const needsCompanySchedule = Object.values(tenantTemplateByTenantId).some(t => !t) || !defaultTemplate;
-    const companyScheduleByDate = {};
+    const companyScheduleByTenantAndDate = {};
+    const companyScheduleGlobalByDate = {};
     if (needsCompanySchedule) {
       const [csRows] = await db.query(
         `SELECT * FROM companyschedule WHERE scheduleDate BETWEEN ? AND ?`,
         [from, formatLocalDate(effectiveEndDate)]
       );
-      csRows.forEach(row => { companyScheduleByDate[row.scheduleDate] = row; });
+      csRows.forEach(row => {
+        if (row.tenant_id === null || row.tenant_id === undefined) {
+          companyScheduleGlobalByDate[row.scheduleDate] = row;
+        } else {
+          companyScheduleByTenantAndDate[`${row.tenant_id}|${row.scheduleDate}`] = row;
+        }
+      });
     }
+    // Primero el horario propio de la empresa; si no tiene, el global.
+    const companyScheduleFor = (tenantId, date) =>
+      companyScheduleByTenantAndDate[`${tenantId}|${date}`] || companyScheduleGlobalByDate[date] || null;
 
     // Arranca en previousDayStr (no "from") para poder resolver el
     // schedule del dia anterior al rango pedido -- ver comentario de
@@ -3064,16 +3111,19 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
         const template = tenantTemplateByTenantId[tenantId];
         if (template) {
           tenantScheduleMap[tenantId] = scheduleFromTemplate(template, date);
-        } else if (companyScheduleByDate[date]) {
-          tenantScheduleMap[tenantId] = companyScheduleByDate[date];
+        } else {
+          const cs = companyScheduleFor(tenantId, date);
+          if (cs) tenantScheduleMap[tenantId] = cs;
         }
       }
 
       let defaultSchedule = null;
       if (defaultTemplate) {
         defaultSchedule = scheduleFromTemplate(defaultTemplate, date);
-      } else if (companyScheduleByDate[date]) {
-        defaultSchedule = companyScheduleByDate[date];
+      } else if (companyScheduleGlobalByDate[date]) {
+        // El "default" no pertenece a ninguna empresa, asi que aca solo
+        // corresponde la fila global -- nunca la de una empresa puntual.
+        defaultSchedule = companyScheduleGlobalByDate[date];
       }
 
       scheduleByDate[date] = { assignedScheduleMap, tenantScheduleMap, defaultSchedule };
