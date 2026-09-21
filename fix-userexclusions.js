@@ -1,4 +1,25 @@
+// BLOQUEADO el 2026-09-21. Ver scripts/guardia-obsoleto.js.
+//
+// Script de un solo uso, de cuando `userexclusions` tenia filas repetidas.
+// Su trabajo ya esta hecho: la clave unica que agregaba existe desde la
+// migracion 20260909, ahora por empresa (uq_userexclusions_tenant).
+//
+// Por que no conviene dejarlo suelto:
+//   * BORRA justificaciones y licencias cargadas a mano, quedandose "con la
+//     mas reciente". Eso no se puede deshacer: son datos que alguien cargo
+//     y que no estan en ningun otro lado;
+//   * no filtra por empresa, asi que tocaria las de todos los clientes;
+//   * inserta un registro de PRUEBA en la base de produccion para verificar
+//     la constraint, y despues lo borra. Si falla en el medio, queda.
 require('dotenv').config();
+require('./scripts/guardia-obsoleto').bloquearSiEsObsoleto({
+  nombre: 'fix-userexclusions.js',
+  motivo: 'Borra justificaciones y licencias sin filtrar por empresa, e inserta un ' +
+          'registro de prueba en produccion. Su trabajo ya lo hizo la migracion 20260909.',
+  reemplazo: 'nada: no hace falta. Si aparecieran duplicados nuevos, mirarlos primero ' +
+             'con un SELECT antes de borrar nada.'
+});
+
 const mysql = require('mysql2/promise');
 
 async function fixUserExclusions() {

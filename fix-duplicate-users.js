@@ -10,6 +10,25 @@
  * 2. Agregar UNIQUE constraint en Badgenumber
  */
 
+// BLOQUEADO el 2026-09-21. Ver scripts/guardia-obsoleto.js.
+//
+// Tiene EXACTAMENTE el mismo error que causo el destrozo de septiembre en
+// cleanup-duplicate-users.js: se queda con `userids[0]` -- una fila
+// cualquiera, porque MySQL no garantiza ese orden -- y borra las demas SIN
+// mover sus Checkins. Los fichajes quedan apuntando a un USERID inexistente.
+//
+// Ademas agrega una UNIQUE KEY global sobre Badgenumber, que en un sistema
+// multi-empresa esta mal: dos empresas pueden tener el mismo legajo. La
+// clave correcta ya existe y es por empresa (uq_users_tenant_badge,
+// migracion 20260909).
+require('./scripts/guardia-obsoleto').bloquearSiEsObsoleto({
+  nombre: 'fix-duplicate-users.js',
+  motivo: 'Borra usuarios de reloj SIN mover sus fichajes: los deja huerfanos. Y agrega ' +
+          'una clave unica GLOBAL de Badgenumber, incompatible con multi-empresa.',
+  reemplazo: 'node scripts/cleanup-duplicate-users.js --tenant=N  (simula por defecto, ' +
+             'elige por evidencia y mueve los fichajes antes de borrar)'
+});
+
 const mysql = require('mysql2/promise');
 
 async function fixDuplicateUsers() {

@@ -155,36 +155,67 @@ function resolveTenantId(req) {
 // vencio el periodo de gracia de pago ('readonly'). Un tenant SIN fila en
 // tenant_subscriptions (empresas que ya usaban el sistema antes de que
 // existiera este esquema) no se bloquea -- se trata como sin restriccion
-// todavia, para no tumbar de golpe a nadie. Superadmin nunca se bloquea
-// (es el operador de la plataforma, no un cliente). Fail-open a proposito:
-// si falla la consulta de suscripcion, no se bloquea a nadie por un error
-// nuestro -- mejor de mas tiempo de gracia que un cliente al dia trabado
-// por un bug de este chequeo.
+// todavia, para no tumbar de golpe a nadie. Superadmin nunca se bloquea: es
+// el operador de la plataforma, no un cliente.
+//
+// QUE PASA SI FALLA LA CONSULTA (cambiado el 2026-09-21)
+// ------------------------------------------------------
+// Antes era fail-open liso: ante cualquier error, se dejaba pasar la
+// escritura. El razonamiento era "mejor de mas gracia que trabar a un
+// cliente al dia por un bug nuestro", y para uso propio alcanzaba. Al
+// empezar a cobrar deja de alcanzar: un error silencioso y permanente en
+// esta consulta significa que una empresa vencida sigue cargando datos para
+// siempre, y nadie se entera nunca.
+//
+// Ahora responde 503. No es un "no": es un "ahora no puedo saberlo". Dejar
+// pasar a ciegas es inventar una respuesta, y lo que se estaria inventando
+// es justo el permiso de escribir.
+//
+// En la practica casi no cambia nada para un cliente al dia: esta consulta
+// va contra la misma base que el resto del pedido, asi que si falla, el
+// pedido iba a fallar igual unas lineas despues. La diferencia es que ahora
+// falla diciendo la verdad.
+//
+// (Se probo ademas cachear el estado 60 segundos, para ahorrar una consulta
+// por escritura. Se descarto: hay NUEVE lugares distintos donde cambia una
+// suscripcion, y olvidarse de invalidar en uno solo significa que activar un
+// pago no surte efecto, o que un vencido sigue escribiendo. El ahorro no
+// valia ese riesgo.)
+function decidirDesdeSuscripcion(subscription) {
+  if (!subscription) return { bloquear: false };
+  const effectiveStatus = resolveEffectiveStatus({
+    status: subscription.status,
+    currentPeriodEnd: subscription.current_period_end,
+    gracePeriodDays: subscription.grace_period_days,
+    defaultGraceDays: DEFAULT_GRACE_DAYS
+  });
+  return {
+    bloquear: isWriteBlocked(effectiveStatus),
+    effectiveStatus,
+    mensaje: subscription.grace_message
+  };
+}
+
+function responder(res, next, decision) {
+  if (!decision.bloquear) return next();
+  return res.status(402).json({
+    error: decision.mensaje || 'Tu suscripción está vencida. Regularizá el pago para poder seguir cargando datos.',
+    effectiveStatus: decision.effectiveStatus
+  });
+}
+
 function requireActiveSubscription(req, res, next) {
   if (!req.appUser || req.appUser.isSuperadmin) return next();
   const tenantId = req.appUser.tenantId;
   if (tenantId == null) return next();
 
   billingRepository.getSubscriptionByTenant(tenantId, db)
-    .then((subscription) => {
-      if (!subscription) return next();
-      const effectiveStatus = resolveEffectiveStatus({
-        status: subscription.status,
-        currentPeriodEnd: subscription.current_period_end,
-        gracePeriodDays: subscription.grace_period_days,
-        defaultGraceDays: DEFAULT_GRACE_DAYS
-      });
-      if (isWriteBlocked(effectiveStatus)) {
-        return res.status(402).json({
-          error: subscription.grace_message || 'Tu suscripción está vencida. Regularizá el pago para poder seguir cargando datos.',
-          effectiveStatus
-        });
-      }
-      return next();
-    })
+    .then((subscription) => responder(res, next, decidirDesdeSuscripcion(subscription)))
     .catch((err) => {
       console.error('requireActiveSubscription error:', err);
-      return next();
+      return res.status(503).json({
+        error: 'No se puede verificar el estado de la suscripción en este momento. Probá de nuevo en unos minutos.'
+      });
     });
 }
 

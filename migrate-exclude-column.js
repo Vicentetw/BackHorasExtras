@@ -4,6 +4,26 @@
  * Ejecutar con: node migrate-exclude-column.js
  */
 
+// BLOQUEADO el 2026-09-21. Ver scripts/guardia-obsoleto.js.
+//
+// Doblemente obsoleto:
+//   1. la columna `employees.exclude_from_report` YA EXISTE (verificado en
+//      produccion), asi que no hay nada que migrar;
+//   2. ni siquiera arranca: el `require` de abajo apunta a
+//      '../backendonline2/db', que era la estructura del monorepo viejo
+//      (horas-dedica-completo). En este repo el backend esta en la raiz, asi
+//      que esa ruta no existe y el script explota antes de hacer nada.
+//
+// Se deja por historial. Las migraciones de verdad viven en migrations/ y se
+// corren desde Actions o con run-sql.js, con guardas de information_schema
+// que las hacen repetibles sin romper nada.
+require('./scripts/guardia-obsoleto').bloquearSiEsObsoleto({
+  nombre: 'migrate-exclude-column.js',
+  motivo: 'La columna exclude_from_report ya existe, y el require apunta a una ruta ' +
+          'del monorepo viejo que en este repo no existe: no puede funcionar.',
+  reemplazo: 'las migraciones de migrations/, via Actions o run-sql.js'
+});
+
 const db = require('../backendonline2/db');
 
 async function migrate() {

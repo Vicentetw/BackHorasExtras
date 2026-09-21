@@ -4,20 +4,35 @@
 // exactamente como antes de esta migracion -- ese es el caso que ya cubre
 // permissions-enforcement.test.js, acá se agrega la regresion explicita
 // para role_id ademas de permisos individuales.
+// Se arma su propia empresa (cambiado el 2026-09-21). Antes usaba la
+// empresa 4 ("AVP2") dandola por existente: en una base nueva -- la que
+// levanta el CI en cada corrida -- eso explota con un error de clave
+// foranea antes de probar nada. Y crear esa empresa "a mano" en la base de
+// desarrollo tampoco sirve: le cambia los totales a los tests de
+// caracterizacion, que comparan contra los numeros reales de AVP.
 require('dotenv').config();
-const { test, after } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
-const AVP2_TENANT_ID = 4;
+const AVP2_TENANT_ID = 999929;
 const ROLE_UID = 'test-roles-assigned-ci';
 const NO_ROLE_UID = 'test-roles-none-ci';
+
+before(async () => {
+  await db.query(
+    "INSERT INTO tenants (id, name, code) VALUES (?, 'Tenant Roles (test)', 'tenant-roles-test') " +
+    'ON DUPLICATE KEY UPDATE name = VALUES(name)',
+    [AVP2_TENANT_ID]
+  );
+});
 
 after(async () => {
   await deleteTestUser(ROLE_UID);
   await deleteTestUser(NO_ROLE_UID);
+  await db.query('DELETE FROM tenants WHERE id = ?', [AVP2_TENANT_ID]);
   await closeDb();
 });
 
