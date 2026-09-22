@@ -129,6 +129,148 @@ quedó funcionando, y qué falta.
   - **Se agregó `requirements.txt`, que no existía.** El proyecto dependía de que el `.venv` siguiera vivo en esa máquina; si se borraba, no había forma de saber qué instalar para recompilar el `.exe`. Las versiones se sacaron leyendo el `.venv` real, no de memoria: `pyzk==0.9` (habla con el reloj), `tzdata` (sin esto `zoneinfo` no funciona en Windows), `sv-ttk` (tema visual, opcional), `pywin32` (solo para `enrolar.py`) y `pyinstaller==6.22.2` para compilar.
   - Verificado al traerlo: los 9 archivos `.py` compilan y los 6 módulos sin interfaz gráfica importan sin errores (Python 3.12.3).
 
+## Por qué reaparecían empresas de prueba en /empresas y /facturación (2026-09-22) — resuelto
+
+**Síntoma**: en la base local aparecían 7 empresas que nadie cargó y que ya
+se habían borrado a mano (`Tenant Checkins Batch (test)`, `Tenant Import
+Validation (test)`, `Tenant Templates Admin (test)`, `Tenant Conventions A` y
+`B`, `Tenant Historial Template`, `Tenant Simulador`), visibles en `/empresas`
+y en `/facturación`.
+
+**Quién las creó**: los tests. Cada uno crea su empresa descartable (ids
+999900 en adelante) y la borra al terminar. **No es un bug del sistema**:
+nada de esto puede pasar en producción, donde no se corren tests.
+
+**Por qué no se borraban**. 21 de los 48 archivos de test hacen el `after()`
+en el orden equivocado:
+
+```js
+await db.query('DELETE FROM tenants WHERE id = ?', [T]).catch(() => {});
+await deleteTestUser(UID);   // recién acá se borra el usuario
+```
+
+La empresa se intenta borrar mientras su propio `app_user` todavía la
+referencia → MySQL lo rechaza por clave foránea → y el `.catch(() => {})` se
+traga el error **en silencio**. El usuario se borra un renglón después y la
+empresa queda huérfana para siempre. Por eso, al borrarlas, se comprobó que
+**nada las referenciaba**: en ese momento ya se podían borrar sin problema,
+pero el intento había pasado un segundo antes de tiempo.
+
+**Por qué reaparecían después de borrarlas a mano**: cada `npm test` las
+volvía a crear. No "volvían": eran nuevas, con el mismo nombre.
+
+**La solución** no fue corregir los 21 archivos, porque el problema vuelve
+con el próximo test que alguien escriba distraído y nadie se entera hasta
+verlo en la pantalla. Se puso una red de seguridad:
+
+- `scripts/limpiar-datos-de-prueba.js` — borra todo lo que tenga
+  `tenant_id >= 999900`, en orden de dependencia, **sin tragarse los
+  errores**: si algo no se puede borrar, lo dice y sale con error. Por
+  defecto simula (`npm run limpiar-pruebas`); borra con `--aplicar`.
+- `scripts/correr-tests.js` — es el nuevo `npm test`: limpia, corre la
+  suite, **limpia otra vez pase lo que pase**, y devuelve el código de
+  salida de los tests.
+
+**Detalle que costó una vuelta**: la primera versión usaba los hooks
+`pretest`/`posttest` de npm. No sirve: npm corre `posttest` **solo si los
+tests pasaron**, y el caso que hay que limpiar es justo el contrario —
+cuando algo falla a mitad de camino, los `after()` de los archivos
+siguientes ni siquiera llegan a correr. Verificado en vivo: con la suite en
+rojo quedaron las 7 empresas otra vez. Por eso la limpieza está en un
+`finally` de verdad y no en un hook.
+
+**Seguridad**: el script solo toca ids `>= 999900` y se niega a arrancar si
+alguien baja ese límite. Las empresas reales tienen ids chicos (AVP es la 6).
+
+**Relacionado**: el superadmin fantasma `test-country-firewall-http@test.local`
+tenía la misma raíz — un test que creaba un `app_user` y nunca lo borraba.
+Ese test ya quedó corregido, y de paso se agregó el borrado real de usuarios
+en `/usuarios`.
+
+## Cómo dar de alta una empresa nueva (2026-09-22)
+
+**La respuesta corta: NO hay que replicar nada.** No se hace otro deploy en
+Render, ni otro sitio en Firebase, ni otra base en Clever Cloud, ni un backup
+de la base de AVP para vaciarla. El sistema ya es multiempresa: una empresa
+nueva es **una fila más en `tenants`** dentro del mismo servidor y la misma
+base. Eso es exactamente lo que se estuvo arreglando estos días (el agujero
+de `companyschedule`, el de `ManualEntries`, el legajo único global) y lo que
+verifica `test/full-tenant-isolation.test.js`: dos empresas con legajos,
+USERID y credenciales **idénticos** y ningún dato que se cruce.
+
+Clonar el sistema para cada cliente sería lo peor de los dos mundos: cada
+corrección habría que aplicarla N veces, cada migración N veces, y el primer
+olvido produce dos clientes con cálculos distintos.
+
+### Los pasos reales
+
+1. **Crear la empresa** — `POST /api/labor-engine/admin/tenants` (solo
+   superadmin), o desde la pantalla `/empresas`. Da el `tenant_id`.
+2. **Crear el usuario administrador de esa empresa** — desde `/usuarios`,
+   con rol de administrador y `tenant_id` el de la empresa nueva. **No
+   superadmin**: el superadmin sos vos, es quien ve todas las empresas.
+3. **Asignarle plan y suscripción** — `POST /api/billing/subscriptions/:tenantId`.
+   Sin esto, `requireActiveSubscription` le va a cortar el acceso.
+4. **Generar la clave del agente** — `/api/agent-keys` (o la pantalla de
+   claves). Es **por empresa**: es lo que hace que los fichajes que sube esa
+   PC entren en esa empresa y no en otra. Esa clave se carga en el
+   `config.ini` de la PC del cliente. Que dos agentes de dos empresas no se
+   pisen está probado en `test/agent-cross-tenant-collision.test.js`.
+5. **Instalar el agente en la PC del cliente** — el `.exe` de
+   `descarga-fichaje-py` (ver más arriba cómo se compila), con la IP del
+   reloj y la clave del punto 4.
+6. **Crear los marcadores en el reloj** — botón *"Crear marcadores en el
+   reloj (alta de empresa)"* del agente (ver la sección siguiente).
+7. **Sincronizar usuarios** — botón *"Solo usuarios"*. Los usuarios del
+   reloj entran en `users` con el `tenant_id` correcto.
+8. **Cargar los empleados** — importación por CSV desde `/importar`, o a
+   mano. Acá se decide qué campo es la identidad (legajo o DNI) según qué
+   haya cargado esa empresa en el reloj: se elige en `/matching`, en
+   "Campo de identidad".
+9. **Vincular reloj ↔ empleados** — pantalla `/matching`, que propone las
+   coincidencias y muestra quién ficha sin estar asociado.
+10. **Cargar las plantillas de horario** y asignarlas a los empleados.
+
+**Sobre "que quede solo el superadmin sin empleados"**: no hace falta vaciar
+nada. La empresa nueva **nace vacía**; los 480 empleados de AVP son de AVP y
+el cliente nuevo no los ve nunca, porque cada consulta filtra por
+`tenant_id`.
+
+### Cuándo SÍ haría falta un deploy aparte
+
+Solo si un cliente exige por contrato que sus datos no compartan base con
+otros. Ahí sí: otro servicio en Render apuntando al mismo repo, otra base, y
+correr todas las migraciones de `migrations/` en orden. Es una decisión
+comercial, no técnica — y multiplica el mantenimiento por la cantidad de
+clientes.
+
+## Usuarios marcadores: creación automática en el reloj (2026-09-22)
+
+Los marcadores (`5` salida particular, `6` regreso, `9` inicio de horas
+extra, `10` fin) **son usuarios del reloj que no son personas**. El empleado
+ficha primero el marcador y después ficha él, y así el sistema sabe qué tipo
+de movimiento fue. Hasta ahora había que sentarse frente al reloj y cargarlos
+a mano en cada alta — un paso manual que, si se olvida, hace que una salida
+particular se vea como una salida común.
+
+Ahora el agente tiene el botón **"Crear marcadores en el reloj (alta de
+empresa)"** (`zk_service.crear_marcadores`). Los crea con **nombre y clave
+iguales al número** (`5`, nombre `5`, clave `5`), que no es capricho: la
+pantalla de Marcadores del sistema los **detecta sola** buscando usuarios con
+Badgenumber de 1-2 dígitos cuyo nombre sea ese mismo número
+(`horasdedica.js:1359`). Con otro nombre habría que cargarlos a mano igual.
+
+**La regla que pediste, y es la parte delicada**: escribe en el reloj, así
+que **nunca pisa un número ocupado**. Hay empresas que numeran los legajos
+desde el 1, y grabar sobre el usuario 5 le borraría el nombre y la huella a
+un empleado real. Si el número está tomado, lo informa (por quién) y no lo
+toca; ahí hay que elegir otros números y cargarlos en la pantalla de
+Marcadores. Probado en `descarga-fichaje-py/test_marcadores.py` con un reloj
+simulado — esa regla no se puede probar a mano en producción sin arriesgar
+justo lo que se quiere evitar.
+
+Después de crearlos: **"Solo usuarios"** para que lleguen al sistema.
+
 ## Qué es "el motor de reglas configurable"
 
 Iniciativa grande (documento fuente: `Actúa como arquitecto de software
