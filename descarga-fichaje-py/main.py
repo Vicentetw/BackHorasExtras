@@ -2,7 +2,7 @@ import sys
 import threading
 import ipaddress
 from datetime import datetime
-from zk_service import descargar_reloj
+from zk_service import descargar_reloj, crear_marcadores
 from exporter import exportar_checkinout, exportar_userinfo
 import db_local
 import config_loader
@@ -370,6 +370,88 @@ def _proceso_sincronizar_solo(sincronizar):
         root.after(0, lambda: messagebox.showinfo("Sincronización completa", texto))
 
 
+# =========================
+# CREAR LOS USUARIOS MARCADORES EN EL RELOJ
+# =========================
+# Pedido real: al dar de alta una empresa nueva habia que sentarse frente al
+# reloj y cargar a mano los usuarios 5, 6, 9 y 10 (los marcadores de salida
+# particular y de horas extra). Es la clase de paso manual que se olvida, y
+# si falta, el sistema no puede distinguir una salida particular de una
+# salida comun.
+#
+# Esto NO pisa a nadie: si el numero ya lo usa una persona real (hay empresas
+# que numeran los legajos desde el 1), se informa y se deja como esta. Ver
+# zk_service.crear_marcadores.
+def _proceso_crear_marcadores():
+    lineas = ip_text.get("1.0", tk.END).strip().split("\n")
+    relojes = []
+    for linea in lineas:
+        linea = linea.strip()
+        if not linea:
+            continue
+        partes = linea.split(",")
+        relojes.append((partes[0].strip(), partes[1].strip() if len(partes) > 1 else ""))
+
+    if not relojes:
+        log_mensaje("Debe ingresar al menos una IP.", "error")
+        return
+
+    panel_mensajes.delete(1.0, tk.END)
+    set_estado("Creando marcadores…", "trabajando")
+    timeout = config_loader.cargar().get("timeout_segundos", TIMEOUT)
+
+    creados = 0
+    ocupados = []
+    for ip, password in relojes:
+        if not ip_valida(ip):
+            log_mensaje(f"{ip} → IP mal formada.", "error")
+            continue
+
+        log_mensaje(f"{ip} → Revisando qué marcadores faltan...")
+        resultados, error = crear_marcadores(ip, PUERTO, password, timeout=timeout)
+        if error:
+            log_mensaje(error, "error")
+            continue
+
+        for numero, estado, detalle in resultados:
+            if estado == "creado":
+                creados += 1
+                log_mensaje(f"{ip} → Marcador {numero} creado ({detalle}).", "ok")
+            elif estado == "ya_existe":
+                log_mensaje(f"{ip} → Marcador {numero}: {detalle}.")
+            elif estado == "ocupado":
+                ocupados.append(f"{ip} → número {numero}: {detalle}")
+                log_mensaje(f"{ip} → Marcador {numero} NO se creó: {detalle}.", "error")
+            else:
+                log_mensaje(f"{ip} → Marcador {numero}: error ({detalle}).", "error")
+
+    log_mensaje("Proceso finalizado.")
+    set_estado("Con errores" if ocupados else "Listo", "error" if ocupados else "ok")
+
+    if ocupados:
+        texto = ("Algunos números ya estaban usados por personas reales y NO se "
+                 "tocaron:\n\n" + "\n".join(ocupados) +
+                 "\n\nHay que elegir otros números para esos marcadores y cargarlos "
+                 "en la pantalla de Marcadores del sistema.")
+        root.after(0, lambda: messagebox.showwarning("Marcadores no creados", texto))
+    else:
+        texto = (f"Marcadores creados: {creados}.\n\n"
+                 "Ahora usá \"Solo usuarios\" para que lleguen al sistema. "
+                 "Después aparecen solos en la pantalla de Marcadores.")
+        root.after(0, lambda: messagebox.showinfo("Marcadores listos", texto))
+
+
+def crear_marcadores_en_relojes():
+    if not messagebox.askyesno(
+            "Crear marcadores",
+            "Se van a crear en el reloj los usuarios 5, 6, 9 y 10 "
+            "(salida particular, regreso, inicio y fin de horas extra).\n\n"
+            "Si alguno de esos números ya lo usa un empleado real, se deja como está "
+            "y se avisa.\n\n¿Continuar?"):
+        return
+    threading.Thread(target=_proceso_crear_marcadores).start()
+
+
 def sincronizar_solo_fichajes():
     threading.Thread(target=_proceso_sincronizar_solo, args=("fichajes",)).start()
 
@@ -525,6 +607,11 @@ frame_sync_solo = ttk.Frame(cont)
 ttk.Button(frame_sync_solo, text="Solo fichajes", command=sincronizar_solo_fichajes).pack(side="left", expand=True, fill="x", padx=(0, 4))
 ttk.Button(frame_sync_solo, text="Solo usuarios", command=sincronizar_solo_usuarios).pack(side="left", expand=True, fill="x", padx=(4, 0))
 frame_sync_solo.pack(fill="x", pady=(6, 0))
+
+# Se usa una sola vez, al poner en marcha una empresa nueva -- por eso va
+# aparte y abajo, no compitiendo con los botones del uso diario.
+ttk.Button(cont, text="Crear marcadores en el reloj (alta de empresa)",
+           command=crear_marcadores_en_relojes).pack(fill="x", pady=(6, 0))
 
 progreso = ttk.Progressbar(cont, orient="horizontal", mode="determinate")
 progreso.pack(fill="x", pady=(12, 0))

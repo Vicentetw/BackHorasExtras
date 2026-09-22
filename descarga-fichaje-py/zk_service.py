@@ -178,6 +178,130 @@ def descargar_reloj(ip, puerto=4370, timeout=5, password='', callback_progreso=N
         return None, None, f"{ip} → Error inesperado: {str(e)}"
 
 
+# ============================================================================
+# Usuarios marcadores
+# ============================================================================
+#
+# QUE SON
+# -------
+# Los marcadores son usuarios del reloj que NO son personas. Sirven para que
+# el empleado avise QUE clase de fichaje esta por hacer: primero ficha el
+# marcador, despues ficha el. El backend los interpreta asi:
+#
+#     5  -> se va por un tema particular
+#     6  -> vuelve de ese tema particular
+#     9  -> empieza a hacer horas extra
+#     10 -> termina de hacer horas extra
+#
+# POR QUE TIENEN QUE EXISTIR EN EL RELOJ
+# --------------------------------------
+# El marcador solo sirve si alguien puede FICHARLO, y solo se puede fichar lo
+# que esta cargado en el reloj. Crearlo unicamente en la base del sistema no
+# alcanza: nunca llegaria un fichaje suyo. Por eso esto escribe en el reloj.
+#
+# Una vez creados aca, el resto sale solo: la sincronizacion de usuarios los
+# trae a la tabla `users`, y la pantalla de Marcadores los detecta sola
+# porque el backend busca usuarios cuyo Badgenumber sea de 1-2 digitos y cuyo
+# nombre sea ese mismo numero. De ahi que el nombre se cargue como "5" y no
+# como "Salida particular": ese formato es la senal que dispara la
+# deteccion automatica.
+#
+# LA REGLA QUE PIDIO EL USUARIO: no pisar a nadie
+# -----------------------------------------------
+# Un reloj puede tener ya ocupado el numero 5 con una persona de verdad (una
+# empresa que arranco los legajos desde el 1). Escribir ahi le borraria el
+# nombre y la huella a un empleado real. Entonces cada numero se crea SOLO si
+# esta libre; si esta ocupado se informa por quien y no se toca.
+MARCADORES = [
+    ('5', 'Salida por tema particular'),
+    ('6', 'Regreso de tema particular'),
+    ('9', 'Inicio de horas extra'),
+    ('10', 'Fin de horas extra'),
+]
+
+
+def crear_marcadores(ip, puerto=4370, admin_password='', numeros=None, timeout=5):
+    """Crea en el reloj los usuarios marcadores que falten.
+
+    Devuelve (resultados, error_msg). `resultados` es una lista de tuplas
+    (numero, estado, detalle) con estado en 'creado' | 'ya_existe' |
+    'ocupado' | 'error'. Ningun usuario existente se modifica ni se borra.
+    """
+    if ZK is None:
+        return None, 'Paquete `zk` no disponible. Instala la dependencia (pip install pyzk o zk)'
+
+    pedidos = [n for n, _ in MARCADORES] if numeros is None else [str(n) for n in numeros]
+    descripciones = dict(MARCADORES)
+
+    try:
+        pwd = int(admin_password) if admin_password else 0
+    except Exception:
+        pwd = 0
+
+    conn = None
+    try:
+        zk = ZK(ip, port=puerto, timeout=timeout, password=pwd, encoding=NAME_ENCODING)
+        conn = zk.connect()
+        conn.disable_device()
+
+        existentes = conn.get_users() or []
+
+        # Se indexa por las DOS claves con las que el reloj identifica a un
+        # usuario, porque no son lo mismo: `uid` es la posicion interna y
+        # `user_id` es el numero de credencial (el Badgenumber que despues
+        # viaja en cada fichaje). Un numero esta ocupado si coincide con
+        # cualquiera de las dos: escribir sobre uno u otro pisaria a alguien.
+        ocupados = {}
+        for u in existentes:
+            for clave in (getattr(u, 'uid', None), getattr(u, 'user_id', None)):
+                if clave not in (None, ''):
+                    ocupados.setdefault(str(clave), u)
+
+        resultados = []
+        for numero in pedidos:
+            ocupante = ocupados.get(numero)
+            if ocupante is not None:
+                nombre = (getattr(ocupante, 'name', '') or '').strip()
+                # Ya es el marcador (el reloj lo tiene con el numero como
+                # nombre): no hay nada que hacer, no es un problema.
+                if nombre == numero:
+                    resultados.append((numero, 'ya_existe', 'ya estaba creado'))
+                else:
+                    resultados.append((numero, 'ocupado',
+                                       f'lo usa "{nombre or "(sin nombre)"}" -- no se toco'))
+                continue
+
+            try:
+                # password = el propio numero, para que el marcador se pueda
+                # fichar por teclado sin huella (es el uso normal: nadie
+                # enrola la huella de un usuario que no es una persona).
+                conn.set_user(uid=int(numero), name=numero, privilege=0,
+                              password=numero, user_id=numero)
+                resultados.append((numero, 'creado', descripciones.get(numero, '')))
+            except Exception as e:
+                resultados.append((numero, 'error', str(e)))
+
+        conn.enable_device()
+        conn.disconnect()
+        return resultados, None
+
+    except socket.timeout:
+        return None, f"{ip} → Tiempo de conexión agotado."
+    except ConnectionRefusedError:
+        return None, f"{ip} → Error de conexión. El reloj no responde."
+    except OSError:
+        return None, f"{ip} → Error de conexión. Verifique red o IP."
+    except Exception as e:
+        return None, f"{ip} → Error inesperado: {str(e)}"
+    finally:
+        if conn is not None:
+            try:
+                conn.enable_device()
+                conn.disconnect()
+            except Exception:
+                pass
+
+
 def registrar_huella(ip, puerto=4370, admin_password='', user_id=None, dedo=1):
     """Enrola huella en el reloj. Devuelve (ok:bool, mensaje:str)."""
     if ZK is None:
