@@ -1,4 +1,6 @@
 const express = require('express');
+const admin = require('firebase-admin');
+const { initFirebaseAdmin } = require('../firebaseAuth');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
@@ -193,12 +195,80 @@ module.exports = function (db) {
   });
 
   // ==========================
+  // 3.5 ¿SE PUEDE BORRAR DE VERDAD?
+  // ==========================
+  //
+  // Desde la auditoria de cargas manuales (migracion 20260927), varias
+  // tablas guardan QUIEN hizo cada cosa con una foreign key contra
+  // app_users. Eso es deliberado: si se pudiera borrar la cuenta, se
+  // borraria el rastro de quien cargo esas horas extra o esa licencia, que
+  // es justo lo que permite responder un reclamo.
+  //
+  // Asi que el borrado real solo corresponde a una cuenta SIN historial --
+  // tipicamente una que se creo por error, o la que deja un test que se
+  // corto a la mitad. Si tiene historial, lo correcto es deshabilitarla.
+  //
+  // OJO con dos columnas que NO son referencias a app_users aunque se
+  // llamen parecido: manual_entry_log.user_id y user_exclusion_log.user_id
+  // son USERID de RELOJ (users.USERID), no cuentas de la app. Por eso la
+  // lista de abajo es explicita en vez de salir de information_schema.
+  const REFERENCIAS_DE_HISTORIAL = [
+    ['Checkins', 'created_by', 'fichajes manuales cargados'],
+    ['ManualEntries', 'created_by', 'horas extra u horas manuales cargadas'],
+    ['ManualEntries', 'updated_by', 'horas manuales editadas'],
+    ['userexclusions', 'created_by', 'licencias o justificaciones cargadas'],
+    ['userexclusions', 'updated_by', 'licencias editadas'],
+    ['manual_checkin_log', 'performed_by', 'movimientos de fichajes manuales'],
+    ['manual_entry_log', 'performed_by', 'movimientos de horas manuales'],
+    ['user_exclusion_log', 'performed_by', 'movimientos de licencias'],
+    ['payment_records', 'recorded_by', 'pagos registrados'],
+    ['plan_requests', 'requested_by', 'pedidos de plan'],
+    ['tenant_agent_keys', 'created_by', 'claves de agente creadas'],
+    ['event_type_count_modes', 'created_by', 'configuraciones de tipos de evento']
+  ];
+
+  async function historialDelUsuario(appUserId) {
+    const motivos = [];
+    for (const [tabla, columna, descripcion] of REFERENCIAS_DE_HISTORIAL) {
+      const [[fila]] = await db.query(
+        `SELECT COUNT(*) AS n FROM \`${tabla}\` WHERE \`${columna}\` = ?`,
+        [appUserId]
+      );
+      if (fila.n > 0) motivos.push({ descripcion, cantidad: fila.n });
+    }
+    return motivos;
+  }
+
+  // Devuelve si la cuenta se puede borrar y, si no, por que. La pantalla lo
+  // usa para mostrar "Eliminar" o "Deshabilitar" sin hacer que el usuario
+  // descubra el impedimento recien al apretar el boton.
+  router.get('/:id/eliminable', requirePermission('users', 'delete'), async (req, res) => {
+    try {
+      const [[user]] = await db.query('SELECT id, tenant_id FROM app_users WHERE id = ?', [req.params.id]);
+      if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null && user.tenant_id !== effectiveTenantId) {
+        return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+
+      const motivos = await historialDelUsuario(user.id);
+      res.json({ eliminable: motivos.length === 0, motivos });
+    } catch (err) {
+      console.error('ERROR consultando si el usuario es eliminable:', err);
+      res.status(500).json({ error: 'Error al consultar el usuario' });
+    }
+  });
+
+  // ==========================
   // 4. DESHABILITAR (soft-delete: is_active = 0, no se borra la cuenta)
+  //    o BORRAR DE VERDAD con ?permanente=1, si no tiene historial.
   // ==========================
   router.delete('/:id', requirePermission('users', 'delete'), async (req, res) => {
     try {
       const { id } = req.params;
-      const [[user]] = await db.query('SELECT id, tenant_id FROM app_users WHERE id = ?', [id]);
+      const [[user]] = await db.query(
+        'SELECT id, tenant_id, email, firebase_uid, is_superadmin FROM app_users WHERE id = ?', [id]);
       if (!user) {
         return res.status(404).json({ error: 'Usuario no encontrado' });
       }
@@ -206,8 +276,57 @@ module.exports = function (db) {
       if (effectiveTenantId !== null && user.tenant_id !== effectiveTenantId) {
         return res.status(404).json({ error: 'Usuario no encontrado' });
       }
-      await db.query('UPDATE app_users SET is_active = 0 WHERE id = ?', [id]);
-      res.json({ ok: true });
+
+      const permanente = req.query.permanente === '1' || req.query.permanente === 'true';
+      if (!permanente) {
+        await db.query('UPDATE app_users SET is_active = 0 WHERE id = ?', [id]);
+        return res.json({ ok: true, accion: 'deshabilitado' });
+      }
+
+      // --- Borrado real, de aca en adelante ---
+
+      // Borrarse a uno mismo deja al sistema sin quien lo administre y sin
+      // sesion para arreglarlo.
+      if (req.appUser && Number(req.appUser.id) === Number(user.id)) {
+        return res.status(400).json({ error: 'No podés eliminar tu propia cuenta' });
+      }
+      // Una cuenta con acceso a TODAS las empresas solo la puede borrar
+      // alguien que tambien lo tenga.
+      if (Number(user.is_superadmin) === 1 && !(req.appUser && req.appUser.isSuperadmin)) {
+        return res.status(403).json({ error: 'Solo un superadmin puede eliminar a otro superadmin' });
+      }
+
+      const motivos = await historialDelUsuario(user.id);
+      if (motivos.length > 0) {
+        return res.status(409).json({
+          error: 'Esta cuenta tiene actividad registrada a su nombre, así que no se puede eliminar. Deshabilitala en su lugar.',
+          motivos
+        });
+      }
+
+      // Los permisos son del propio usuario, no historial: se van con el.
+      await db.query('DELETE FROM user_permissions WHERE user_id = ?', [id]);
+      await db.query('DELETE FROM app_users WHERE id = ?', [id]);
+
+      // Tambien la cuenta de Firebase: si queda, ese email sigue ocupado y
+      // no se lo puede volver a dar de alta.
+      let firebaseBorrado = false;
+      try {
+        initFirebaseAdmin();
+        await admin.auth().deleteUser(user.firebase_uid);
+        firebaseBorrado = true;
+      } catch (err) {
+        if (err.code === 'auth/user-not-found') {
+          firebaseBorrado = true; // ya no estaba: mismo resultado
+        } else {
+          // La fila ya se borro y eso es lo que ve la pantalla. Se avisa,
+          // pero no se responde error: revertir seria peor.
+          console.error('Usuario eliminado de la base, pero no de Firebase:', err.message);
+        }
+      }
+
+      console.log(`[USUARIOS] ${user.email} eliminado definitivamente por app_user ${req.appUser ? req.appUser.id : '?'}`);
+      res.json({ ok: true, accion: 'eliminado', firebaseBorrado });
     } catch (err) {
       console.error('ERROR deactivating app user:', err);
       res.status(500).json({ error: 'Error al deshabilitar usuario' });

@@ -14,7 +14,11 @@ require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
-const { getTestAuthHeaders, closeDb } = require('../test-helpers/firebaseTestAuth');
+// deleteTestUser faltaba: este archivo creaba un app_user SUPERADMIN en el
+// before() y nunca lo borraba. Cada corrida dejaba uno colgado en la base
+// ("test-country-firewall-http@test.local"), y como el borrado de usuarios
+// era solo un soft-delete, tampoco se podia sacar desde la pantalla.
+const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 const { resolveCountry } = require('../motor-laboral/services/countryFirewallService');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
@@ -54,6 +58,7 @@ after(async () => {
     })
   });
   await db.query('DELETE FROM signup_leads WHERE id = ?', [leadId]).catch(() => {});
+  await deleteTestUser(TEST_UID);
   await closeDb();
 });
 
