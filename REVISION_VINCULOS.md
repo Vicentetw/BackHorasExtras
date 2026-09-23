@@ -46,7 +46,23 @@ San Martn Luca -> SAN MARTIN, Luciana
 ```
 
 Son la misma persona. El vínculo está bien; lo que estaba mal era el nombre
-guardado. Se corrigen solos en la próxima sincronización de usuarios.
+guardado.
+
+> ⚠️ **Corrección del 2026-09-23.** Acá decía que estos nombres "se corrigen
+> solos en la próxima sincronización". **Era falso con el código de ese
+> momento**, y conviene dejarlo escrito porque es el tipo de error que hace
+> perder tiempo esperando algo que no iba a pasar.
+>
+> `upsertUsersBatch` no actualizaba el nombre cuando el USERID y el badge ya
+> existían iguales — justo el caso de estos nueve. O sea que `IBAEZ` se iba a
+> quedar `IBAEZ` para siempre por más veces que se sincronizara. Era
+> incoherente con el propio código, que sí actualizaba el nombre cuando el
+> badge venía con otro USERID.
+>
+> Corregido junto con el arreglo de los dos relojes: ahora el reloj vuelve a
+> ser la fuente de verdad del nombre, con la única excepción de que un nombre
+> que no identifica a nadie (`NN-105`, el propio número, vacío) no pisa a uno
+> bueno. Recién **ahora** sí se corrigen sincronizando.
 
 **Tres son diferencias de ortografía** entre el reloj y la lista de personal
 (`CAMUSO`/`CAMUSSO`, `BARRIOS`/`BARRIO`, `ZORRILLA`/`ZORRILA`). También la

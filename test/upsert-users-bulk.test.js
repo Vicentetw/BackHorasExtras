@@ -54,14 +54,42 @@ test('inserta usuarios nuevos en un solo lote grande (simula un sitio con mucho 
   assert.equal(c, 500);
 });
 
-test('un badge que ya existe con el MISMO USERID no se toca', async () => {
-  const [[before]] = await db.query(`SELECT Name FROM users WHERE Badgenumber = ?`, [`${PREFIX}0`]);
-  assert.equal(before.Name, 'Empleado Bulk 0');
+// CAMBIO DE COMPORTAMIENTO (2026-09-23), a proposito.
+//
+// Este test decia antes que con el MISMO USERID y el MISMO badge el nombre
+// NO se actualizaba. Era un bug, y serio: el camino mas comun de todos --
+// la misma persona, el mismo numero, el nombre corregido en el reloj -- era
+// justamente el unico que ignoraba la correccion. Se notaba en que era
+// incoherente con el test de abajo, donde un badge con OTRO USERID si
+// actualiza el nombre.
+//
+// Consecuencia real: los nombres que habian llegado mal por el bug de
+// codificacion (IBAEZ en vez de IBANEZ) NUNCA se iban a corregir solos por
+// mas que se sincronizara, porque caian justo en este caso.
+//
+// Ahora el reloj vuelve a ser la fuente de verdad del nombre, con una sola
+// excepcion: un nombre que no identifica a nadie ("NN-105", el propio
+// numero, vacio) no pisa a uno bueno que ya este guardado. Ver
+// test/nombres-multi-reloj.test.js.
+test('un nombre corregido en el reloj SI se guarda, aunque el badge no cambie', async () => {
+  const [[antes]] = await db.query(`SELECT Name FROM users WHERE Badgenumber = ?`, [`${PREFIX}0`]);
+  assert.equal(antes.Name, 'Empleado Bulk 0');
 
-  await upsertUsersBatch([{ USERID: 990000, Badgenumber: `${PREFIX}0`, Name: 'Nombre que NO debería guardarse' }], db, TENANT_ID);
+  await upsertUsersBatch(
+    [{ USERID: 990000, Badgenumber: `${PREFIX}0`, Name: 'Empleado Bulk 0 CORREGIDO' }], db, TENANT_ID);
 
-  const [[after_]] = await db.query(`SELECT Name FROM users WHERE Badgenumber = ?`, [`${PREFIX}0`]);
-  assert.equal(after_.Name, 'Empleado Bulk 0', 'mismo USERID -- no deberia actualizar el nombre');
+  const [[despues]] = await db.query(`SELECT Name FROM users WHERE Badgenumber = ?`, [`${PREFIX}0`]);
+  assert.equal(despues.Name, 'Empleado Bulk 0 CORREGIDO',
+    'la correccion hecha en el reloj tiene que llegar');
+});
+
+test('pero un nombre que no identifica a nadie no pisa al que ya estaba', async () => {
+  await upsertUsersBatch(
+    [{ USERID: 990000, Badgenumber: `${PREFIX}0`, Name: 'NN-990000' }], db, TENANT_ID);
+
+  const [[fila]] = await db.query(`SELECT Name FROM users WHERE Badgenumber = ?`, [`${PREFIX}0`]);
+  assert.equal(fila.Name, 'Empleado Bulk 0 CORREGIDO',
+    'el relleno del segundo reloj no tiene que borrar el nombre bueno');
 });
 
 test('un badge que ya existe con OTRO USERID actualiza el nombre (sin tocar el USERID)', async () => {

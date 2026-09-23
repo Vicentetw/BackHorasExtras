@@ -151,6 +151,59 @@ async function insertCheckinsBatch(records, db, tenantId, maxRecords = MAX_RECOR
 // sin esto, un USERID que ya existe en OTRA empresa se detectaria como
 // "ya existe" y se le pisaria el nombre/legajo en vez de crear una fila
 // nueva para esta empresa.
+// ============================================================================
+// Nombres que no dicen nada
+// ============================================================================
+//
+// EL PROBLEMA, TAL COMO APARECIO (2026-09-23)
+// --------------------------------------------
+// AVP tiene DOS relojes. La misma persona esta dada de alta en los dos con el
+// mismo numero, pero no siempre con el mismo nombre: el usuario 105 figura
+// como "AGUILAR GABRIEL" en el reloj 172.155.0.30 (donde ficha: 217 fichajes)
+// y como "NN-105" en el 172.155.0.33 (donde no ficho nunca).
+//
+// `users` es UNA sola lista por empresa, con clave (tenant_id, USERID) -- no
+// tiene columna de reloj. Asi que las dos listas se mezclan en la misma fila,
+// y hasta hoy el UPDATE de abajo pisaba el nombre SIEMPRE: ganaba el ultimo
+// reloj sincronizado. Gano "NN-105", y la persona quedo sin nombre en el
+// sistema aunque uno de los relojes lo tuviera bien.
+//
+// Consecuencia real: en la pantalla de Matching el usuario aparece como
+// "NN-105", no hay forma de reconocer de quien es, y la unica pista para
+// vincularlo es que el numero coincida con un legajo.
+//
+// LA REGLA
+// --------
+// Un nombre vacio, o que es el propio numero ("105", "9370"), o un relleno
+// tipo "NN-105", no identifica a nadie. Si ya hay guardado un nombre de
+// persona, no se pisa con uno de esos. Al reves si: un nombre de verdad
+// siempre reemplaza a un relleno.
+//
+// NO se resuelve "eligiendo el reloj bueno" ni descartando relojes: los dos
+// son fuentes validas, y cual tiene el dato bueno cambia usuario por usuario.
+// La regla mira el CONTENIDO, no el origen.
+function esNombreVacio(nombre, userId, badge) {
+  const n = String(nombre == null ? '' : nombre).trim();
+  if (!n) return true;
+  // "NN-105", "NN 105", "nn-3042" -- relleno que ponen en el reloj cuando no
+  // se sabe de quien es.
+  if (/^NN[\s\-_]*\d*$/i.test(n)) return true;
+  // El propio numero como nombre: "105", "9370". Pasa cuando el usuario se
+  // enrolo desde el sistema y se uso el legajo como nombre (ver enrolar.py).
+  if (/^\d+$/.test(n)) return true;
+  if (userId != null && n === String(userId).trim()) return true;
+  if (badge != null && n === String(badge).trim()) return true;
+  return false;
+}
+
+// Devuelve el nombre que hay que guardar, o null si no hay que tocar nada.
+function resolverNombre(nombreNuevo, nombreGuardado, userId, badge) {
+  const nuevoVacio = esNombreVacio(nombreNuevo, userId, badge);
+  const guardadoVacio = esNombreVacio(nombreGuardado, userId, badge);
+  if (nuevoVacio && !guardadoVacio) return null;  // no pisar lo bueno con relleno
+  return String(nombreNuevo == null ? '' : nombreNuevo).trim();
+}
+
 async function upsertUsersBatch(records, db, tenantId, maxRecords = MAX_RECORDS_PER_BATCH) {
   if (!tenantId) {
     const err = new Error('tenantId es requerido para sincronizar usuarios');
@@ -190,7 +243,7 @@ async function upsertUsersBatch(records, db, tenantId, maxRecords = MAX_RECORDS_
   const badges = [...validosPorBadge.keys()];
   const userIds = [...new Set([...validosPorBadge.values()].map((v) => v.userId))];
   const [existingByBadgeRows] = await db.query(
-    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE TRIM(Badgenumber) IN (?) AND tenant_id = ?`,
+    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber, Name FROM users WHERE TRIM(Badgenumber) IN (?) AND tenant_id = ?`,
     [badges, tenantId]
   );
   // Bug real de produccion: la version anterior SOLO buscaba existentes por
@@ -204,23 +257,33 @@ async function upsertUsersBatch(records, db, tenantId, maxRecords = MAX_RECORDS_
   // que ya existe pero en OTRA empresa no cuenta como "ya existe" para
   // esta -- debe insertarse como fila nueva de esta empresa, no pisar (ni
   // leer como referencia) la fila de la otra.
+  // Se trae tambien el Name guardado: hace falta para decidir si el nombre
+  // que llega ahora es mejor o peor que el que ya esta (ver resolverNombre).
   const [existingByUserIdRows] = await db.query(
-    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber FROM users WHERE USERID IN (?) AND tenant_id = ?`,
+    `SELECT USERID, TRIM(Badgenumber) AS Badgenumber, Name FROM users WHERE USERID IN (?) AND tenant_id = ?`,
     [userIds, tenantId]
   );
   const existingUserIdByBadge = new Map(existingByBadgeRows.map((r) => [r.Badgenumber, r.USERID]));
   const existingBadgeByUserId = new Map(existingByUserIdRows.map((r) => [r.USERID, r.Badgenumber]));
+  const existingNameByUserId = new Map([
+    ...existingByBadgeRows.map((r) => [r.USERID, r.Name]),
+    ...existingByUserIdRows.map((r) => [r.USERID, r.Name]),
+  ]);
 
   const aInsertar = [];
-  const aActualizar = []; // { userId, badge: string|null, name } -- badge null = no tocar Badgenumber, solo Name
+  const aActualizar = []; // { userId, badge: string|null, name: string|null }
+                          // badge null = no tocar Badgenumber; name null = no tocar Name
   for (const [badge, { userId, name }] of validosPorBadge) {
     const existingBadgeForUserId = existingBadgeByUserId.get(userId);
     if (existingBadgeForUserId !== undefined) {
       // El USERID YA EXISTE -- nunca insertar (violaria la PRIMARY KEY).
-      // Si el badge cambio (o no tenia), se actualiza junto con el nombre;
-      // si es el mismo badge, no hace falta tocar nada.
-      if (existingBadgeForUserId !== badge) {
-        aActualizar.push({ userId, badge, name });
+      const nombre = resolverNombre(name, existingNameByUserId.get(userId), userId, badge);
+      const cambiaBadge = existingBadgeForUserId !== badge;
+      // Con dos relojes, este caso es el normal: el usuario ya esta porque lo
+      // trajo el otro reloj. Antes se salia sin hacer nada cuando el badge
+      // coincidia, asi que un nombre MEJOR que llegara despues nunca entraba.
+      if (cambiaBadge || nombre !== null) {
+        aActualizar.push({ userId, badge: cambiaBadge ? badge : null, name: nombre });
       }
       continue;
     }
@@ -231,7 +294,11 @@ async function upsertUsersBatch(records, db, tenantId, maxRecords = MAX_RECORDS_
       // El badge ya existe pero con OTRO USERID -- no se toca el USERID
       // existente (podria ser un caso de reasignacion real, no se puede
       // decidir solo del lado del agente), solo se refresca el nombre.
-      aActualizar.push({ userId: existingUserIdForBadge, badge: null, name });
+      const nombre = resolverNombre(
+        name, existingNameByUserId.get(existingUserIdForBadge), existingUserIdForBadge, badge);
+      if (nombre !== null) {
+        aActualizar.push({ userId: existingUserIdForBadge, badge: null, name: nombre });
+      }
     }
   }
 
@@ -242,6 +309,10 @@ async function upsertUsersBatch(records, db, tenantId, maxRecords = MAX_RECORDS_
   for (const { userId, badge, name } of aActualizar) {
     if (badge === null) {
       await db.query('UPDATE users SET Name = ? WHERE USERID = ? AND tenant_id = ?', [name, userId, tenantId]);
+    } else if (name === null) {
+      // Cambio el badge pero el nombre que llega es peor que el guardado:
+      // se actualiza uno solo. Pasa con el segundo reloj de una empresa.
+      await db.query('UPDATE users SET Badgenumber = ? WHERE USERID = ? AND tenant_id = ?', [badge, userId, tenantId]);
     } else {
       await db.query('UPDATE users SET Badgenumber = ?, Name = ? WHERE USERID = ? AND tenant_id = ?', [badge, name, userId, tenantId]);
     }
@@ -250,4 +321,8 @@ async function upsertUsersBatch(records, db, tenantId, maxRecords = MAX_RECORDS_
   return { upserted: validosPorBadge.size, skipped, total: records.length };
 }
 
-module.exports = { parseCheckTimeArgentina, insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_BATCH, MAX_RECORDS_PER_MANUAL_IMPORT };
+module.exports = {
+  parseCheckTimeArgentina, insertCheckinsBatch, upsertUsersBatch,
+  esNombreVacio, resolverNombre,
+  MAX_RECORDS_PER_BATCH, MAX_RECORDS_PER_MANUAL_IMPORT,
+};
