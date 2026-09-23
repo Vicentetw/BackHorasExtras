@@ -109,14 +109,51 @@ SELECT COUNT(*) FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = 'BASE_NUEVA' AND TABLE_TYPE = 'BASE TABLE';
 ```
 
-**1.5.** Sembrar el plan de facturación por defecto, si se va a cobrar:
+**1.5. Sembrar los catálogos.** ⚠️ **Este paso es obligatorio y es el que más
+fácil se olvida.**
+
+El dump del paso 1.2 trae la estructura pero **ninguna fila**, así que las
+tablas de catálogo quedan vacías. Sin `roles` y `role_permissions` no se le
+puede dar ningún permiso a nadie: el sistema arranca, se puede entrar como
+superadmin, y no se puede crear un solo usuario que sirva.
+
+Correr estas tres migraciones, en este orden. Las tres son idempotentes (se
+pueden re-correr sin romper nada):
 
 ```powershell
-mysql -h HOST_NUEVO -P PUERTO -u USUARIO -p BASE_NUEVA < migrations\20260906_billing_plans.sql
+mysql -h HOST -P PUERTO -u USUARIO -p BASE < migrations\20260902_add_roles.sql
+mysql -h HOST -P PUERTO -u USUARIO -p BASE < migrations\20260903_overtime_auth_and_vacation_scale.sql
+mysql -h HOST -P PUERTO -u USUARIO -p BASE < migrations\20260906_billing_plans.sql
 ```
 
-Es la única migración que además de estructura siembra datos (un plan base).
-Es idempotente.
+| Migración | Qué siembra |
+|---|---|
+| `20260902_add_roles.sql` | los 4 roles del sistema y sus 63 permisos — **imprescindible** |
+| `20260903_overtime_auth_and_vacation_scale.sql` | la escala de vacaciones por antigüedad (14/21/28/35 días, LCT art. 150) como default global editable, y 2 valores por defecto de configuración |
+| `20260906_billing_plans.sql` | el plan de facturación base — solo si se va a cobrar |
+
+Verificar que quedaron:
+
+```sql
+SELECT (SELECT COUNT(*) FROM roles) AS roles,              -- esperado: 4
+       (SELECT COUNT(*) FROM role_permissions) AS permisos, -- esperado: 63
+       (SELECT COUNT(*) FROM vacation_scale) AS vacaciones; -- esperado: 4
+```
+
+### ⚠️ Una migración que NO hay que correr
+
+**`20260721_add_app_users_permissions_tenant.sql`** no es una migración de
+estructura nada más: crea una empresa llamada "Empresa Principal" y además
+inserta como superadmin la cuenta personal `perrottavicente@gmail.com` con un
+Firebase UID fijo escrito en el archivo (líneas 30 y 42).
+
+En una instalación para un cliente eso deja una empresa fantasma y una cuenta
+ajena con acceso total. Las tablas que esa migración crea ya vienen en el
+dump del paso 1.2, así que no hace falta para nada.
+
+**Los motivos de ausencia (`event_types`) son por empresa, no catálogo**:
+cada empresa tiene los suyos (VACACIONES, ENFERMEDAD, ART, ARTICULO_55,
+PERMISO, ESTUDIO, OTRO). Se cargan después de crear la empresa, en el paso 5.
 
 ---
 
@@ -228,17 +265,114 @@ una URL aparte.
 
 ---
 
-## Paso 4 — Dejar solo el superadmin
+## Paso 4 — Crear el superadmin (y nada más)
 
-La base nueva arranca sin ninguna fila: sin empresas, sin empleados, sin
-usuarios. No hay nada que vaciar.
+**No hay nada que vaciar.** La base nueva arranca sin una sola empresa, sin un
+solo empleado y sin un solo usuario: el dump del paso 1.2 no trae filas y los
+catálogos del 1.5 no crean ninguna cuenta. El único dato que va a existir
+cuando termines este paso es el superadmin.
 
-**4.1.** Crear la primera cuenta en el Firebase Auth del paso 3.2.
+### Cómo funciona una cuenta acá (para entender por qué son dos pasos)
 
-**4.2.** Insertar su fila en `app_users` como superadmin, con `tenant_id`
-en `NULL` (el superadmin no pertenece a ninguna empresa: las ve todas).
+Una cuenta vive en **dos lugares a la vez**, y hacen cosas distintas:
 
-**4.3.** Entrar y seguir el alta de empresa normal, en `ESTADO_PROYECTO.md`.
+- **Firebase Auth** guarda el email y la contraseña. Es lo único que sabe
+  *quién sos*. Cuando entrás, Firebase emite un token.
+- **La tabla `app_users`** guarda *qué podés hacer*: a qué empresa
+  pertenecés, qué rol tenés, si sos superadmin, si estás activo.
+
+Las dos se unen por el **`firebase_uid`**: la cadena que Firebase le asigna a
+la cuenta. El backend recibe el token, saca el UID y busca esa fila.
+
+Consecuencia práctica: si creás la cuenta solo en Firebase, podés poner la
+contraseña pero el backend no te reconoce. Si creás solo la fila en
+`app_users` con un UID inventado, no vas a poder loguearte nunca. **Tienen
+que existir las dos, con el mismo UID.**
+
+Para el *primer* superadmin no hay forma de usar la pantalla de Usuarios: esa
+pantalla exige estar logueado con permisos, y todavía no existe nadie. Por
+eso este primer usuario, y solo este, se crea a mano.
+
+### 4.1. Crear la cuenta en Firebase
+
+En la consola de Firebase, en el proyecto de **autenticación** que elegiste en
+el paso 3.2 (ojo: el de autenticación, no el de hosting):
+
+1. Authentication → Users → **Add user**
+2. Email y contraseña
+3. **Copiar el `User UID`** que aparece en la lista. Es una cadena de ~28
+   caracteres como `8F5FJYCLwHSLSgEzBDhDo1UcOP33`.
+
+### 4.2. Crear la fila en `app_users`
+
+```sql
+INSERT INTO app_users (firebase_uid, email, tenant_id, role_id, is_superadmin, is_active)
+VALUES ('EL_UID_QUE_COPIASTE', 'el@email.com', NULL, NULL, 1, 1);
+```
+
+Qué significa cada valor, porque acá es fácil equivocarse:
+
+| Columna | Valor | Por qué |
+|---|---|---|
+| `firebase_uid` | el UID del paso 4.1 | es la única unión con Firebase; si no coincide exactamente, el login falla sin decir por qué |
+| `tenant_id` | **`NULL`** | el superadmin **no pertenece a ninguna empresa**: por eso las ve todas. Si le ponés un número, queda encerrado en esa empresa |
+| `role_id` | **`NULL`** | los roles limitan permisos dentro de una empresa. El superadmin no pasa por ahí |
+| `is_superadmin` | `1` | es una **columna**, no un rol. Es lo que habilita crear empresas y ver todo |
+| `is_active` | `1` | en `0` la cuenta existe pero no puede entrar |
+
+### 4.3. Verificar
+
+```sql
+SELECT id, email, tenant_id, is_superadmin, is_active FROM app_users;
+```
+
+Tiene que devolver **exactamente una fila**, con `tenant_id` en `NULL` y
+`is_superadmin` en `1`. Si hay más de una, algo se sembró de más — revisá que
+no hayas corrido `20260721_add_app_users_permissions_tenant.sql`.
+
+Y que no haya empresas todavía:
+
+```sql
+SELECT COUNT(*) FROM tenants;   -- tiene que dar 0
+```
+
+### 4.4. Entrar
+
+Entrar al frontend nuevo con ese email y contraseña. `/empresas` tiene que
+estar **vacío**.
+
+Si aparece una empresa que no creaste, el frontend está apuntando a la base
+equivocada — revisá `backendUrl` en `environment.ts` y las variables de
+MySQL en Render.
+
+### 4.5. De acá en adelante, ya no se toca SQL
+
+Todo lo demás sale de las pantallas: crear la empresa, su administrador, su
+suscripción, su clave de agente. El paso a paso está en `ESTADO_PROYECTO.md`,
+sección "Cómo dar de alta una empresa nueva".
+
+---
+
+## Paso 5 — Los motivos de ausencia de la primera empresa
+
+`event_types` (VACACIONES, ENFERMEDAD, ART, ARTICULO_55, PERMISO, ESTUDIO,
+OTRO) es **por empresa**, no catálogo global. Una empresa recién creada no
+tiene ninguno, y sin ellos no se puede cargar una licencia.
+
+Con el `tenant_id` de la empresa ya creada:
+
+```sql
+INSERT INTO event_types (tenant_id, code, descripcion, descuenta_vacaciones, requiere_aprobacion, active) VALUES
+  (?, 'VACACIONES',  'Vacaciones',            1, 1, 1),
+  (?, 'ENFERMEDAD',  'Enfermedad',            0, 0, 1),
+  (?, 'ART',         'ART',                   0, 1, 1),
+  (?, 'ARTICULO_55', 'Articulo 55',           0, 1, 1),
+  (?, 'PERMISO',     'Permiso',               0, 1, 1),
+  (?, 'ESTUDIO',     'Licencia por estudio',  0, 1, 1),
+  (?, 'OTRO',        'Otro',                  0, 0, 1);
+```
+
+Es la lista que usa AVP hoy; cada empresa puede tener la suya.
 
 ---
 

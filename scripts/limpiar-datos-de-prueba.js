@@ -45,6 +45,13 @@ if (PRIMER_ID_DE_PRUEBA < 999000) {
   process.exit(1);
 }
 
+async function existeTabla(nombre) {
+  const [[r]] = await db.query(
+    `SELECT COUNT(*) k FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, [nombre]);
+  return r.k > 0;
+}
+
 async function main() {
   const aplicar = process.argv.includes('--aplicar');
 
@@ -103,7 +110,33 @@ async function main() {
     console.log('Se borran al final, por las dudas.');
   }
 
+  // Tablas HIJAS: no tienen tenant_id propio, lo heredan del padre. Si no se
+  // borran primero, la clave foranea impide borrar al padre -- que es
+  // exactamente el error que dejaba empresas colgadas. Descubiertas el
+  // 2026-09-23 revisando que tablas no tienen tenant_id: el filtro de abajo
+  // las salteaba en silencio porque solo mira las que SI lo tienen.
+  const hijas = [
+    ['shift_blocks', 'template_id', 'work_schedule_templates'],
+    ['employee_events', 'employee_id', 'employees'],
+    ['employee_leave_balances', 'employee_id', 'employees'],
+  ];
+
   let total = 0;
+  for (const [hija, fk, padre] of hijas) {
+    if (!(await existeTabla(hija))) continue;
+    try {
+      const [r] = await db.query(
+        `DELETE FROM \`${hija}\` WHERE \`${fk}\` IN
+           (SELECT id FROM \`${padre}\` WHERE tenant_id IN (?))`, [ids]);
+      if (r.affectedRows) {
+        total += r.affectedRows;
+        console.log(`   ${hija}: ${r.affectedRows}`);
+      }
+    } catch (err) {
+      console.error(`   ${hija}: NO se pudo borrar (${err.code || err.message})`);
+    }
+  }
+
   for (const tabla of [...enOrden.filter(t => nombres.has(t)), ...olvidadas]) {
     try {
       const [r] = await db.query(`DELETE FROM \`${tabla}\` WHERE tenant_id IN (?)`, [ids]);
