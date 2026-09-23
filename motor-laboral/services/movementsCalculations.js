@@ -57,11 +57,85 @@ const DEFAULT_MAX_MARKER_GAP_MS = 30 * 1000;
 // duplicada en dos informes distintos.
 const DEFAULT_OWN_CHECKIN_BOUNCE_MS = 20 * 1000;
 
+// ============================================================================
+// Un marcador solo lo puede consumir un fichaje del MISMO reloj
+// ============================================================================
+//
+// POR QUE
+// -------
+// El marcador no dice de quien es: nadie se identifica al apretarlo. El
+// sistema se lo atribuye al proximo fichaje real que llegue. Con un solo
+// reloj eso es razonable -- la persona aprieta el marcador y despues pone el
+// dedo, en el mismo aparato, con un segundo de diferencia.
+//
+// Con DOS relojes deja de serlo. Si alguien aprieta el marcador 9 (inicio de
+// hora extra) en un aparato y otra persona pone el dedo en el OTRO un segundo
+// despues, el sistema le daba la hora extra a la segunda.
+//
+// No es hipotetico. Medido sobre los 111.529 fichajes de produccion con reloj
+// identificado: de 24.664 fichajes de marcador, 20.369 tuvieron a alguien
+// fichando dentro de la ventana de 6 segundos, y **272 de esos venian del
+// OTRO reloj**. Casi todos con el marcador 9. Ejemplo real:
+//
+//     2026-06-04 13:51:14  marcador 9 en .33  ->  usuario 9995 en .30 (1s)
+//
+// Si los dos aparatos estan en lugares distintos, la persona que apreto el
+// marcador NO puede ser la que ficho un segundo despues en el otro.
+//
+// Confirmado con quien opera el sistema: "si yo ingreso a la hora extra voy a
+// fichar el usuario ficticio y poner el dedo o mi clave en el mismo reloj
+// siempre; seria tonto hacerlo en diferentes relojes y con segundos de
+// diferencia".
+//
+// EL CASO DEL RELOJ DESCONOCIDO
+// ------------------------------
+// 46.203 fichajes viejos se guardaron sin MACHINE_IP (son anteriores a que el
+// agente lo anotara). Si de un lado no se sabe el reloj, NO se puede afirmar
+// que sean distintos -- se deja pasar, igual que antes. La regla solo rechaza
+// cuando los dos relojes se conocen Y son distintos: agregar informacion no
+// puede cambiar el resultado de lo que ya estaba calculado.
+// UN MARCADOR PENDIENTE POR RELOJ, NO UNO SOLO PARA TODOS
+// -------------------------------------------------------
+// No alcanza con rechazar el cruce: `lastMarker` era un unico casillero, asi
+// que dos marcadores apretados a la vez en dos aparatos se pisaban y solo
+// sobrevivia el ultimo. Eso pasa todos los dias a la salida del turno --
+// varias personas marcando hora extra al mismo tiempo, cada una en su reloj--
+// y uno de los dos se quedaba sin su hora extra.
+//
+// Cada aparato es una cola independiente, que es lo que fisicamente son.
+// CLAVE_SIN_RELOJ agrupa los fichajes viejos que no tienen MACHINE_IP (46.203
+// en produccion): se comportan como un unico "reloj desconocido", igual que
+// antes de este cambio.
+const CLAVE_SIN_RELOJ = '__sin_reloj__';
+
+function claveReloj(machineIp) {
+  return machineIp == null ? CLAVE_SIN_RELOJ : String(machineIp);
+}
+
+// Que marcador pendiente le corresponde a un fichaje de este reloj. Si de
+// algun lado no se sabe el aparato no se puede afirmar que sean distintos, y
+// se cae al comportamiento de siempre: agregar informacion no puede cambiar
+// lo que ya estaba calculado.
+function marcadorDelReloj(marcadoresPorReloj, machineIp) {
+  const clave = claveReloj(machineIp);
+  if (marcadoresPorReloj.has(clave)) return { clave, marcador: marcadoresPorReloj.get(clave) };
+  // Fichaje sin reloj conocido: le sirve cualquiera. Y un fichaje con reloj
+  // conocido puede consumir un marcador sin reloj conocido, por lo mismo.
+  if (clave === CLAVE_SIN_RELOJ) {
+    const primera = marcadoresPorReloj.keys().next();
+    if (!primera.done) return { clave: primera.value, marcador: marcadoresPorReloj.get(primera.value) };
+  } else if (marcadoresPorReloj.has(CLAVE_SIN_RELOJ)) {
+    return { clave: CLAVE_SIN_RELOJ, marcador: marcadoresPorReloj.get(CLAVE_SIN_RELOJ) };
+  }
+  return null;
+}
+
 function detectMovements(checkins, markerMap, options = {}) {
   const maxMarkerGapMs = options.maxMarkerGapMs ?? DEFAULT_MAX_MARKER_GAP_MS;
   const ownCheckinBounceMs = options.ownCheckinBounceMs ?? DEFAULT_OWN_CHECKIN_BOUNCE_MS;
   const sorted = checkins.slice().sort((a, b) => a.checktime - b.checktime);
-  let lastMarker = null; // { category, direction, markedAt, userId }
+  // Un marcador pendiente POR RELOJ (ver claveReloj/marcadorDelReloj arriba).
+  const marcadoresPorReloj = new Map(); // claveReloj -> { category, direction, markedAt, userId }
   const openEvents = new Map();
   const closedEvents = [];
   const orphanReturns = [];
@@ -70,20 +144,42 @@ function detectMovements(checkins, markerMap, options = {}) {
   for (const row of sorted) {
     const marker = markerMap[row.userId];
     if (marker) {
-      lastMarker = { category: marker.category, direction: marker.direction, markedAt: row.checktime, userId: row.userId };
+      marcadoresPorReloj.set(claveReloj(row.machineIp), {
+        category: marker.category, direction: marker.direction,
+        markedAt: row.checktime, userId: row.userId,
+      });
       continue;
     }
 
     if (!row.employeeId) {
       // Ruido del reloj: USERID que no resuelve a ningun empleado ni marcador.
-      // No se toca lastMarker -- sigue "vivo" hasta el proximo fichaje real
-      // (o hasta vencer, ver maxMarkerGapMs).
+      // No se toca ningun marcador -- siguen "vivos" hasta el proximo fichaje
+      // real de su aparato (o hasta vencer, ver maxMarkerGapMs).
       continue;
     }
 
-    if (lastMarker && (row.checktime - lastMarker.markedAt) > maxMarkerGapMs) {
-      lastMarker = null;
+    // Vencer los marcadores viejos, de todos los relojes.
+    for (const [clave, m] of marcadoresPorReloj) {
+      if ((row.checktime - m.markedAt) > maxMarkerGapMs) marcadoresPorReloj.delete(clave);
     }
+
+    // El marcador pendiente DE ESTE RELOJ, si hay alguno. Los de los otros
+    // aparatos quedan intactos, esperando al fichaje que sí les corresponde.
+    //
+    // Una version anterior de este arreglo MATABA el marcador al ver un
+    // fichaje de otro reloj, y estaba mal. Lo mostraron los datos: en 276 de
+    // los 277 casos cruzados de produccion, quien ficho nunca en su vida uso
+    // el reloj del marcador (ej.: marcador en .33 y el que ficho tiene 241
+    // fichajes en .30 y CERO en .33). O sea que el marcador SI era de
+    // alguien: de alguien parado frente al otro aparato, cuyo fichaje llega
+    // un instante despues. Matarlo le quitaba la hora extra tambien a esa
+    // persona, que no hizo nada mal.
+    //
+    // Y tampoco se puede cortar el procesamiento de la fila aca: este fichaje
+    // puede estar CERRANDO una salida que el propio empleado tenia abierta, y
+    // eso no tiene nada que ver con el marcador pendiente de otro aparato.
+    const pendiente = marcadorDelReloj(marcadoresPorReloj, row.machineIp ?? null);
+    const marcadorAplicable = pendiente ? pendiente.marcador : null;
 
     const open = openEvents.get(row.employeeId);
     if (open) {
@@ -103,10 +199,12 @@ function detectMovements(checkins, markerMap, options = {}) {
         timeOut: open.timeOut,
         timeIn: row.checktime,
         salidaMarkerUserId: open.salidaMarkerUserId,
-        regresoMarkerUserId: lastMarker ? lastMarker.userId : null
+        regresoMarkerUserId: marcadorAplicable ? marcadorAplicable.userId : null
       });
       openEvents.delete(row.employeeId);
-      lastMarker = null;
+      // Solo se consume el marcador de ESTE reloj: los de los otros siguen
+      // esperando a quien los apretó.
+      if (pendiente) marcadoresPorReloj.delete(pendiente.clave);
       lastRealCheckinByEmployeeId.set(row.employeeId, row.checktime);
       continue;
     }
@@ -122,21 +220,23 @@ function detectMovements(checkins, markerMap, options = {}) {
       continue;
     }
 
-    if (lastMarker && lastMarker.direction === 'SALIDA') {
+    if (marcadorAplicable && marcadorAplicable.direction === 'SALIDA') {
       openEvents.set(row.employeeId, {
-        category: lastMarker.category,
+        category: marcadorAplicable.category,
         timeOut: row.checktime,
-        salidaMarkerUserId: lastMarker.userId
+        salidaMarkerUserId: marcadorAplicable.userId
       });
-    } else if (lastMarker && lastMarker.direction === 'REGRESO') {
+    } else if (marcadorAplicable && marcadorAplicable.direction === 'REGRESO') {
       orphanReturns.push({
         employeeId: row.employeeId,
-        category: lastMarker.category,
+        category: marcadorAplicable.category,
         timeIn: row.checktime,
-        regresoMarkerUserId: lastMarker.userId
+        regresoMarkerUserId: marcadorAplicable.userId
       });
     }
-    lastMarker = null;
+    // Se consume SOLO el de este reloj. Si no habia ninguno para este
+    // aparato, los de los otros quedan intactos.
+    if (pendiente) marcadoresPorReloj.delete(pendiente.clave);
   }
 
   return { closedEvents, openEvents, orphanReturns };

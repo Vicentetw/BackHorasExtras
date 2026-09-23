@@ -3187,7 +3187,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
 
     const checkinsRangeParams = [from, exclusiveEndDateStr];
     let checkinsRangeQuery = `
-      SELECT DATE(c.CHECKTIME) AS date, c.CHECKTIME, c.USERID, c.tenant_id
+      SELECT DATE(c.CHECKTIME) AS date, c.CHECKTIME, c.USERID, c.tenant_id, c.MACHINE_IP
       FROM Checkins c
       WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?`;
     if (tenantId !== null) {
@@ -3391,7 +3391,10 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       checkinsByDateForDetection.get(c.date).push({
         checktime: new Date(c.CHECKTIME.replace(' ', 'T')),
         userId: c.userId,
-        employeeId: c.employeeId !== null ? String(c.employeeId) : null
+        employeeId: c.employeeId !== null ? String(c.employeeId) : null,
+        // De que reloj vino: un marcador solo lo puede consumir un fichaje del
+        // MISMO aparato (ver mismoReloj en movementsCalculations.js).
+        machineIp: c.MACHINE_IP ?? null
       });
     });
 
@@ -4079,7 +4082,8 @@ async function fetchMovementCheckins(fromDate, toDateExclusive, tenantId) {
   // movimiento a la empresa equivocada antes de llegar a esta version.
   const params = [fromDate, toDateExclusive];
   let query = `
-    SELECT c.CHECKTIME AS checktime, c.USERID AS rawUserId, e.employee_id AS employeeId
+    SELECT c.CHECKTIME AS checktime, c.USERID AS rawUserId, e.employee_id AS employeeId,
+           c.MACHINE_IP AS machineIp
     FROM Checkins c
     LEFT JOIN users u
       ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
@@ -4099,7 +4103,10 @@ async function fetchMovementCheckins(fromDate, toDateExclusive, tenantId) {
     // parsea acá, en el único lugar que toca la fila cruda de la DB.
     checktime: new Date(r.checktime.replace(' ', 'T')),
     userId: r.rawUserId,
-    employeeId: r.employeeId !== null ? String(r.employeeId) : null
+    employeeId: r.employeeId !== null ? String(r.employeeId) : null,
+    // De que reloj vino: un marcador solo lo puede consumir un fichaje del
+    // MISMO aparato (ver mismoReloj en movementsCalculations.js).
+    machineIp: r.machineIp ?? null
   }));
 }
 

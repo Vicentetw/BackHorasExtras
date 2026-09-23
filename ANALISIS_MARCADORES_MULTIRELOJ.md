@@ -158,7 +158,44 @@ Dos caminos distintos, y conviene no confundirlos:
 
 ---
 
-## Lo que conviene hacer
+## ✅ RESUELTO (2026-09-23)
+
+Implementado, con **dos correcciones sobre el diseño que se propone más
+abajo** — las dos las encontraron los datos y los tests, no el razonamiento:
+
+**1. Un marcador de otro reloj no se descarta: se saltea.** La primera versión
+lo mataba. Los datos la desmintieron: en **276 de los 277** casos cruzados,
+quien fichó **nunca usó el reloj del marcador** (ejemplo: marcador en `.33` y
+el que fichó tiene 241 fichajes en `.30` y **cero** en `.33`). O sea que el
+marcador *sí era de alguien* — de quien estaba parado frente al otro aparato.
+Matarlo le quitaba la hora extra también a esa persona.
+
+**2. Un marcador pendiente POR RELOJ, no uno solo.** `lastMarker` era un único
+casillero: dos personas marcando hora extra al mismo tiempo, cada una en su
+aparato, se pisaban y una perdía la suya. Apareció al escribir ese caso como
+test. Cada reloj es una cola independiente, que es lo que físicamente son.
+
+**Impacto medido contra producción** (28/05 al 23/09, con `detectMovements`
+corrido dos veces sobre los mismos datos):
+
+| | |
+|---|---|
+| Movimientos antes | 3.047 |
+| Movimientos después | 2.923 |
+| Dejan de generarse (atribuciones cruzadas) | 200 |
+| **Aparecen nuevos** (horas extra recuperadas) | **76** |
+
+Los 76 nuevos son la validación: con la primera versión eran 8.
+
+Los 46.203 fichajes viejos sin `MACHINE_IP` no cambian de comportamiento: si
+de un lado no se sabe el reloj, no se puede afirmar que sean distintos.
+
+Tests: `test/marcadores-mismo-reloj.test.js` (13), incluidos los experimentos
+que propone este mismo documento más abajo. Suite completa: 601 pasan.
+
+---
+
+## Lo que se proponía (queda como registro del razonamiento)
 
 ### Primero: un marcador solo lo puede consumir un fichaje del MISMO reloj
 
