@@ -105,6 +105,47 @@ async function getPreapproval({ accessToken, preapprovalId, fetchImpl = fetch })
   return json;
 }
 
+// ============================================================================
+// Cancelar la suscripcion EN MercadoPago
+// ============================================================================
+//
+// Hueco real encontrado el 2026-09-23: aprobar una baja desde la pantalla
+// solo ponia status='canceled' en NUESTRA base. A MercadoPago nunca se le
+// avisaba, asi que el debito automatico seguia corriendo y al cliente le
+// seguian cobrando todos los meses despues de haberse dado de baja.
+//
+// La API es PUT /preapproval/{id} con status 'cancelled' (con dos eles, asi
+// lo escribe MercadoPago).
+//
+// Que una suscripcion YA este cancelada no es un error: si alguien la
+// cancelo desde la app de MercadoPago y despues se aprueba la baja aca, el
+// resultado buscado ya se cumplio. Se devuelve yaEstaba para que el llamador
+// pueda seguir sin tratarlo como falla.
+async function cancelPreapproval({ accessToken, preapprovalId, fetchImpl = fetch }) {
+  const res = await fetchImpl(`${MP_API_BASE}/preapproval/${preapprovalId}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ status: 'cancelled' }),
+  });
+  const json = await res.json().catch(() => ({}));
+
+  if (res.ok) return { ok: true, yaEstaba: json.status === 'cancelled' && false, status: json.status };
+
+  // MercadoPago devuelve 400 cuando ya esta cancelada. No es un fallo.
+  const mensaje = String(json.message || '').toLowerCase();
+  if (mensaje.includes('cancelled') || mensaje.includes('cancelada')) {
+    return { ok: true, yaEstaba: true, status: 'cancelled' };
+  }
+
+  const err = new Error(json.message || 'Error cancelando la suscripción en MercadoPago');
+  err.mpResponse = json;
+  err.status = res.status;
+  throw err;
+}
+
 async function getPayment({ accessToken, paymentId, fetchImpl = fetch }) {
   const res = await fetchImpl(`${MP_API_BASE}/v1/payments/${paymentId}`, {
     headers: { Authorization: `Bearer ${accessToken}` }
@@ -158,6 +199,7 @@ function verifyWebhookSignature({ xSignature, xRequestId, dataId, secret }) {
 module.exports = {
   createSubscriptionCheckout,
   getPreapproval,
+  cancelPreapproval,
   getPayment,
   mapPreapprovalStatus,
   verifyWebhookSignature

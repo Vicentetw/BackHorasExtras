@@ -468,8 +468,48 @@ module.exports = function (db) {
       const { tenantId } = req.params;
       const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
       if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada' });
+
+      // HUECO REAL encontrado el 2026-09-23: esto solo ponia
+      // status='canceled' en NUESTRA base. A MercadoPago nunca se le avisaba,
+      // asi que el debito automatico seguia corriendo y al cliente le
+      // seguian cobrando todos los meses despues de darse de baja.
+      //
+      // El orden importa: PRIMERO se cancela en MercadoPago y recien despues
+      // se marca aca. Si se hiciera al reves y MercadoPago fallara, la
+      // pantalla diria "dada de baja" mientras al cliente le siguen
+      // debitando -- que es exactamente el problema que esto viene a
+      // arreglar, pero ahora invisible.
+      let avisoMercadoPago = null;
+      if (subscription.mercadopago_subscription_id) {
+        const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+        if (!accessToken) {
+          return res.status(503).json({
+            error: 'Esta suscripción se cobra por MercadoPago y falta MERCADOPAGO_ACCESS_TOKEN en el servidor. ' +
+                   'No se dio de baja: si se marcara acá sin cancelarla allá, al cliente le seguirían cobrando.'
+          });
+        }
+        try {
+          const r = await mp.cancelPreapproval({
+            accessToken, preapprovalId: subscription.mercadopago_subscription_id
+          });
+          avisoMercadoPago = r.yaEstaba
+            ? 'La suscripción ya estaba cancelada en MercadoPago.'
+            : 'Débito automático cancelado en MercadoPago.';
+        } catch (err) {
+          console.error('ERROR cancelando en MercadoPago:', err.message, err.mpResponse || '');
+          return res.status(502).json({
+            error: 'No se pudo cancelar el débito automático en MercadoPago: ' + err.message +
+                   '. NO se dio de baja acá tampoco, para que no quede marcada como baja mientras le siguen cobrando.'
+          });
+        }
+      }
+
       await billingRepo.approveCancellation(tenantId, db);
-      res.json({ ok: true });
+      await avisos.avisar('suscripcion', {
+        empresa: subscription.tenant_name || await avisos.nombreDeEmpresa(tenantId, db),
+        detalle: 'Baja aprobada.' + (avisoMercadoPago ? ' ' + avisoMercadoPago : ''),
+      }, db);
+      res.json({ ok: true, mercadopago: avisoMercadoPago });
     } catch (err) {
       console.error('ERROR approving cancellation:', err);
       res.status(500).json({ error: 'Error al aprobar la baja' });
