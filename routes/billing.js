@@ -3,6 +3,7 @@ const { requireSuperadmin, resolveTenantId } = require('../appUserMiddleware');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
 const { computeInvoiceAmount, resolveEffectiveStatus, DEFAULT_GRACE_DAYS, computeFreeTrialPeriod } = require('../motor-laboral/services/billingCalculations');
 const mp = require('../motor-laboral/services/mercadopagoService');
+const avisos = require('../avisos');
 
 // Fase 9 (venta): planes configurables (base + precio por empleado) +
 // suscripcion por empresa + pagos manuales o por MercadoPago
@@ -19,6 +20,82 @@ module.exports = function (db) {
     if (req.appUser?.isSuperadmin) return true;
     return req.appUser?.tenantId === Number(tenantId);
   }
+
+  // --- La campanita -------------------------------------------------------
+  // Lo que alimenta el contador de pendientes de la barra superior. Es solo
+  // superadmin porque son pedidos dirigidos A el: un admin de empresa ve el
+  // estado de SU pedido en su propia pantalla, no el de los demas.
+  //
+  // Devuelve el detalle y no solo el numero: un "3" pelado obliga a entrar
+  // igual, que es justo lo que esto viene a evitar.
+  router.get('/pendientes', requireSuperadmin, async (req, res) => {
+    try {
+      const [conteo, detalle] = await Promise.all([
+        avisos.contarPendientes(db),
+        avisos.listarPendientes(db),
+      ]);
+      res.json({ ...conteo, detalle });
+    } catch (err) {
+      console.error('ERROR contando pendientes:', err);
+      res.status(500).json({ error: 'Error al contar los pendientes' });
+    }
+  });
+
+  // --- A quien se le avisa por Telegram -----------------------------------
+  // El token del bot es un secreto y vive en una variable de entorno. Los
+  // destinatarios NO son secretos y cambian seguido, asi que se editan desde
+  // la pantalla, sin tocar Render ni volver a desplegar.
+  router.get('/avisos/telegram', requireSuperadmin, async (req, res) => {
+    try {
+      res.json({
+        destinatarios: await avisos.destinatariosTelegram(db),
+        botConfigurado: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+      });
+    } catch (err) {
+      console.error('ERROR leyendo destinatarios de Telegram:', err);
+      res.status(500).json({ error: 'Error al leer los destinatarios' });
+    }
+  });
+
+  router.put('/avisos/telegram', requireSuperadmin, async (req, res) => {
+    try {
+      const { destinatarios } = req.body;
+      if (!Array.isArray(destinatarios)) {
+        return res.status(400).json({ error: 'destinatarios debe ser una lista' });
+      }
+      // Un chat_id de Telegram es un numero entero, y puede ser negativo
+      // (los grupos lo son). Se valida antes de guardar: un valor mal escrito
+      // no da error al guardarlo, falla despues y en silencio, el dia que
+      // hacia falta el aviso.
+      const invalidos = destinatarios.filter((d) => !/^-?\d+$/.test(String(d).trim()));
+      if (invalidos.length) {
+        return res.status(400).json({
+          error: `Estos no parecen un chat_id de Telegram (tiene que ser un número): ${invalidos.join(', ')}`
+        });
+      }
+      res.json({ destinatarios: await avisos.guardarDestinatariosTelegram(destinatarios, db) });
+    } catch (err) {
+      console.error('ERROR guardando destinatarios de Telegram:', err);
+      res.status(500).json({ error: 'Error al guardar los destinatarios' });
+    }
+  });
+
+  // Mandar un mensaje de prueba. Existe porque configurar un bot tiene varios
+  // pasos fuera del sistema (crearlo, hablarle, sacar el chat_id) y sin esto
+  // uno se entera de que algo quedo mal recien cuando se pierde un aviso real.
+  router.post('/avisos/telegram/probar', requireSuperadmin, async (req, res) => {
+    try {
+      const r = await avisos.enviarTelegram(
+        '✅ Prueba de Horas Dedica. Si ves esto, los avisos están funcionando.', db);
+      if (r.enviados === 0) {
+        return res.status(400).json({ error: `No se pudo enviar: ${r.motivo || 'ningún destinatario respondió'}` });
+      }
+      res.json({ ok: true, enviados: r.enviados });
+    } catch (err) {
+      console.error('ERROR probando Telegram:', err);
+      res.status(500).json({ error: 'Error al enviar la prueba' });
+    }
+  });
 
   router.get('/plans', async (req, res) => {
     try {
@@ -361,6 +438,7 @@ module.exports = function (db) {
       }
 
       await billingRepo.requestCancellation(tenantId, req.appUser?.id || null, db);
+      await avisos.avisar('baja', { empresa: subscription.tenant_name }, db);
       res.json({ ok: true });
     } catch (err) {
       console.error('ERROR requesting cancellation:', err);
@@ -410,6 +488,9 @@ module.exports = function (db) {
       const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
       if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada' });
       await billingRepo.requestPaymentLink(tenantId, db);
+      // El aviso va DESPUES de guardar y su resultado no se mira: si Telegram
+      // falla, el pedido tiene que quedar igual. Ver avisos.js.
+      await avisos.avisar('pago', { empresa: subscription.tenant_name }, db);
       res.json({ ok: true });
     } catch (err) {
       console.error('ERROR requesting payment link:', err);
@@ -442,6 +523,15 @@ module.exports = function (db) {
         employeeCount: employee_count,
         clockCount: clock_count,
         scheduleType: schedule_type
+      }, db);
+      const [[empresa]] = await db.query('SELECT name FROM tenants WHERE id = ?', [tenantId]);
+      await avisos.avisar('plan', {
+        empresa: empresa?.name,
+        detalle: [
+          employee_count != null ? `${employee_count} empleados` : null,
+          clock_count != null ? `${clock_count} reloj(es)` : null,
+          phone ? `Tel: ${phone}` : null,
+        ].filter(Boolean).join(' · ') || null,
       }, db);
       res.status(201).json({ ok: true });
     } catch (err) {
