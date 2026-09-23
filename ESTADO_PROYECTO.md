@@ -239,10 +239,17 @@ el cliente nuevo no los ve nunca, porque cada consulta filtra por
 ### Cuándo SÍ haría falta un deploy aparte
 
 Solo si un cliente exige por contrato que sus datos no compartan base con
-otros. Ahí sí: otro servicio en Render apuntando al mismo repo, otra base, y
-correr todas las migraciones de `migrations/` en orden. Es una decisión
-comercial, no técnica — y multiplica el mantenimiento por la cantidad de
-clientes.
+otros, si hace falta un ambiente de prueba/demo, o si se muda todo a otra
+cuenta. Es una decisión comercial, no técnica — y multiplica el
+mantenimiento por la cantidad de instalaciones.
+
+**El instructivo completo de los 3 servidores (Clever Cloud → Render →
+Firebase) está en `REPLICAR_INSTALACION.md`**, con las dos trampas que más
+fácil se pasan por alto: que Firebase son **dos proyectos distintos**
+(hosting `horasdedicacionavp`, autenticación `asistenciatw`, y el
+`FIREBASE_SERVICE_ACCOUNT` del backend tiene que ser del **segundo**), y que
+si falta `API_KEY` el servidor arranca igual con la capa de clave de
+aplicación **desactivada y en silencio** (`security.js:33`).
 
 ## Usuarios marcadores: creación automática en el reloj (2026-09-22)
 
