@@ -150,10 +150,28 @@ const TEXTOS = {
   plan: (e) => `🆕 <b>${e}</b> pidió un plan.`,
   pago: (e) => `💳 <b>${e}</b> pidió el link de pago.`,
   baja: (e) => `⚠️ <b>${e}</b> pidió la baja.`,
+  // Los de abajo NO son pedidos: son cosas que ya pasaron y de las que hay
+  // que enterarse igual. Llegan por el webhook de MercadoPago, o sea sin que
+  // nadie las haya disparado desde la pantalla -- hasta ahora quedaban
+  // unicamente en un log del servidor que nadie mira.
+  cobrado: (e) => `💰 <b>${e}</b> pagó.`,
+  suscripcion: (e) => `🔄 Cambió el estado de la suscripción de <b>${e}</b>.`,
 };
 
 // Se llama DESPUES de guardar el pedido, nunca antes, y su resultado no se
 // mira: ver la regla de oro arriba.
+// El nombre de la empresa, para que el aviso diga "AVP pagó" y no "la
+// empresa 6 pagó". Si falla, no importa: se avisa igual con un texto generico
+// -- un problema para leer el nombre no puede impedir el aviso de un pago.
+async function nombreDeEmpresa(tenantId, db) {
+  try {
+    const [[fila]] = await db.query('SELECT name FROM tenants WHERE id = ?', [tenantId]);
+    return fila ? fila.name : `Empresa ${tenantId}`;
+  } catch {
+    return `Empresa ${tenantId}`;
+  }
+}
+
 async function avisar(tipo, { empresa, detalle } = {}, db) {
   try {
     const arma = TEXTOS[tipo];
@@ -170,6 +188,7 @@ async function avisar(tipo, { empresa, detalle } = {}, db) {
 module.exports = {
   contarPendientes,
   listarPendientes,
+  nombreDeEmpresa,
   destinatariosTelegram,
   guardarDestinatariosTelegram,
   enviarTelegram,

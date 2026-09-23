@@ -1,6 +1,7 @@
 const express = require('express');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
 const mp = require('../motor-laboral/services/mercadopagoService');
+const avisos = require('../avisos');
 
 // Fase 9b: recibe las notificaciones de MercadoPago cuando una suscripcion
 // se autoriza (subscription_preapproval) o se cobra una cuota recurrente
@@ -65,6 +66,12 @@ module.exports = function (db, options = {}) {
         if (Number.isFinite(tenantId) && newStatus) {
           await billingRepo.updateSubscriptionStatus(tenantId, newStatus, db);
           console.log(`[MercadoPago webhook] tenant ${tenantId}: suscripción ${preapproval.status} -> status '${newStatus}'`);
+          // Un cambio de estado que llega solo: nadie lo disparo desde la
+          // pantalla y hasta ahora quedaba unicamente en este log.
+          await avisos.avisar('suscripcion', {
+            empresa: await avisos.nombreDeEmpresa(tenantId, db),
+            detalle: `MercadoPago dice: ${preapproval.status} → queda en "${newStatus}".`,
+          }, db);
         } else {
           console.warn('[MercadoPago webhook] preapproval sin external_reference valido o status sin mapeo automatico', {
             preapprovalId: dataId, externalReference: preapproval.external_reference, mpStatus: preapproval.status
@@ -93,6 +100,13 @@ module.exports = function (db, options = {}) {
             recordedBy: null
           }, db);
           console.log(`[MercadoPago webhook] tenant ${tenantId}: cobro automático aprobado, período extendido hasta ${periodEnd.toISOString().slice(0, 10)}`);
+          // EL AVISO QUE MAS FALTABA: el cobro por MercadoPago entra solo,
+          // sin que nadie toque nada. Antes solo quedaba en este log.
+          await avisos.avisar('cobrado', {
+            empresa: await avisos.nombreDeEmpresa(tenantId, db),
+            detalle: `${payment.currency_id} ${payment.transaction_amount} · ` +
+                     `período hasta ${periodEnd.toISOString().slice(0, 10)}`,
+          }, db);
         } else {
           console.warn('[MercadoPago webhook] pago sin external_reference válido o no aprobado', {
             paymentId: dataId, externalReference: payment.external_reference, status: payment.status
