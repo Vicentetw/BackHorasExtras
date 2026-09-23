@@ -130,15 +130,92 @@ el disco.
 
 ---
 
+## 6. La carpeta `legacy/` del frontend — retirada entera (2026-09-23)
+
+Al mover los archivos del monorepo viejo al repo del frontend (punto 5) quedó
+una carpeta `legacy/` de 16 archivos y 222 KB. Revisada archivo por archivo,
+**no quedaba nada vivo**.
+
+### `START.html` — una página de inicio que mentía
+
+Era la última página HTML plana en pie: una pantalla de "Acceso Rápido" con
+tarjetas. El problema no es que fuera vieja, es que **afirmaba cosas falsas** a
+quien la abriera:
+
+- *"Base de datos limpia (480 usuarios, 57 empleados)"* — números fijos,
+  escritos a mano hace meses.
+- *"Backend Node.js funcionando (puerto 3000)"* — localhost, sin ningún
+  sentido en el sitio publicado.
+- Un botón "Descargar" apuntando a `template-empleados-ejemplo.xlsx`, que **no
+  existe en ninguna parte**.
+- Un "Flujo Recomendado" que manda a `matching-dashboard-v2.html` — ni existe
+  ni tiene redirect (el redirect es para `matching-dashboard.html`, sin `-v2`).
+- Cuatro documentos citados (`INSTRUCCIONES-v2.md`, `REDESIGN-v2-SUMMARY.md`,
+  `generate_example.py`…) que tampoco existen.
+
+Dos de sus tres tarjetas funcionaban de casualidad, porque `app.routes.ts` ya
+tenía redirects para esas URLs viejas. Una estaba rota.
+
+Se retiró y se agregó `{ path: 'START.html', redirectTo: '' }`, igual que las
+otras once páginas viejas. Quien tenga el link guardado cae en el inicio real.
+
+### `template-empleados-matching.csv` — huérfana **y mal formada**
+
+Nada en el código de Angular la referencia: el diálogo de importación de
+`/empleados` **genera su propia plantilla** en memoria
+(`import-dialog.ts:368`, `downloadTemplate()`), con los mismos tres empleados
+de ejemplo pero en `.xlsx`.
+
+Y además estaba rota como CSV. El encabezado declara 11 columnas, pero el
+campo `nombre` trae una coma sin comillas:
+
+```
+employee_id,nombre,documento,...        <- 11 columnas
+10000,CERVO, Agustín Julián,12345678,...  <- 12 campos
+```
+
+Todas las filas quedan corridas un lugar. Quien la hubiera usado de modelo se
+llevaba un archivo que no importa, o peor, que importa las columnas
+desplazadas. El `.xlsx` que genera Angular no tiene el problema, porque la
+librería escapa el campo sola.
+
+### El resto: 197 KB de código de páginas que ya no existen
+
+De los 16 archivos, `START.html` solo usaba tres (`css/auth.css`,
+`js/firebase-config.js`, `js/firebase-auth.js`). Los otros doce eran de las
+páginas retiradas en la Fase 6: `js/app.js` (96,9 KB), `js/motor-laboral-admin.js`
+(31,8 KB), `js/employee-scheduler.js` (23,6 KB), `js/config.js` y siete hojas
+de estilo.
+
+Al no quedar nada que copiar, `copy-legacy-assets.js` dejó de tener sentido y
+también se retiró: `build:deploy` era `ng build` más ese paso, así que los
+scripts de deploy ahora llaman directamente a `build`.
+
 ## Resumen
 
-| Grupo | Cuántos | Recomendación |
+| Grupo | Cuántos | Estado |
 |---|---|---|
-| Muertos de verdad | 10 archivos (~42 KB) | borrar |
-| Bloqueados pero presentes | 4 archivos | borrar, ahora que el motivo está escrito acá |
-| Snapshot desactualizado | 1 archivo | borrar |
-| Dependencia con el repo obsoleto | 1 línea | **arreglar antes de borrar el monorepo** |
-| Herramientas (no obsoletas) | 7 archivos | dejar |
+| Muertos de verdad (backend) | 10 archivos (~42 KB) | ✅ retirados |
+| Bloqueados pero presentes | 4 archivos | ✅ retirados |
+| Snapshot desactualizado | 1 archivo | ✅ retirado |
+| Dependencia con el repo obsoleto | 1 línea | ✅ arreglada (ruta relativa) |
+| `pass-user.py` publicado | 1 archivo | ✅ retirado y republicado |
+| Carpeta `legacy/` del frontend | 17 archivos (222 KB) | ✅ retirada entera |
+| Herramientas (no obsoletas) | 7 archivos | se quedan |
 
-Lo único con urgencia es el punto 5: no es limpieza, es algo que se va a
-romper. El resto es higiene.
+**Total retirado: 33 archivos.** Todos están en
+`C:\angular\horasdedica_archvos_eliminados` y en el historial de git.
+
+Dos de estos no eran higiene sino cosas que iban a fallar: la ruta absoluta
+al monorepo (habría roto el deploy del frontend el día que se borrara ese
+repo) y `pass-user.py` (un script que imprime las contraseñas del reloj,
+accesible públicamente en el sitio).
+
+## Lo que queda sin resolver
+
+El monorepo `C:\angular\horasDedicacionOnline` ya no tiene ninguna
+dependencia técnica con los repos vivos, así que **se puede borrar o
+renombrar**. Antes de hacerlo conviene mirar su carpeta `public/`: todavía
+tiene 11 HTML viejos y una copia del código fuente del backend en
+`public/motor-laboral/` (que llegó a estar expuesta públicamente en el deploy
+viejo).
