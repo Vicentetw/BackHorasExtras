@@ -243,6 +243,27 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
       ? req.appUser.tenantId
       : (tenant_id || null);
 
+    // Bug real (2026-09-23): un empleado SIN empresa no existe para el resto
+    // del sistema. Se descubrio con el legajo 105 "Aguilar Grabriel", creado
+    // por el superadmin sin elegir empresa: fichaba 240 veces y la pantalla
+    // de Matching no lo proponia nunca para vincular, porque ese JOIN exige
+    // `u.tenant_id = e.tenant_id` y en SQL `6 = NULL` no es falso, es NULL --
+    // o sea que no empareja con NINGUN usuario de reloj, jamas. El empleado
+    // se ve en el listado, parece cargado, y sin embargo sus fichadas no
+    // pueden llegar a ningun informe.
+    //
+    // Peor todavia: doce lineas mas abajo, el tope de empleados del plan solo
+    // se controla `if (effectiveTenantId != null)`. Un alta sin empresa se
+    // saltea el limite contratado sin que nadie se entere.
+    //
+    // No hay ningun caso valido de "empleado de ninguna empresa". El
+    // superadmin tiene que decir de cual es.
+    if (effectiveTenantId == null) {
+      return res.status(400).json({
+        error: 'Elegí a qué empresa pertenece el empleado. Un empleado sin empresa no aparece en los informes ni se puede vincular con su usuario del reloj.'
+      });
+    }
+
     // Fase 15 -- tope de empleados del plan contratado ("como una
     // telefonia"): hueco real encontrado por el superadmin, se pudo cargar
     // un empleado de mas de los que el plan de prueba permitia sin ningun

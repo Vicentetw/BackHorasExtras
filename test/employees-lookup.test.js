@@ -4,23 +4,42 @@
 // pero el backend nunca lo soporto -- devolvia la primera pagina sin
 // filtrar, asi que el chequeo terminaba comparando contra un empleado
 // cualquiera, no contra el legajo real. Ver routes/employees.js.
+//
+// 2026-09-23: este test creaba su empleado SIN empresa, que era posible
+// porque el alta lo permitia. Ahora no: un empleado sin empresa no empareja
+// con ningun usuario de reloj (el JOIN compara tenant_id, y `6 = NULL` en SQL
+// no da falso sino NULL), asi que el endpoint lo rechaza -- ver
+// test/employee-requires-tenant.test.js. El test se adapta creando su propia
+// empresa descartable, que es lo que tendria que haber hecho desde el
+// principio; lo que prueba (buscar por legajo exacto) no cambia.
 require('dotenv').config();
-const { test, after } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const UID = 'test-employees-lookup-ci';
+const TENANT_ID = 999934;
 // employee_id es INT en la base -- nada de prefijos alfabeticos.
 const EMPLOYEE_ID = String(900000000 + (Date.now() % 100000000));
 let createdId = null;
+
+before(async () => {
+  await db.query(
+    `INSERT INTO tenants (id, name, code) VALUES (?, 'Tenant Lookup (test)', 'tenant-lookup-test')
+     ON DUPLICATE KEY UPDATE name = VALUES(name)`, [TENANT_ID]);
+});
 
 after(async () => {
   if (createdId) {
     const headers = await getTestAuthHeaders(UID);
     await fetch(`${BASE_URL}/api/employees/${createdId}`, { method: 'DELETE', headers }).catch(() => {});
   }
+  await db.query('DELETE FROM employees WHERE tenant_id = ?', [TENANT_ID]);
   await deleteTestUser(UID);
+  await db.query('DELETE FROM tenants WHERE id = ?', [TENANT_ID]);
+  await db.end().catch(() => {});
   await closeDb();
 });
 
@@ -36,7 +55,10 @@ test('GET /api/employees?employee_id=X devuelve exactamente ese legajo, no el pr
   const created = await fetch(`${BASE_URL}/api/employees`, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ employee_id: EMPLOYEE_ID, nombre: 'CI Lookup Test', activo: false }),
+    body: JSON.stringify({
+      employee_id: EMPLOYEE_ID, nombre: 'CI Lookup Test', activo: false,
+      tenant_id: TENANT_ID,
+    }),
   });
   const createdJson = await created.json();
   assert.equal(created.status, 200, JSON.stringify(createdJson));
