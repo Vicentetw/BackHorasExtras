@@ -30,11 +30,15 @@ module.exports = function (db) {
   // igual, que es justo lo que esto viene a evitar.
   router.get('/pendientes', requireSuperadmin, async (req, res) => {
     try {
-      const [conteo, detalle] = await Promise.all([
+      const [conteo, detalle, novedades] = await Promise.all([
         avisos.contarPendientes(db),
         avisos.listarPendientes(db),
+        avisos.listarNovedades(db),
       ]);
-      res.json({ ...conteo, detalle });
+      // `total` cuenta SOLO los pendientes, a propósito: es lo que hay para
+      // atender. Las novedades ya pasaron y no requieren nada -- si sumaran
+      // al contador, el número dejaría de querer decir algo.
+      res.json({ ...conteo, detalle, novedades });
     } catch (err) {
       console.error('ERROR contando pendientes:', err);
       res.status(500).json({ error: 'Error al contar los pendientes' });
@@ -423,6 +427,62 @@ module.exports = function (db) {
   // apruebe (ver approve-cancellation abajo). canViewTenant permite tanto
   // al dueño del tenant como a un superadmin -- en la practica solo lo va
   // a usar el cliente, pero no hace falta una regla aparte para eso.
+  // --- Link de pago UNICO (no suscripción) ---------------------------------
+  // Pedido real: "por si quieren pagar todo el año o ir pagando mensual pero
+  // no suscripción". Hay clientes que no quieren dejar la tarjeta para un
+  // débito automático.
+  //
+  // A diferencia del checkout de suscripción, esto NO deja nada vivo después
+  // del pago: se cobra una vez y se termina. Por eso tampoco toca
+  // `mercadopago_subscription_id` -- si lo pisara, el día que hubiera que
+  // cancelar un débito automático se cancelaría el link equivocado.
+  router.post('/subscriptions/:tenantId/mercadopago-payment-link', requireSuperadmin, async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { amount, months, currency_id, payer_email } = req.body;
+
+      if (!amount || Number(amount) <= 0) {
+        return res.status(400).json({ error: 'amount es requerido y tiene que ser mayor a cero' });
+      }
+      const meses = months === undefined ? 1 : Number(months);
+      if (!Number.isInteger(meses) || meses < 1 || meses > 36) {
+        return res.status(400).json({ error: 'months tiene que ser un número entero entre 1 y 36' });
+      }
+
+      const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+      if (!accessToken) {
+        return res.status(503).json({ error: 'MERCADOPAGO_ACCESS_TOKEN no está configurado en el servidor' });
+      }
+
+      const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
+      if (!subscription) {
+        return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada -- asignale un plan primero' });
+      }
+
+      const backUrl = `${process.env.FRONTEND_URL || 'https://horasdedicacionavp.web.app'}/facturacion`;
+      const link = await mp.createOneTimePaymentLink({
+        accessToken,
+        tenantId,
+        tenantName: subscription.tenant_name || `Empresa ${tenantId}`,
+        amount: Number(amount),
+        currencyId: currency_id || 'ARS',
+        backUrl,
+        mesesQueCubre: meses,
+        payerEmail: payer_email || undefined,
+      });
+
+      // Se guarda el link para poder volver a copiarlo sin generar otro --
+      // generar uno nuevo cada vez deja links viejos dando vueltas, y el
+      // cliente puede terminar pagando por el que no era.
+      await billingRepo.recordCheckoutLink(tenantId, link.initPoint, db);
+
+      res.json({ ok: true, checkoutUrl: link.initPoint, preferenceId: link.id, mesesQueCubre: meses });
+    } catch (err) {
+      console.error('ERROR creando link de pago único:', err);
+      res.status(502).json({ error: 'No se pudo crear el link de pago: ' + err.message });
+    }
+  });
+
   router.post('/subscriptions/:tenantId/request-cancellation', async (req, res) => {
     try {
       const { tenantId } = req.params;

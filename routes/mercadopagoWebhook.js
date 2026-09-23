@@ -77,6 +77,56 @@ module.exports = function (db, options = {}) {
             preapprovalId: dataId, externalReference: preapproval.external_reference, mpStatus: preapproval.status
           });
         }
+      } else if ((type === 'payment' || type === 'payment.updated') && dataId) {
+        // PAGO UNICO (no suscripcion). Llega con type 'payment', distinto del
+        // cobro recurrente de abajo. Es el que se genera desde
+        // /mercadopago-payment-link, para el cliente que no quiere dejar la
+        // tarjeta en un debito automatico.
+        //
+        // Cuantos meses cubre viene en metadata, puesto al crear el link: sin
+        // eso habria que deducirlo del monto, que es justo la clase de
+        // suposicion que termina en un periodo mal extendido.
+        const payment = await mp.getPayment({ accessToken, paymentId: dataId });
+        const tenantId = Number(payment.external_reference);
+        if (Number.isFinite(tenantId) && payment.status === 'approved') {
+          const meses = Number(payment.metadata?.meses_que_cubre) || 1;
+
+          // El periodo nuevo arranca cuando termina el vigente, no hoy: si
+          // paga antes de vencer, no se le regalan los dias que le quedaban.
+          const sub = await billingRepo.getSubscriptionByTenant(tenantId, db);
+          const hoy = new Date();
+          const finActual = sub && sub.current_period_end ? new Date(sub.current_period_end) : null;
+          const inicio = finActual && finActual > hoy ? finActual : hoy;
+          const fin = new Date(inicio);
+          fin.setMonth(fin.getMonth() + meses);
+          const fmt = (d) => d.toISOString().slice(0, 10);
+
+          await billingRepo.recordPayment({
+            tenantId,
+            amountUsd: payment.transaction_amount,
+            amountLocal: payment.transaction_amount,
+            localCurrency: payment.currency_id,
+            method: 'mercadopago',
+            reference: String(payment.id),
+            periodStart: fmt(inicio),
+            periodEnd: fmt(fin),
+            recordedBy: null,
+          }, db);
+          // Un pago unico tambien pone al dia a la empresa: sin esto seguiria
+          // figurando vencida despues de haber pagado.
+          await billingRepo.updateSubscriptionStatus(tenantId, 'active', db);
+
+          console.log(`[MercadoPago webhook] tenant ${tenantId}: pago único aprobado (${meses} mes/es), período hasta ${fmt(fin)}`);
+          await avisos.avisar('cobrado', {
+            empresa: await avisos.nombreDeEmpresa(tenantId, db),
+            detalle: `${payment.currency_id} ${payment.transaction_amount} · pago único por ${meses} mes(es) · ` +
+                     `período hasta ${fmt(fin)}`,
+          }, db);
+        } else {
+          console.warn('[MercadoPago webhook] pago único sin external_reference válido o no aprobado', {
+            paymentId: dataId, externalReference: payment.external_reference, status: payment.status
+          });
+        }
       } else if (type === 'subscription_authorized_payment' && dataId) {
         const payment = await mp.getPayment({ accessToken, paymentId: dataId });
         // external_reference se hereda del preapproval que origino el cobro

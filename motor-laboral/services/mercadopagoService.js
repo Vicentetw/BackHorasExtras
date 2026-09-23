@@ -91,6 +91,75 @@ async function createSubscriptionCheckout({
   return { id: json.id, initPoint: json.init_point, status: json.status };
 }
 
+// ============================================================================
+// Link de pago UNICO (no suscripcion)
+// ============================================================================
+//
+// Pedido real: "por si quieren pagar todo el año o ir pagando mensual pero no
+// suscripcion". Hay clientes que no quieren dejar la tarjeta para un debito
+// automatico, y prefieren pagar cuando les toca.
+//
+// Es otra API: /checkout/preferences, no /preapproval. La diferencia de fondo
+// es que aca no queda nada "vivo" despues del pago -- se cobra una vez y se
+// termina. No hay nada que cancelar despues, que es justamente lo que el
+// cliente quiere evitar.
+//
+// `mesesQueCubre` viaja en metadata para que el webhook sepa hasta cuando
+// extender el periodo. Sin eso habria que adivinar del monto, que es
+// exactamente el tipo de suposicion que termina en un cobro mal imputado.
+async function createOneTimePaymentLink({
+  accessToken,
+  tenantId,
+  tenantName,
+  amount,
+  currencyId,
+  backUrl,
+  mesesQueCubre = 1,
+  payerEmail,
+  fetchImpl = fetch
+}) {
+  const meses = Number(mesesQueCubre) || 1;
+  const titulo = meses === 1
+    ? `Horas Dedica - 1 mes - ${tenantName}`
+    : `Horas Dedica - ${meses} meses - ${tenantName}`;
+
+  const body = {
+    items: [{
+      title: titulo.slice(0, 250),
+      quantity: 1,
+      unit_price: Number(amount),
+      currency_id: currencyId || 'ARS',
+    }],
+    // Lo que le dice al webhook de que empresa es este pago. Mismo mecanismo
+    // que usa la suscripcion.
+    external_reference: String(tenantId),
+    metadata: { tenant_id: String(tenantId), meses_que_cubre: meses },
+    back_urls: { success: backUrl, failure: backUrl, pending: backUrl },
+    // Vuelve solo al sitio cuando el pago se aprueba, en vez de dejar al
+    // cliente parado en la pantalla de MercadoPago sin saber si termino.
+    auto_return: 'approved',
+  };
+  if (payerEmail) body.payer = { email: payerEmail };
+
+  const res = await fetchImpl(`${MP_API_BASE}/checkout/preferences`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(json.message || 'Error creando el link de pago en MercadoPago');
+    err.mpResponse = json;
+    err.status = res.status;
+    throw err;
+  }
+  return { id: json.id, initPoint: json.init_point, mesesQueCubre: meses };
+}
+
 async function getPreapproval({ accessToken, preapprovalId, fetchImpl = fetch }) {
   const res = await fetchImpl(`${MP_API_BASE}/preapproval/${preapprovalId}`, {
     headers: { Authorization: `Bearer ${accessToken}` }
@@ -198,6 +267,7 @@ function verifyWebhookSignature({ xSignature, xRequestId, dataId, secret }) {
 
 module.exports = {
   createSubscriptionCheckout,
+  createOneTimePaymentLink,
   getPreapproval,
   cancelPreapproval,
   getPayment,

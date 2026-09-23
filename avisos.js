@@ -91,6 +91,51 @@ async function listarPendientes(db) {
 }
 
 // ---------------------------------------------------------------------------
+// Novedades: lo que YA paso
+// ---------------------------------------------------------------------------
+//
+// Distinto de los pendientes. Un pendiente espera una accion; una novedad ya
+// ocurrio y solo hay que enterarse. Las dos cosas van a la campanita pero
+// separadas, porque mezclarlas haria que el contador pierda sentido: "3"
+// dejaria de querer decir "tenes 3 cosas para atender".
+//
+// Por eso `total` sigue contando SOLO los pendientes, y las novedades van
+// aparte, con su propia marca de "no leidas".
+const DIAS_DE_NOVEDADES = 30;
+
+async function listarNovedades(db, dias = DIAS_DE_NOVEDADES) {
+  const [pagos] = await db.query(
+    `SELECT p.id, p.tenant_id AS tenantId, t.name AS empresa, p.created_at AS fecha,
+            p.amount_local AS monto, p.local_currency AS moneda, p.method AS metodo,
+            p.period_end AS hasta
+     FROM payment_records p JOIN tenants t ON t.id = p.tenant_id
+     WHERE p.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)`, [dias]);
+
+  const [bajas] = await db.query(
+    `SELECT s.tenant_id AS tenantId, t.name AS empresa, s.updated_at AS fecha
+     FROM tenant_subscriptions s JOIN tenants t ON t.id = s.tenant_id
+     WHERE s.status = 'canceled' AND s.updated_at >= DATE_SUB(NOW(), INTERVAL ? DAY)`, [dias]);
+
+  const items = [
+    ...pagos.map((p) => ({
+      tipo: 'cobro',
+      etiqueta: p.metodo === 'mercadopago' ? 'pagó por MercadoPago' : 'pago registrado',
+      tenantId: p.tenantId, empresa: p.empresa, fecha: p.fecha,
+      detalle: `${p.moneda || ''} ${p.monto ?? ''}`.trim() + (p.hasta ? ` · hasta ${String(p.hasta).slice(0, 10)}` : ''),
+    })),
+    ...bajas.map((b) => ({
+      tipo: 'baja_aprobada',
+      etiqueta: 'quedó dada de baja',
+      tenantId: b.tenantId, empresa: b.empresa, fecha: b.fecha, detalle: null,
+    })),
+  ];
+
+  // Lo mas nuevo primero: al reves que los pendientes, donde lo que mas
+  // espera es lo mas urgente. Aca lo que importa es que paso recien.
+  return items.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+}
+
+// ---------------------------------------------------------------------------
 // Telegram
 // ---------------------------------------------------------------------------
 // Por que Telegram y no email: un POST contra su API, sin dependencias, sin
@@ -188,6 +233,7 @@ async function avisar(tipo, { empresa, detalle } = {}, db) {
 module.exports = {
   contarPendientes,
   listarPendientes,
+  listarNovedades,
   nombreDeEmpresa,
   destinatariosTelegram,
   guardarDestinatariosTelegram,
