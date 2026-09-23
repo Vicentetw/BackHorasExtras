@@ -133,6 +133,11 @@ function marcadorDelReloj(marcadoresPorReloj, machineIp) {
 function detectMovements(checkins, markerMap, options = {}) {
   const maxMarkerGapMs = options.maxMarkerGapMs ?? DEFAULT_MAX_MARKER_GAP_MS;
   const ownCheckinBounceMs = options.ownCheckinBounceMs ?? DEFAULT_OWN_CHECKIN_BOUNCE_MS;
+  // TODOS los marcadores de la empresa, no solo los de la categoria que se
+  // esta detectando en esta pasada. Hace falta para que "gana el ultimo"
+  // funcione entre categorias distintas -- ver el comentario en el loop.
+  // Si no se pasa, el comportamiento es el de antes.
+  const todosLosMarcadores = options.todosLosMarcadores ?? null;
   const sorted = checkins.slice().sort((a, b) => a.checktime - b.checktime);
   // Un marcador pendiente POR RELOJ (ver claveReloj/marcadorDelReloj arriba).
   const marcadoresPorReloj = new Map(); // claveReloj -> { category, direction, markedAt, userId }
@@ -144,10 +149,34 @@ function detectMovements(checkins, markerMap, options = {}) {
   for (const row of sorted) {
     const marker = markerMap[row.userId];
     if (marker) {
+      // Dos marcadores seguidos: gana el ULTIMO. El .set() pisa al anterior.
+      // Caso real: alguien aprieta el 5 (regreso de salida particular) y se
+      // da cuenta de que era el 9 (inicio de hora extra), asi que aprieta el
+      // 9 tres segundos despues. Vale el 9.
       marcadoresPorReloj.set(claveReloj(row.machineIp), {
         category: marker.category, direction: marker.direction,
         markedAt: row.checktime, userId: row.userId,
       });
+      continue;
+    }
+
+    // ¿Es un marcador de OTRA categoria? Esto importa mas de lo que parece.
+    //
+    // Los llamadores filtran markerMap por categoria: /attendance-range corre
+    // esta funcion una vez con solo los marcadores PARTICULAR y otra vez con
+    // solo los de HE. En la pasada de PARTICULAR, el marcador 9 (HE) no
+    // estaba en el mapa y caia como "ruido del reloj" mas abajo, que NO toca
+    // los marcadores pendientes.
+    //
+    // Resultado del caso real de arriba: en la pasada de PARTICULAR, el 5
+    // quedaba vivo, el 9 pasaba invisible, y el fichaje de la persona se
+    // llevaba el 5 -- justo lo que habia querido corregir.
+    //
+    // Un marcador de otra categoria tiene que PISAR al pendiente igual que
+    // uno de la misma: la regla es "gana el ultimo", no "gana el ultimo de
+    // esta categoria". Para esta pasada eso significa quedarse sin marcador.
+    if (todosLosMarcadores && todosLosMarcadores[row.userId]) {
+      marcadoresPorReloj.delete(claveReloj(row.machineIp));
       continue;
     }
 

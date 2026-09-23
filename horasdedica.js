@@ -3416,8 +3416,12 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     {
       const particularMarkerMap = await fetchMarkerMap('PARTICULAR', tenantId);
       const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+      // Todos los marcadores, no solo los de esta categoría: si alguien
+      // aprieta el 5 y después el 9, vale el 9 aunque acá solo se estén
+      // buscando los PARTICULAR (ver movementsCalculations.js).
+      const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
       for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
-        const { closedEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs });
+        const { closedEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs, todosLosMarcadores });
         closedEvents
           .filter(ev => ev.category === 'PARTICULAR')
           .forEach(ev => particularExitByEmployeeDate.add(`${ev.employeeId}|${date}`));
@@ -3447,8 +3451,9 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       const heMarkerMap = await fetchMarkerMap('HE', tenantId);
       if (Object.keys(heMarkerMap).length > 0) {
         const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+        const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
         for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
-          const { closedEvents } = movementsCalc.detectMovements(dayCheckins, heMarkerMap, { maxMarkerGapMs });
+          const { closedEvents } = movementsCalc.detectMovements(dayCheckins, heMarkerMap, { maxMarkerGapMs, todosLosMarcadores });
           closedEvents
             .filter(ev => ev.category === 'HE')
             .forEach(ev => {
@@ -4163,6 +4168,7 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
     // cualquiera de ese empleado, aunque fuera del día 6 (bug real, visto con
     // datos de julio 2026: daba 65hs de "salida particular").
     const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+    const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
     const checkinsByDate = new Map();
     checkins.forEach(c => {
       const dateStr = formatLocalDate(c.checktime);
@@ -4172,7 +4178,7 @@ app.get('/movements-range', requirePermission('attendance', 'read'), async (req,
 
     const allEvents = [];
     for (const [dateStr, dayCheckins] of checkinsByDate.entries()) {
-      const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, markerMap, { maxMarkerGapMs });
+      const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, markerMap, { maxMarkerGapMs, todosLosMarcadores });
       // Bug real: AVILA Natalia, legajo 9006, abril 2026 -- una llegada
       // tarde quedaba marcada como "Salida Particular" de 6h+ porque el
       // marcador de Salida lo fichó otra persona justo antes de que Natalia
@@ -4342,7 +4348,8 @@ app.get('/campana-range', requirePermission('attendance', 'read'), async (req, r
 
     const checkins = await fetchMovementCheckins(lookbackFromStr, exclusiveEnd, tenantId);
     const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
-    const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs });
+    const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
+    const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs, todosLosMarcadores });
 
     const cutoffValue = await getAppSetting('campanaArrivalCutoffTime', tenantId, db);
     const cutoffTime = cutoffValue || '09:00';
