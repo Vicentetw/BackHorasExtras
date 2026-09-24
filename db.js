@@ -19,6 +19,40 @@ const mysql = require('mysql2/promise');
 // script manual corrido aparte mientras el servidor esta vivo (una
 // migracion con run-sql.js, un diagnostico puntual) sin chocar contra
 // el limite real de Clever Cloud.
+// TLS hacia MySQL (hallazgo F-11 de la auditoria de seguridad)
+// ------------------------------------------------------------
+// mysql2 NO negocia TLS por su cuenta: sin la opcion `ssl`, la conexion va en
+// texto plano. Y aca eso no queda dentro de una maquina: el backend corre en
+// Render y la base en Clever Cloud, asi que ese trafico -- las credenciales de
+// la base y todo lo que se consulta, incluidos legajos, nombres y DNIs --
+// cruza internet publica sin cifrar (CWE-319).
+//
+// Se controla por variable de entorno y NO se activa solo, a proposito. Si el
+// proveedor no presenta un certificado que valide, la app deja de conectar y
+// se cae entera; poder prenderlo y apagarlo desde Render, sin volver a
+// desplegar, es la diferencia entre un ajuste de dos minutos y una caida.
+//
+//   (sin definir)          -> como hasta ahora, sin TLS
+//   MYSQL_SSL=require      -> TLS validando el certificado del servidor
+//   MYSQL_SSL=no-verify    -> TLS SIN validar el certificado
+//
+// Sobre 'no-verify': cifra el trafico (sirve contra alguien que escucha la
+// red) pero no verifica con quien esta hablando, asi que no protege contra un
+// man-in-the-middle activo. Es un escalon intermedio para proveedores que
+// presentan un certificado autofirmado, no el destino final. Si funciona
+// 'require', usar 'require'.
+function resolverSsl() {
+  const modo = (process.env.MYSQL_SSL || '').trim().toLowerCase();
+  if (modo === 'require') return { minVersion: 'TLSv1.2', rejectUnauthorized: true };
+  if (modo === 'no-verify') return { minVersion: 'TLSv1.2', rejectUnauthorized: false };
+  return undefined;
+}
+
+const ssl = resolverSsl();
+if (!ssl) {
+  console.warn('⚠️  MySQL sin TLS: el trafico con la base viaja sin cifrar. Ver MYSQL_SSL en db.js.');
+}
+
 const db = mysql.createPool({
   host: process.env.MYSQL_ADDON_HOST,
   user: process.env.MYSQL_ADDON_USER,
@@ -27,7 +61,8 @@ const db = mysql.createPool({
   port: process.env.MYSQL_ADDON_PORT || 3306,
   waitForConnections: true,
   dateStrings: true,
-  connectionLimit: 4
+  connectionLimit: 4,
+  ...(ssl ? { ssl } : {})
 });
 
 module.exports = db;
