@@ -89,6 +89,62 @@ test('LO QUE MÁS IMPORTA: el período NO se extiende dos veces', async () => {
     'el reintento no puede mover el vencimiento');
 });
 
+// ---------------------------------------------------------------------------
+// Registrar un pago SIN mover el vencimiento (lo que usa la sincronización)
+// ---------------------------------------------------------------------------
+
+test('moverVigencia: false registra el pago pero NO toca el vencimiento', async () => {
+  // Sincronizar con MercadoPago trae pagos que YA OCURRIERON, a veces de hace
+  // semanas. Encadenarlos al vencimiento vigente los apila hacia el futuro sin
+  // relación con su fecha real: el 2026-09-24 tres pagos de septiembre
+  // dejaron a una empresa con períodos que arrancaban en diciembre, enero y
+  // febrero, y un pago de PRUEBA le corrió el vencimiento tres meses.
+  await db.query(
+    `UPDATE tenant_subscriptions SET current_period_start = '2026-09-01', current_period_end = '2026-10-01'
+     WHERE tenant_id = ?`, [TENANT_ID]);
+
+  const id = await billingRepo.recordPayment(
+    { ...pago('2026-08-01', '2026-09-01'), reference: 'mp-sincronizado', moverVigencia: false }, db);
+  assert.ok(id, 'el pago igual se registra');
+
+  const [[sub]] = await db.query(
+    'SELECT current_period_start, current_period_end FROM tenant_subscriptions WHERE tenant_id = ?', [TENANT_ID]);
+  assert.equal(String(sub.current_period_end).slice(0, 10), '2026-10-01',
+    'el vencimiento tiene que quedar intacto');
+  assert.equal(String(sub.current_period_start).slice(0, 10), '2026-09-01',
+    'y el inicio del período tampoco se toca');
+});
+
+test('sin moverVigencia (el default) el vencimiento SÍ se actualiza, como siempre', async () => {
+  // La contracara del test de arriba: el comportamiento de un pago normal no
+  // cambió. Un pago manual o un webhook en vivo tienen que seguir poniendo al
+  // día a la empresa.
+  await db.query(
+    `UPDATE tenant_subscriptions SET current_period_start = '2026-09-01', current_period_end = '2026-10-01'
+     WHERE tenant_id = ?`, [TENANT_ID]);
+
+  await billingRepo.recordPayment({ ...pago('2026-10-01', '2026-11-01'), reference: 'mp-en-vivo' }, db);
+
+  const [[sub]] = await db.query(
+    'SELECT current_period_end FROM tenant_subscriptions WHERE tenant_id = ?', [TENANT_ID]);
+  assert.equal(String(sub.current_period_end).slice(0, 10), '2026-11-01');
+});
+
+test('la cotizacion del dolar y un amount_usd desconocido se guardan tal cual', async () => {
+  // amount_usd en null significa "no se sabe cuantos dolares eran", que es lo
+  // que corresponde para un pago de MercadoPago sin cotizacion cargada. Antes
+  // ahi se guardaba el monto EN PESOS: un pago de 25.000 ARS figuraba como
+  // 25.000 dolares, en la moneda en la que estan los precios de los planes.
+  await billingRepo.recordPayment(
+    { ...pago('2026-09-01', '2026-10-01'), reference: 'mp-con-cotiz', amountUsd: null, exchangeRate: 1234.5678 }, db);
+
+  const [[fila]] = await db.query(
+    'SELECT amount_usd, exchange_rate FROM payment_records WHERE tenant_id = ? AND reference = ?',
+    [TENANT_ID, 'mp-con-cotiz']);
+  assert.equal(fila.amount_usd, null, 'no se inventa un valor en dolares');
+  assert.equal(Number(fila.exchange_rate), 1234.5678);
+});
+
 test('dos pagos DISTINTOS sí se registran los dos', async () => {
   // Que no se pase de celoso: un cliente puede pagar dos veces de verdad.
   await billingRepo.recordPayment({ ...pago('2026-09-01', '2026-10-01'), reference: 'mp-1' }, db);

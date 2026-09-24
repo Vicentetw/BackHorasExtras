@@ -169,12 +169,26 @@ async function updateSubscriptionStatus(tenantId, status, db) {
 // vez de INSERT IGNORE: IGNORE se traga TODOS los errores, incluidos los que
 // habria que ver (un tenant_id que no existe, un monto invalido). Esto solo
 // ignora el choque de clave, que es el unico caso esperado.
-async function recordPayment({ tenantId, amountUsd, amountLocal, localCurrency, method, reference, periodStart, periodEnd, recordedBy }, db) {
+// `exchangeRate` = pesos por dolar al momento del cobro. Los precios de los
+// planes estan en dolares y se cobran en pesos; sin este numero no se puede
+// reconstruir despues por que US$ 100 fueron 150.000 pesos. Se guarda
+// explicito y no derivado de dividir los dos montos: si manana cambia como se
+// calcula el precio, el historico tiene que quedar como fue.
+//
+// `amountUsd` puede venir null, y eso significa "no se sabe cuantos dolares
+// eran". Es la verdad para un pago que entra por MercadoPago sin cotizacion
+// cargada, y es mejor que el numero inventado que se guardaba antes (ver la
+// migracion 20261001_pagos_cotizacion_dolar.sql).
+//
+// `moverVigencia: false` registra el pago SIN tocar el vencimiento de la
+// empresa. Lo usa la sincronizacion -- ver el comentario largo en
+// routes/billing.js sobre por que reconciliar no es facturar.
+async function recordPayment({ tenantId, amountUsd, amountLocal, localCurrency, method, reference, periodStart, periodEnd, recordedBy, exchangeRate, moverVigencia = true }, db) {
   const [result] = await db.query(
-    `INSERT INTO payment_records (tenant_id, amount_usd, amount_local, local_currency, method, reference, period_start, period_end, recorded_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO payment_records (tenant_id, amount_usd, amount_local, local_currency, method, reference, period_start, period_end, recorded_by, exchange_rate)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE id = id`,
-    [tenantId, amountUsd, amountLocal || null, localCurrency || 'ARS', method, reference || null, periodStart, periodEnd, recordedBy || null]
+    [tenantId, amountUsd ?? null, amountLocal || null, localCurrency || 'ARS', method, reference || null, periodStart, periodEnd, recordedBy || null, exchangeRate ?? null]
   );
 
   // COMO SE SABE QUE FUE UN DUPLICADO: por `insertId`, no por `affectedRows`.
@@ -193,13 +207,15 @@ async function recordPayment({ tenantId, amountUsd, amountLocal, localCurrency, 
       'SELECT id FROM payment_records WHERE method = ? AND reference = ?', [method, reference]);
     return previo ? previo.id : null;
   }
-  await db.query(
-    `UPDATE tenant_subscriptions
-     SET status = 'active', current_period_start = ?, current_period_end = ?, last_payment_at = CURRENT_TIMESTAMP,
-         payment_requested_at = NULL
-     WHERE tenant_id = ?`,
-    [periodStart, periodEnd, tenantId]
-  );
+  if (moverVigencia) {
+    await db.query(
+      `UPDATE tenant_subscriptions
+       SET status = 'active', current_period_start = ?, current_period_end = ?, last_payment_at = CURRENT_TIMESTAMP,
+           payment_requested_at = NULL
+       WHERE tenant_id = ?`,
+      [periodStart, periodEnd, tenantId]
+    );
+  }
   return result.insertId;
 }
 

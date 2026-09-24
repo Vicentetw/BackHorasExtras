@@ -160,17 +160,32 @@ module.exports = function (db) {
           continue;
         }
 
-        // Mismo criterio que el webhook: el período nuevo arranca cuando
-        // termina el vigente, no hoy.
-        const hoy = new Date();
-        const finActual = sub.current_period_end ? new Date(sub.current_period_end) : null;
-        const inicio = finActual && finActual > hoy ? finActual : hoy;
+        // El período de cada pago se calcula desde SU PROPIA fecha de
+        // aprobación, no desde el vencimiento vigente.
+        //
+        // Antes esto decía "mismo criterio que el webhook: el período nuevo
+        // arranca cuando termina el vigente". Copiar ese criterio acá fue el
+        // error: en el webhook el pago ACABA de ocurrir y encadenarlo está
+        // bien (si paga antes de vencer, no se le comen los días que le
+        // quedaban). Acá los pagos YA OCURRIERON, a veces hace semanas, y
+        // encadenarlos los apila hacia el futuro sin relación con la fecha
+        // real. Caso concreto (2026-09-24): tres pagos de septiembre
+        // quedaron con períodos que arrancaban en diciembre, enero y
+        // febrero.
+        const aprobado = p.date_approved || p.date_created;
+        const inicio = aprobado ? new Date(aprobado) : new Date();
         const fin = new Date(inicio);
         fin.setMonth(fin.getMonth() + meses);
 
         await billingRepo.recordPayment({
           tenantId,
-          amountUsd: p.transaction_amount,
+          // amount_usd va en null a propósito. Antes acá iba
+          // `p.transaction_amount`, que son PESOS: un pago de 50.000 ARS
+          // quedaba registrado como 50.000 dólares y corrompía cualquier
+          // reporte en la moneda en la que están los precios. No se sabe
+          // cuántos dólares eran sin la cotización de ese día, así que se
+          // dice que no se sabe. Se completa a mano si hace falta.
+          amountUsd: null,
           amountLocal: p.transaction_amount,
           localCurrency: p.currency_id,
           method: 'mercadopago',
@@ -178,8 +193,14 @@ module.exports = function (db) {
           periodStart: fmt(inicio),
           periodEnd: fmt(fin),
           recordedBy: null,
+          // Sincronizar es RECONCILIAR, no facturar: recupera pagos que se
+          // perdieron, y no puede saber cuántos meses cubre cada uno sin
+          // comparar el monto contra el precio del plan. Mover solo la fecha
+          // que bloquea o desbloquea a un cliente, a partir de una
+          // suposición, es como se llegó al desastre de septiembre. La
+          // respuesta avisa que hay que revisarla.
+          moverVigencia: false,
         }, db);
-        await billingRepo.updateSubscriptionStatus(tenantId, 'active', db);
 
         registrados.push({ id: p.id, tenantId, monto: p.transaction_amount, moneda: p.currency_id, meses });
         await avisos.avisar('cobrado', {
@@ -195,6 +216,12 @@ module.exports = function (db) {
         yaEstaban: yaEstaban.length,
         detalleRecuperados: registrados,
         detalleIgnorados: ignorados,
+        // Se dice explicitamente que la vigencia NO se movio. Antes se movia
+        // sola y en silencio, que es como un pago de prueba termino
+        // corriendo el vencimiento de un cliente real tres meses.
+        avisoVigencia: registrados.length
+          ? 'Los pagos quedaron registrados, pero el vencimiento de cada empresa NO se modificó: revisalo en Facturación y ajustalo según cuántos meses cubre cada pago.'
+          : null,
       });
     } catch (err) {
       console.error('ERROR sincronizando con MercadoPago:', err);
@@ -227,7 +254,7 @@ module.exports = function (db) {
       const [rows] = await db.query(
         `SELECT p.id, p.tenant_id, t.name AS tenant_name, p.amount_usd, p.amount_local,
                 p.local_currency, p.method, p.reference, p.period_start, p.period_end,
-                p.created_at, au.email AS recorded_by_email
+                p.created_at, p.exchange_rate, au.email AS recorded_by_email
          FROM payment_records p
          JOIN tenants t ON t.id = p.tenant_id
          LEFT JOIN app_users au ON au.id = p.recorded_by
@@ -479,6 +506,18 @@ module.exports = function (db) {
       const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
       if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada' });
 
+      // Cotización del dólar usada para cobrar. Es opcional -- no todos los
+      // pagos la necesitan (uno en dólares directo, por ejemplo) -- pero si
+      // viene tiene que ser un número positivo: un 0 haría una división por
+      // cero en cualquier reporte, y un negativo no significa nada.
+      let exchangeRate = null;
+      if (req.body.exchange_rate !== undefined && req.body.exchange_rate !== null && req.body.exchange_rate !== '') {
+        exchangeRate = Number(req.body.exchange_rate);
+        if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) {
+          return res.status(400).json({ error: 'La cotización del dólar tiene que ser un número mayor que cero.' });
+        }
+      }
+
       const employeeCount = await billingRepo.countBillableEmployees(tenantId, db);
       const invoice = computeInvoiceAmount({
         plan: subscription,
@@ -503,7 +542,8 @@ module.exports = function (db) {
         reference: req.body.reference || null,
         periodStart: fmt(periodStart),
         periodEnd: fmt(periodEnd),
-        recordedBy: req.appUser?.id || null
+        recordedBy: req.appUser?.id || null,
+        exchangeRate
       }, db);
 
       res.status(201).json({ ok: true, id, periodStart: fmt(periodStart), periodEnd: fmt(periodEnd), invoice });

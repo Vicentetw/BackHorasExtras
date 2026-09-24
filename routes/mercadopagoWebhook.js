@@ -154,7 +154,12 @@ module.exports = function (db, options = {}) {
 
           const pagoId = await billingRepo.recordPayment({
             tenantId,
-            amountUsd: payment.transaction_amount,
+            // null y no transaction_amount: eso son PESOS, y guardarlos en la
+            // columna de dolares hacia que un pago de 50.000 ARS figurara
+            // como 50.000 dolares -- la moneda en la que estan los precios de
+            // los planes. Sin la cotizacion del dia no se sabe cuantos
+            // dolares eran, asi que se dice que no se sabe.
+            amountUsd: null,
             amountLocal: payment.transaction_amount,
             localCurrency: payment.currency_id,
             method: 'mercadopago',
@@ -199,7 +204,9 @@ module.exports = function (db, options = {}) {
           periodEnd.setMonth(periodEnd.getMonth() + 1);
           const pagoId = await billingRepo.recordPayment({
             tenantId,
-            amountUsd: payment.transaction_amount,
+            // Ver el comentario del otro recordPayment de este archivo: eso
+            // son pesos, no dolares.
+            amountUsd: null,
             amountLocal: payment.transaction_amount,
             localCurrency: payment.currency_id,
             method: 'mercadopago',

@@ -160,6 +160,55 @@ test('POST /api/billing/subscriptions/:tenantId/payments: registrar un pago manu
   assert.equal(history[0].reference, 'transferencia de prueba');
 });
 
+// Los precios de los planes estan en dolares y se cobran en pesos. Sin
+// guardar a que cotizacion se cobro, dentro de unos meses nadie puede
+// explicar por que US$ 100 fueron 150.000 pesos.
+test('registrar un pago manual guarda la cotizacion del dolar usada', async () => {
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_A}/payments`, {
+    method: 'POST',
+    headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      amount_local: 150000, local_currency: 'ARS',
+      exchange_rate: 1500, reference: 'pago-con-cotizacion'
+    })
+  });
+  assert.equal(res.status, 201);
+
+  const historyRes = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_A}/payments`, { headers: headersTenantA });
+  const history = await historyRes.json();
+  const pago = history.find((h) => h.reference === 'pago-con-cotizacion');
+  assert.ok(pago, 'el pago tiene que estar en el historial');
+  assert.equal(Number(pago.exchange_rate), 1500, 'la cotizacion tiene que quedar guardada tal cual');
+});
+
+test('una cotizacion en cero o negativa se rechaza con 400', async () => {
+  for (const valor of [0, -5]) {
+    const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_A}/payments`, {
+      method: 'POST',
+      headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount_local: 1000, exchange_rate: valor, reference: `cotiz-invalida-${valor}` })
+    });
+    // Un 0 haria una division por cero en cualquier reporte y un negativo no
+    // significa nada -- mejor frenarlo al entrar que descubrirlo despues.
+    assert.equal(res.status, 400, `exchange_rate = ${valor} tiene que dar 400`);
+  }
+});
+
+test('la cotizacion es opcional: sin ella el pago se registra igual, con la cotizacion en null', async () => {
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_A}/payments`, {
+    method: 'POST',
+    headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount_local: 5000, reference: 'pago-sin-cotizacion' })
+  });
+  assert.equal(res.status, 201);
+
+  const historyRes = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_A}/payments`, { headers: headersTenantA });
+  const history = await historyRes.json();
+  const pago = history.find((h) => h.reference === 'pago-sin-cotizacion');
+  // null y no 0: "no se sabe" tiene que poder distinguirse de un valor real.
+  assert.equal(pago.exchange_rate, null);
+});
+
 test('POST /api/billing/subscriptions/:tenantId: rechaza un status invalido (grace/readonly no se eligen a mano, se calculan)', async () => {
   const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_A}`, {
     method: 'POST',
