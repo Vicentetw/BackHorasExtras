@@ -8,17 +8,18 @@
  * entorno en la misma terminal, para no dejar nunca la contraseña de
  * produccion escrita en un archivo de este repo.
  *
- * Uso (Git Bash):
- *   export MYSQL_ADDON_HOST="<host>"
- *   export MYSQL_ADDON_PORT="<puerto>"
- *   export MYSQL_ADDON_USER="<usuario>"
- *   export MYSQL_ADDON_PASSWORD="<password>"
- *   export MYSQL_ADDON_DB="<nombre de la base>"
+ * Uso (PowerShell):
+ *   $env:MYSQL_ADDON_HOST="..."
+ *   $env:MYSQL_ADDON_PORT="3306"
+ *   $env:MYSQL_ADDON_USER="..."
+ *   $env:MYSQL_ADDON_PASSWORD="..."
+ *   $env:MYSQL_ADDON_DB="..."
  *   node run-sql.js PRODUCTION_DB_CHECK.sql
- *   node run-sql.js migrations/20260902_add_roles.sql
+ *   node run-sql.js migrations/20260721_add_app_users_permissions_tenant.sql
  *
  * IMPORTANTE: nunca escribas los valores reales aca en el archivo --
- * solo en la terminal, con export. Este archivo se commitea a git.
+ * solo en la terminal. Este archivo se commitea a git, y el repositorio
+ * todavia es publico.
  */
 const fs = require('fs');
 const mysql = require('mysql2/promise');
