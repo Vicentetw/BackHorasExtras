@@ -175,6 +175,38 @@ test('registrar un pago manual tambien limpia el pedido de pago pendiente', asyn
   assert.equal(sub.subscription.payment_requested_at, null, 'registrar un pago manual tambien responde al pedido -- se limpia solo');
 });
 
+// El cliente tiene que poder ver SU historial de pagos: es lo que le permite
+// comprobar que lo que pago quedo registrado, sin depender de preguntarlo.
+// La ruta ya existia y ya usaba canViewTenant, pero nadie verificaba ninguna
+// de las dos mitades: ni que lo dejara entrar, ni -- lo que importa de
+// verdad -- que no le mostrara los pagos de otra empresa. Dado el historial
+// de fugas de tenant_id de este proyecto, se prueban las dos.
+test('el cliente ve el historial de pagos de SU empresa, y ninguno ajeno', async () => {
+  // Un pago de la otra empresa, para que haya algo concreto que se pueda
+  // filtrar mal. Sin esto el test pasaria igual con la base vacia.
+  await db.query(
+    `INSERT INTO payment_records (tenant_id, amount_usd, amount_local, local_currency, method, reference, period_start, period_end)
+     VALUES (?, 10, 7777, 'ARS', 'manual', 'pago-de-la-otra-empresa', '2026-01-01', '2026-02-01')`,
+    [OTHER_TENANT]
+  );
+
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/payments`, { headers: headersTenant });
+  assert.equal(res.status, 200, 'un admin de empresa tiene que poder leer su propio historial');
+  const pagos = await res.json();
+
+  assert.ok(pagos.length >= 1, 'debe ver el pago manual que registro el test anterior');
+  assert.ok(pagos.every((p) => p.tenant_id === TENANT_C), 'ni una sola fila puede ser de otra empresa');
+  assert.ok(
+    !pagos.some((p) => p.reference === 'pago-de-la-otra-empresa'),
+    'el pago de la otra empresa no puede aparecer en el historial de esta'
+  );
+});
+
+test('el cliente no puede leer el historial de pagos de otra empresa (aislamiento canViewTenant)', async () => {
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${OTHER_TENANT}/payments`, { headers: headersTenant });
+  assert.equal(res.status, 403);
+});
+
 test('pedir la baja: queda pendiente, NO cambia el status todavia', async () => {
   const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/request-cancellation`, {
     method: 'POST',
