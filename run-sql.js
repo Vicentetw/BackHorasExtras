@@ -63,7 +63,19 @@ async function main() {
           console.log((row.existe ? '[SI]' : '[NO]') + '  ' + row.chequeo);
         }
       } else if (Array.isArray(set)) {
-        console.log('OK -- filas afectadas/leidas: ' + set.length);
+        // Un SELECT se corre para LEER algo -- antes esto solo imprimia
+        // cuantas filas habia y tiraba el contenido a la basura, que deja
+        // el script inservible justo para lo que mas se usa: mirar el
+        // estado de la base antes y despues de un arreglo.
+        console.log('OK -- ' + set.length + ' fila(s):');
+        if (set.length) {
+          const TOPE = 50;
+          console.table(set.slice(0, TOPE));
+          if (set.length > TOPE) {
+            console.log('   (se muestran las primeras ' + TOPE + ' de ' + set.length +
+                        ' -- agregale un LIMIT a la consulta si necesitas ver otras)');
+          }
+        }
       } else if (set && typeof set.affectedRows === 'number') {
         console.log('OK -- ' + set.affectedRows + ' fila(s) afectada(s).');
       }
