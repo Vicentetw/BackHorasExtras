@@ -160,6 +160,48 @@ async function createOneTimePaymentLink({
   return { id: json.id, initPoint: json.init_point, mesesQueCubre: meses };
 }
 
+// ============================================================================
+// Buscar pagos en MercadoPago (reconciliacion)
+// ============================================================================
+//
+// POR QUE EXISTE
+// --------------
+// Caso real del 2026-09-24: un cliente pago 50.000 ARS por un link de pago
+// unico, el pago se acredito bien (approved, con external_reference "6" y la
+// metadata correcta)... y en el sistema no aparecio nada. MercadoPago NUNCA
+// llamo al webhook. Se comprobo consultando el pago por API y mirando la
+// tabla mercadopago_events, que quedo vacia.
+//
+// Un webhook es un aviso que puede perderse: mal configurado, un corte de
+// red, el servidor dormido, un cambio en el panel. Depender solo de el
+// significa que un pago real puede quedar sin registrar y nadie enterarse --
+// que es exactamente lo que paso.
+//
+// Esto permite preguntarle a MercadoPago "¿que pagos hubo?" en vez de esperar
+// a que avise. No reemplaza al webhook: lo respalda.
+async function searchPayments({ accessToken, desde, hasta, externalReference, fetchImpl = fetch }) {
+  const params = new URLSearchParams({
+    sort: 'date_created',
+    criteria: 'desc',
+    limit: '100',
+  });
+  if (desde) params.set('begin_date', `${desde}T00:00:00.000-00:00`);
+  if (hasta) params.set('end_date', `${hasta}T23:59:59.999-00:00`);
+  if (externalReference) params.set('external_reference', String(externalReference));
+
+  const res = await fetchImpl(`${MP_API_BASE}/v1/payments/search?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(json.message || 'Error buscando pagos en MercadoPago');
+    err.mpResponse = json;
+    err.status = res.status;
+    throw err;
+  }
+  return Array.isArray(json.results) ? json.results : [];
+}
+
 async function getPreapproval({ accessToken, preapprovalId, fetchImpl = fetch }) {
   const res = await fetchImpl(`${MP_API_BASE}/preapproval/${preapprovalId}`, {
     headers: { Authorization: `Bearer ${accessToken}` }
@@ -268,6 +310,7 @@ function verifyWebhookSignature({ xSignature, xRequestId, dataId, secret }) {
 module.exports = {
   createSubscriptionCheckout,
   createOneTimePaymentLink,
+  searchPayments,
   getPreapproval,
   cancelPreapproval,
   getPayment,

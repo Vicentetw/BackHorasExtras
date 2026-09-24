@@ -101,6 +101,107 @@ module.exports = function (db) {
     }
   });
 
+  // --- Sincronizar con MercadoPago -----------------------------------------
+  // CASO REAL que lo motivó (2026-09-24): un cliente pagó 50.000 ARS por un
+  // link de pago único, el pago se acreditó bien en MercadoPago (approved,
+  // con external_reference y metadata correctas)... y en el sistema no
+  // apareció nada. MercadoPago NUNCA llamó al webhook — comprobado
+  // consultando el pago por API y viendo la tabla de eventos vacía.
+  //
+  // Un webhook es un aviso que se puede perder: mal configurado, un corte de
+  // red, el servidor dormido, un cambio en el panel. Depender solo de él
+  // significa que un pago real puede quedar sin registrar y nadie enterarse.
+  //
+  // Esto pregunta al revés: "¿qué pagos hubo?", y registra los que falten.
+  // Va por el MISMO camino idempotente que el webhook (recordPayment con la
+  // clave única), así que correrlo dos veces no duplica nada.
+  router.post('/sincronizar-mercadopago', requireSuperadmin, async (req, res) => {
+    try {
+      const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+      if (!accessToken) {
+        return res.status(503).json({ error: 'MERCADOPAGO_ACCESS_TOKEN no está configurado en el servidor' });
+      }
+
+      // Por defecto, los últimos 30 días. Suficiente para recuperar lo que se
+      // haya perdido sin traer el historial entero en cada corrida.
+      const dias = Math.min(Math.max(Number(req.body?.dias) || 30, 1), 365);
+      const hasta = new Date();
+      const desde = new Date(hasta.getTime() - dias * 86400000);
+      const fmt = (d) => d.toISOString().slice(0, 10);
+
+      const pagos = await mp.searchPayments({ accessToken, desde: fmt(desde), hasta: fmt(hasta) });
+
+      const registrados = [];
+      const yaEstaban = [];
+      const ignorados = [];
+
+      for (const p of pagos) {
+        const tenantId = Number(p.external_reference);
+        if (!Number.isFinite(tenantId)) {
+          ignorados.push({ id: p.id, motivo: `external_reference inválido ('${p.external_reference}')` });
+          continue;
+        }
+        if (p.status !== 'approved') {
+          ignorados.push({ id: p.id, motivo: `estado '${p.status}'` });
+          continue;
+        }
+
+        // ¿Ya lo tenemos? Se mira antes de tocar nada, para poder informar
+        // cuántos se recuperaron de verdad y no solo "listo".
+        const [[existe]] = await db.query(
+          "SELECT id FROM payment_records WHERE method = 'mercadopago' AND reference = ?",
+          [String(p.id)]);
+        if (existe) { yaEstaban.push(p.id); continue; }
+
+        const meses = Number(p.metadata?.meses_que_cubre) || 1;
+        const sub = await billingRepo.getSubscriptionByTenant(tenantId, db);
+        if (!sub) {
+          ignorados.push({ id: p.id, motivo: `la empresa ${tenantId} no tiene suscripción configurada` });
+          continue;
+        }
+
+        // Mismo criterio que el webhook: el período nuevo arranca cuando
+        // termina el vigente, no hoy.
+        const hoy = new Date();
+        const finActual = sub.current_period_end ? new Date(sub.current_period_end) : null;
+        const inicio = finActual && finActual > hoy ? finActual : hoy;
+        const fin = new Date(inicio);
+        fin.setMonth(fin.getMonth() + meses);
+
+        await billingRepo.recordPayment({
+          tenantId,
+          amountUsd: p.transaction_amount,
+          amountLocal: p.transaction_amount,
+          localCurrency: p.currency_id,
+          method: 'mercadopago',
+          reference: String(p.id),
+          periodStart: fmt(inicio),
+          periodEnd: fmt(fin),
+          recordedBy: null,
+        }, db);
+        await billingRepo.updateSubscriptionStatus(tenantId, 'active', db);
+
+        registrados.push({ id: p.id, tenantId, monto: p.transaction_amount, moneda: p.currency_id, meses });
+        await avisos.avisar('cobrado', {
+          empresa: await avisos.nombreDeEmpresa(tenantId, db),
+          detalle: `${p.currency_id} ${p.transaction_amount} · recuperado al sincronizar (el webhook no había llegado)`,
+        }, db);
+      }
+
+      res.json({
+        ok: true,
+        revisados: pagos.length,
+        recuperados: registrados.length,
+        yaEstaban: yaEstaban.length,
+        detalleRecuperados: registrados,
+        detalleIgnorados: ignorados,
+      });
+    } catch (err) {
+      console.error('ERROR sincronizando con MercadoPago:', err);
+      res.status(502).json({ error: 'No se pudo sincronizar con MercadoPago: ' + err.message });
+    }
+  });
+
   router.get('/plans', async (req, res) => {
     try {
       const activeOnly = !req.appUser?.isSuperadmin;
@@ -480,6 +581,39 @@ module.exports = function (db) {
     } catch (err) {
       console.error('ERROR creando link de pago único:', err);
       res.status(502).json({ error: 'No se pudo crear el link de pago: ' + err.message });
+    }
+  });
+
+  // Anular el link generado por error, para poder hacer otro.
+  //
+  // Solo borra NUESTRA referencia al link: la preferencia sigue existiendo en
+  // MercadoPago y técnicamente se podría pagar si alguien guardó la URL. Por
+  // eso el mensaje de la pantalla tiene que ser honesto -- "dejá de usar este
+  // link" no es lo mismo que "este link ya no funciona".
+  //
+  // MercadoPago no permite anular una preferencia de pago ya creada (a
+  // diferencia de una suscripción, que sí se cancela). Lo único que se puede
+  // hacer de verdad es no mandarla, y si ya se mandó, avisarle al cliente.
+  router.delete('/subscriptions/:tenantId/checkout-link', requireSuperadmin, async (req, res) => {
+    try {
+      const { tenantId } = req.params;
+      const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
+      if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada' });
+
+      await db.query(
+        `UPDATE tenant_subscriptions
+         SET last_checkout_url = NULL, last_checkout_generated_at = NULL
+         WHERE tenant_id = ?`, [tenantId]);
+
+      res.json({
+        ok: true,
+        aviso: 'El link se quitó del sistema y el cliente ya no lo ve. ' +
+               'Si se lo habías mandado, avisale que no lo use: MercadoPago no permite ' +
+               'anular un link de pago ya creado, así que técnicamente sigue siendo pagable.'
+      });
+    } catch (err) {
+      console.error('ERROR quitando el link de pago:', err);
+      res.status(500).json({ error: 'Error al quitar el link' });
     }
   });
 
