@@ -202,6 +202,93 @@ module.exports = function (db) {
     }
   });
 
+  // --- Todos los pagos, de todas las empresas ------------------------------
+  // Hasta ahora los pagos solo se veían entrando empresa por empresa, desde
+  // el diálogo de "Registrar pago". Con un cliente alcanza; con veinte, no
+  // hay forma de responder "¿cuánto entró este mes?" ni "¿quién pagó?".
+  //
+  // Filtros por query string, todos opcionales: desde, hasta, tenantId,
+  // method, q (busca en la referencia o el nombre de la empresa).
+  router.get('/payments', requireSuperadmin, async (req, res) => {
+    try {
+      const { desde, hasta, tenantId, method, q } = req.query;
+      const where = [];
+      const params = [];
+
+      if (desde) { where.push('p.created_at >= ?'); params.push(`${desde} 00:00:00`); }
+      if (hasta) { where.push('p.created_at <= ?'); params.push(`${hasta} 23:59:59`); }
+      if (tenantId) { where.push('p.tenant_id = ?'); params.push(Number(tenantId)); }
+      if (method) { where.push('p.method = ?'); params.push(String(method)); }
+      if (q) {
+        where.push('(p.reference LIKE ? OR t.name LIKE ?)');
+        params.push(`%${q}%`, `%${q}%`);
+      }
+
+      const [rows] = await db.query(
+        `SELECT p.id, p.tenant_id, t.name AS tenant_name, p.amount_usd, p.amount_local,
+                p.local_currency, p.method, p.reference, p.period_start, p.period_end,
+                p.created_at, au.email AS recorded_by_email
+         FROM payment_records p
+         JOIN tenants t ON t.id = p.tenant_id
+         LEFT JOIN app_users au ON au.id = p.recorded_by
+         ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+         ORDER BY p.created_at DESC
+         LIMIT 500`, params);
+
+      // Los totales se calculan sobre LO FILTRADO, no sobre todo: si alguien
+      // filtra por un mes, el total tiene que ser el de ese mes. Un total que
+      // no coincide con lo que se está mirando es peor que no tenerlo.
+      const totalPorMoneda = {};
+      rows.forEach((r) => {
+        const m = r.local_currency || 'ARS';
+        totalPorMoneda[m] = (totalPorMoneda[m] || 0) + Number(r.amount_local || 0);
+      });
+
+      res.json({
+        pagos: rows,
+        cantidad: rows.length,
+        totalPorMoneda,
+        // Aviso honesto: si se llegó al tope, los totales son parciales.
+        truncado: rows.length === 500,
+      });
+    } catch (err) {
+      console.error('ERROR listando pagos:', err);
+      res.status(500).json({ error: 'Error al listar los pagos' });
+    }
+  });
+
+  // Borrar un pago cargado por error. Solo superadmin.
+  //
+  // Se permite SOLO para pagos manuales: los de MercadoPago son el reflejo de
+  // una operación real que existe del otro lado, y borrarlos acá no la
+  // deshace -- solo la esconde. Si un pago de MercadoPago está mal, lo que
+  // corresponde es un reembolso allá, no un DELETE acá.
+  router.delete('/payments/:id', requireSuperadmin, async (req, res) => {
+    try {
+      const [[pago]] = await db.query(
+        'SELECT id, tenant_id, method, reference FROM payment_records WHERE id = ?', [req.params.id]);
+      if (!pago) return res.status(404).json({ error: 'Ese pago no existe' });
+
+      if (pago.method !== 'manual') {
+        return res.status(409).json({
+          error: 'Solo se pueden borrar los pagos cargados a mano. Este vino de MercadoPago: ' +
+                 'borrarlo acá no deshace la operación allá, solo la esconde. ' +
+                 'Si está mal, corresponde un reembolso en MercadoPago.'
+        });
+      }
+
+      await db.query('DELETE FROM payment_records WHERE id = ?', [req.params.id]);
+      res.json({
+        ok: true,
+        aviso: 'Pago borrado. Ojo: el período de la suscripción NO se recalcula solo — ' +
+               'revisalo y ajustalo si hace falta.'
+      });
+    } catch (err) {
+      console.error('ERROR borrando pago:', err);
+      res.status(500).json({ error: 'Error al borrar el pago' });
+    }
+  });
+
   router.get('/plans', async (req, res) => {
     try {
       const activeOnly = !req.appUser?.isSuperadmin;
