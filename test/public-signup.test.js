@@ -14,6 +14,7 @@
 require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const db = require('../db');
 const { deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 
@@ -103,6 +104,19 @@ test('POST /api/public/signup: alta completa de punta a punta (tenant + suscripc
   assert.equal(appUser.tenant_id, lead.tenant_id);
   assert.equal(appUser.is_superadmin, 0, 'el alta autoservicio nunca crea un superadmin');
   assert.equal(appUser.is_active, 1);
+
+  // El token del chat se entrega UNA vez, acá, y en la base queda solo su
+  // hash: si mañana se filtra un backup de signup_leads, lo que hay adentro
+  // no sirve para chatear con nuestra clave de API.
+  assert.ok(json.chatToken, 'el alta tiene que devolver el token del chat');
+  const [[guardado]] = await db.query('SELECT chat_token_hash FROM signup_leads WHERE id = ?', [json.leadId]);
+  assert.ok(guardado.chat_token_hash, 'y tiene que quedar guardado');
+  assert.notEqual(guardado.chat_token_hash, json.chatToken, 'nunca el token en claro');
+  assert.equal(
+    guardado.chat_token_hash,
+    crypto.createHash('sha256').update(json.chatToken).digest('hex'),
+    'lo guardado es el SHA-256 del token entregado'
+  );
 });
 
 test('POST /api/public/signup: rechaza un captcha invalido sin crear nada', async () => {
@@ -165,16 +179,28 @@ test('POST /api/public/signup: rechaza email ya usado, sin crear un tenant huerf
   assert.equal(dupTenant, undefined);
 });
 
-test('POST /api/public/chat: si ya se llego al limite de preguntas, no llama a la IA y avisa', async () => {
-  const [leadResult] = await db.query(
-    `INSERT INTO signup_leads (name, company_name, email, status, chat_questions_used) VALUES ('T', 'T', 'chat-limit-test@example.com', 'provisioned', 6)`
+// Crea un lead de prueba con su token de chat ya armado. Devuelve el token
+// en claro, que es lo unico que el cliente llega a ver en la vida real (en
+// la base queda solo el hash).
+async function crearLeadConToken({ email, preguntasUsadas = 0 }) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  const [r] = await db.query(
+    `INSERT INTO signup_leads (name, company_name, email, status, chat_questions_used, chat_token_hash)
+     VALUES ('T', 'T', ?, 'provisioned', ?, ?)`,
+    [email, preguntasUsadas, hash]
   );
-  createdLeadIds.push(leadResult.insertId);
+  createdLeadIds.push(r.insertId);
+  return { leadId: r.insertId, token };
+}
+
+test('POST /api/public/chat: si ya se llego al limite de preguntas, no llama a la IA y avisa', async () => {
+  const { leadId, token } = await crearLeadConToken({ email: 'chat-limit-test@example.com', preguntasUsadas: 6 });
 
   const res = await fetch(`${BASE_URL}/api/public/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ leadId: leadResult.insertId, message: '¿cuánto cuesta?' })
+    body: JSON.stringify({ leadId, chatToken: token, message: '¿cuánto cuesta?' })
   });
   const json = await res.json();
   assert.equal(res.status, 200);
@@ -183,10 +209,7 @@ test('POST /api/public/chat: si ya se llego al limite de preguntas, no llama a l
 });
 
 test('POST /api/public/chat: sin ANTHROPIC_API_KEY configurada, 503 claro (no un error generico)', async () => {
-  const [leadResult] = await db.query(
-    `INSERT INTO signup_leads (name, company_name, email, status, chat_questions_used) VALUES ('T', 'T', 'chat-noapikey-test@example.com', 'provisioned', 0)`
-  );
-  createdLeadIds.push(leadResult.insertId);
+  const { leadId, token } = await crearLeadConToken({ email: 'chat-noapikey-test@example.com' });
 
   // No podemos des-configurar la variable del PROCESO DEL SERVIDOR desde
   // este test (corre en otro proceso) -- si el servidor real ya tiene la
@@ -200,7 +223,76 @@ test('POST /api/public/chat: sin ANTHROPIC_API_KEY configurada, 503 claro (no un
   const res = await fetch(`${BASE_URL}/api/public/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ leadId: leadResult.insertId, message: '¿cuánto cuesta?' })
+    body: JSON.stringify({ leadId, chatToken: token, message: '¿cuánto cuesta?' })
   });
   assert.equal(res.status, 503);
+});
+
+// ---------------------------------------------------------------------------
+// Hallazgo F-02 de la auditoria: el chat era la unica ruta que llama a la API
+// de Anthropic alcanzable sin cuenta, y se identificaba con el leadId a
+// secas. Como es AUTO_INCREMENT, cualquiera podia recorrer ids ajenos y
+// gastar preguntas con NUESTRA clave, ademas de recibir como contexto el
+// historial de otro prospecto. Estos tests cierran esa puerta.
+// ---------------------------------------------------------------------------
+
+test('SEGURIDAD: el chat con un leadId ajeno y sin token se rechaza', async () => {
+  const { leadId } = await crearLeadConToken({ email: 'chat-sin-token@example.com' });
+
+  const res = await fetch(`${BASE_URL}/api/public/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ leadId, message: 'gasto tu cuota de API' })
+  });
+  assert.equal(res.status, 403, 'adivinar el id ya no alcanza para usar el chat');
+
+  // Y lo que mas importa: no se consumio una pregunta ni se llamo a la IA.
+  const [[lead]] = await db.query('SELECT chat_questions_used FROM signup_leads WHERE id = ?', [leadId]);
+  assert.equal(lead.chat_questions_used, 0);
+});
+
+test('SEGURIDAD: el token de un lead no sirve para otro', async () => {
+  const victima = await crearLeadConToken({ email: 'chat-victima@example.com' });
+  const atacante = await crearLeadConToken({ email: 'chat-atacante@example.com' });
+
+  const res = await fetch(`${BASE_URL}/api/public/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ leadId: victima.leadId, chatToken: atacante.token, message: 'hola' })
+  });
+  assert.equal(res.status, 403, 'tener UN token valido no habilita a usar el lead de otro');
+
+  const [[lead]] = await db.query('SELECT chat_questions_used FROM signup_leads WHERE id = ?', [victima.leadId]);
+  assert.equal(lead.chat_questions_used, 0);
+});
+
+test('SEGURIDAD: un lead inexistente responde igual que un token invalido', async () => {
+  // Misma respuesta a proposito: si "no existe" y "token equivocado" se
+  // distinguieran, el endpoint serviria para averiguar que ids existen, que
+  // es el primer paso del ataque.
+  const res = await fetch(`${BASE_URL}/api/public/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ leadId: 999999999, chatToken: 'a'.repeat(64), message: 'hola' })
+  });
+  assert.equal(res.status, 403);
+  const json = await res.json();
+  assert.match(json.error, /no se pudo validar la sesión/i);
+});
+
+test('SEGURIDAD: un mensaje larguisimo se rechaza antes de llegar a la IA', async () => {
+  // Sin este tope, el unico limite era el 1MB de express.json(): ese texto se
+  // manda entero a Anthropic (se paga por token) y ademas queda en el
+  // historial, que se reenvia en cada mensaje siguiente.
+  const { leadId, token } = await crearLeadConToken({ email: 'chat-largo@example.com' });
+
+  const res = await fetch(`${BASE_URL}/api/public/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ leadId, chatToken: token, message: 'a'.repeat(5000) })
+  });
+  assert.equal(res.status, 400);
+
+  const [[lead]] = await db.query('SELECT chat_questions_used FROM signup_leads WHERE id = ?', [leadId]);
+  assert.equal(lead.chat_questions_used, 0, 'no se consume una pregunta por un mensaje rechazado');
 });

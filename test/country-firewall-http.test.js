@@ -13,6 +13,7 @@
 require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const db = require('../db');
 // deleteTestUser faltaba: este archivo creaba un app_user SUPERADMIN en el
 // before() y nunca lo borraba. Cada corrida dejaba uno colgado en la base
@@ -31,6 +32,7 @@ const KNOWN_PUBLIC_IP = '8.8.8.8';
 let headers;
 let originalSettings;
 let leadId;
+let chatToken;
 let realCountry;
 
 before(async () => {
@@ -41,9 +43,18 @@ before(async () => {
 
   realCountry = resolveCountry(KNOWN_PUBLIC_IP);
 
+  // El lead necesita ademas su token de chat (hallazgo F-02 de la auditoria):
+  // sin el, /api/public/chat responde 403 por token invalido -- EL MISMO
+  // codigo con el que responde el firewall al bloquear. Este archivo dejaria
+  // de poder distinguir las dos cosas, que es lo unico que prueba.
+  chatToken = crypto.randomBytes(32).toString('hex');
   const [leadResult] = await db.query(
-    `INSERT INTO signup_leads (name, company_name, email, status, chat_questions_used) VALUES ('T', 'T', ?, 'provisioned', 6)`,
-    [`test-firewall-http-${Date.now()}@example.com`]
+    `INSERT INTO signup_leads (name, company_name, email, status, chat_questions_used, chat_token_hash)
+     VALUES ('T', 'T', ?, 'provisioned', 6, ?)`,
+    [
+      `test-firewall-http-${Date.now()}@example.com`,
+      crypto.createHash('sha256').update(chatToken).digest('hex')
+    ]
   );
   leadId = leadResult.insertId;
 });
@@ -75,7 +86,7 @@ async function chatFromIp(ip) {
   return fetch(`${BASE_URL}/api/public/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
-    body: JSON.stringify({ leadId, message: 'hola' })
+    body: JSON.stringify({ leadId, chatToken, message: 'hola' })
   });
 }
 

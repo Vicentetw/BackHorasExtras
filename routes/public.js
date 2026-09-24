@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
 const { computeFreeTrialPeriod } = require('../motor-laboral/services/billingCalculations');
@@ -13,6 +14,41 @@ const { createCountryFirewallMiddleware } = require('../motor-laboral/middleware
 // estricto que el global de 300/min (security.js), y la verificacion de
 // Turnstile en el alta.
 const CHAT_QUESTION_LIMIT = 6;
+
+// Tope de caracteres por mensaje del chat. Sin esto, el unico limite era el
+// 1MB de express.json(): un mensaje de ese tamano se le manda entero a la API
+// de Anthropic (se paga por token) y ademas queda guardado en chat_history,
+// que se reenvia en cada mensaje siguiente. Una pregunta de verdad sobre
+// precios o funcionalidades entra de sobra en 2000 caracteres.
+const CHAT_MESSAGE_MAX_CHARS = 2000;
+
+// --- Token del chat (hallazgo F-02) -----------------------------------------
+// El chat es la unica ruta del sistema que llama a la API de Anthropic y se
+// alcanza sin ninguna cuenta. Antes se identificaba con el `leadId` a secas,
+// que es AUTO_INCREMENT y por lo tanto adivinable: cualquiera podia recorrer
+// ids ajenos y gastar preguntas con NUESTRA clave.
+//
+// Ahora hace falta ademas un token aleatorio que se entrega una sola vez, al
+// crear el lead. En la base se guarda solo su SHA-256 -- mismo criterio que
+// tenant_agent_keys: si se filtra un backup, lo que hay adentro no sirve.
+function generarChatToken() {
+  const token = crypto.randomBytes(32).toString('hex');
+  return { token, hash: hashChatToken(token) };
+}
+
+function hashChatToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+// Comparacion en tiempo constante, igual que verifyAgentKey. Con 256 bits de
+// entropia un timing attack no es realista, pero no cuesta nada y evita tener
+// que razonar cada vez si "este caso si importa".
+function tokenCoincide(recibido, hashGuardado) {
+  if (!recibido || !hashGuardado) return false;
+  const a = Buffer.from(hashChatToken(recibido), 'hex');
+  const b = Buffer.from(String(hashGuardado), 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 // Mas estricto que el rate-limit global (300/min): esta es la unica ruta
 // del sistema que cualquiera en internet puede llamar sin ninguna cuenta.
@@ -88,9 +124,13 @@ module.exports = function (db) {
         return res.status(409).json({ error: 'Ese email ya tiene una cuenta en el sistema.' });
       }
 
+      // El token del chat se crea junto con el lead y se devuelve UNA sola
+      // vez, mas abajo. En la base queda solo el hash.
+      const chat = generarChatToken();
+
       const [leadResult] = await db.query(
-        `INSERT INTO signup_leads (name, company_name, email, phone, contact_preference, employee_count, clock_count, schedule_type, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        `INSERT INTO signup_leads (name, company_name, email, phone, contact_preference, employee_count, clock_count, schedule_type, status, chat_token_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
         [
           name,
           companyName,
@@ -99,7 +139,8 @@ module.exports = function (db) {
           contactPreference || 'whatsapp',
           employeeCount || null,
           clockCount || null,
-          scheduleType || null
+          scheduleType || null,
+          chat.hash
         ]
       );
       const leadId = leadResult.insertId;
@@ -123,7 +164,7 @@ module.exports = function (db) {
 
         await db.query(`UPDATE signup_leads SET tenant_id = ?, status = 'provisioned' WHERE id = ?`, [tenantId, leadId]);
 
-        res.status(201).json({ ok: true, leadId, resetLink: created.resetLink });
+        res.status(201).json({ ok: true, leadId, chatToken: chat.token, resetLink: created.resetLink });
       } catch (err) {
         await db.query(`UPDATE signup_leads SET status = 'failed', error_message = ? WHERE id = ?`, [
           String(err.message).slice(0, 1000),
@@ -143,13 +184,27 @@ module.exports = function (db) {
   // muestra el link de WhatsApp en vez de seguir mandando mensajes aca.
   router.post('/chat', chatLimiter, async (req, res) => {
     try {
-      const { leadId, message } = req.body;
+      const { leadId, chatToken, message } = req.body;
       if (!leadId || !message || !String(message).trim()) {
         return res.status(400).json({ error: 'leadId y message son requeridos' });
       }
 
-      const [[lead]] = await db.query('SELECT id, chat_questions_used, chat_history FROM signup_leads WHERE id = ?', [leadId]);
-      if (!lead) return res.status(404).json({ error: 'No se encontró el registro' });
+      if (String(message).length > CHAT_MESSAGE_MAX_CHARS) {
+        return res.status(400).json({
+          error: `El mensaje es demasiado largo (máximo ${CHAT_MESSAGE_MAX_CHARS} caracteres).`
+        });
+      }
+
+      const [[lead]] = await db.query(
+        'SELECT id, chat_questions_used, chat_history, chat_token_hash FROM signup_leads WHERE id = ?', [leadId]);
+
+      // La MISMA respuesta para "ese lead no existe" y "el token no es el de
+      // ese lead". Distinguirlos convertiria esto en un oraculo para saber
+      // que ids existen, que es justo el primer paso del ataque que este
+      // chequeo viene a cerrar.
+      if (!lead || !tokenCoincide(chatToken, lead.chat_token_hash)) {
+        return res.status(403).json({ error: 'No se pudo validar la sesión del chat. Recargá la página.' });
+      }
 
       if (lead.chat_questions_used >= CHAT_QUESTION_LIMIT) {
         return res.json({ limitReached: true, questionsLeft: 0 });
