@@ -1,5 +1,8 @@
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+// ipKeyGenerator y no req.ip pelado: normaliza IPv6 al prefijo /64. Sin eso,
+// quien tiene un rango IPv6 (lo normal en conexiones modernas) puede cambiar
+// de direccion en cada pedido y saltarse el limite sin esfuerzo.
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { firebaseAuthMiddleware } = require('./firebaseAuth');
 const { appUserMiddleware } = require('./appUserMiddleware');
 
@@ -13,6 +16,39 @@ const apiRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Demasiadas solicitudes, intenta de nuevo en un momento.' }
+});
+
+// Limite propio para los endpoints CAROS (hallazgo F-06 de la auditoria).
+//
+// El limite general de 300/min trata igual a un GET de una lista chica que a
+// /attendance-range, que puede recorrer meses de fichajes de cientos de
+// empleados y correr el motor de calculo por cada dia. Con el limite general,
+// una sola cuenta puede encadenar consultas pesadas hasta saturar el CPU del
+// servidor, y en Render eso lo sienten TODAS las empresas a la vez.
+//
+// La clave es el USUARIO y no la IP, que es la diferencia que importa aca:
+// varias personas de la misma empresa salen a internet por la misma IP
+// publica, asi que un limite por IP las hace competir entre ellas y castiga
+// justo al cliente que mas gente tiene trabajando. Por usuario, cada uno
+// tiene su cupo. Si todavia no hay usuario resuelto se cae a la IP.
+//
+// 60/min es holgado para una persona real (abrir Presentismo y cambiar de mes
+// varias veces son unas pocas consultas) y sigue siendo un techo util contra
+// un script que pide el mismo reporte en bucle.
+function claveDeReporte(req) {
+  if (req.appUser && req.appUser.id) return `u${req.appUser.id}`;
+  // Sin usuario resuelto (no deberia pasar en estas rutas, que van despues de
+  // requirePermission) se cae a la IP, que es el comportamiento por defecto.
+  return ipKeyGenerator(req.ip);
+}
+
+const reportesRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: claveDeReporte,
+  message: { error: 'Demasiadas consultas seguidas de reportes. Esperá un momento y volvé a intentar.' }
 });
 
 const API_KEY = process.env.API_KEY || null;
@@ -114,5 +150,7 @@ module.exports = {
   corsOptionsDelegate,
   securityMiddlewares,
   apiKeyWarning,
-  isPublicPath
+  isPublicPath,
+  reportesRateLimiter,
+  claveDeReporte
 };

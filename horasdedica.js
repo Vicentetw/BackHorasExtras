@@ -3,9 +3,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const path = require('path');
+// `path` se quito junto con los express.static que publicaban `..` -- era su
+// unico uso en este archivo.
 const { parse } = require('csv-parse/sync');
-const { securityMiddlewares, apiKeyWarning } = require('./security');
+const { securityMiddlewares, apiKeyWarning, reportesRateLimiter } = require('./security');
 const { resolveTenantId, requirePermission, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
 // Auditoria de cargas manuales (horas extra, licencias, exclusiones): quien
 // las creo/modifico/borro y que decian antes. Ver auditLog.js y la migracion
@@ -119,8 +120,27 @@ app.use(express.json({ limit: '1mb' }));
 securityMiddlewares(app, cors, { publicPaths: ['/api/public', '/api/agent', '/health'] });
 apiKeyWarning();
 
+// `version` = el commit que esta corriendo AHORA. Render expone
+// RENDER_GIT_COMMIT solo; no hay que configurar nada.
+//
+// Existe por un problema concreto y repetido: despues de cada push no habia
+// forma de saber si Render ya habia levantado la version nueva. Probar un
+// endpoint no sirve -- el middleware de autenticacion responde 401 antes de
+// rutear, asi que una ruta que todavia no existe contesta igual que una que
+// si, y el preflight OPTIONS tampoco distingue. Se perdio tiempo real
+// adivinando eso mas de una vez.
+//
+// Es informacion publica a proposito: el repositorio tambien lo es, asi que
+// el hash no revela nada que no se pueda mirar en GitHub. Si el repo pasa a
+// privado, conviene revisar esta decision.
+const VERSION = process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || null;
+
 app.get('/health', (req, res) => {
-  res.json({ ok: true, ts: Date.now() });
+  res.json({
+    ok: true,
+    ts: Date.now(),
+    version: VERSION ? VERSION.slice(0, 7) : 'desconocida',
+  });
 });
 
 // Middleware para loguear todas las requests
@@ -128,16 +148,23 @@ app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
-// Servir archivos estáticos desde /public en la raíz del proyecto
-app.use('/static', express.static(path.join(__dirname, '..', 'public')));
-// Servir CSS estático desde la carpeta raíz /css
-app.use('/css', express.static(path.join(__dirname, '..', 'css')));
-// Servir el HTML de administración copiado en la raíz del repositorio
-app.get('/motor-laboral-admin.html', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'motor-laboral-admin.html'));
-});
-// Servir scripts estáticos desde /js en la raíz del repositorio
-app.use('/js', express.static(path.join(__dirname, '..', 'js')));
+// SE QUITO: servir archivos estaticos desde FUERA del repositorio
+// -----------------------------------------------------------------
+// Habia cuatro handlers que publicaban `..` (el directorio PADRE del repo):
+// /static -> ../public, /css -> ../css, /js -> ../js, y ../motor-laboral-admin.html.
+//
+// Eran del sitio viejo (horasDedicacionOnline), donde el backend vivia dentro
+// de la carpeta del front y esos directorios existian un nivel mas arriba.
+// Con el repositorio actual no existen, asi que no servian nada: codigo
+// muerto.
+//
+// Se saca en vez de dejarlo porque publicar `..` es una base peligrosa: lo
+// que se sirve no depende de este repositorio sino de que haya al lado en el
+// servidor, y eso cambia con cada hosting y cada reorganizacion de carpetas.
+// El dia que alguien cree una carpeta con ese nombre, queda expuesta sin que
+// nadie lo haya decidido. Hallazgo F-07 de la auditoria de seguridad.
+//
+// El front hoy se sirve entero desde Firebase Hosting, no desde Node.
 //Importación de rutas de matching e importación de datos
 
 app.use('/api/import', importRoutes);
@@ -1035,7 +1062,7 @@ app.get('/users', requirePermission('exclusions', 'read'), async (req, res) => {
 // -- cualquier app_user logueado podia diagnosticar el legajo de OTRA
 // empresa. Herramienta de soporte interno, no algo que use ningun cliente
 // -- queda restringida a superadmin.
-app.get('/diagnostic/:badge/:month', requireSuperadmin, async (req, res) => {
+app.get('/diagnostic/:badge/:month', requireSuperadmin, reportesRateLimiter, async (req, res) => {
   try {
     const { badge, month } = req.params;
     
@@ -2911,7 +2938,11 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
 });
 
 //get para rango de fechas
-app.get('/attendance-range', requirePermission('attendance', 'read'), async (req, res) => {
+// reportesRateLimiter: este endpoint recorre meses de fichajes de cientos de
+// empleados y corre el motor de calculo dia por dia -- es el mas caro del
+// sistema. Va DESPUES de requirePermission para que el limite se cuente por
+// usuario ya resuelto y no por IP (ver el comentario en security.js).
+app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
   try {
     const { from, to } = req.query;
 
@@ -4230,7 +4261,7 @@ async function fetchMarkerMap(category, tenantId) {
 }
 
 // GET /movements-range?from=&to=&category=PARTICULAR|OFICIAL&employeeId=&groupBy=day|month|year
-app.get('/movements-range', requirePermission('attendance', 'read'), async (req, res) => {
+app.get('/movements-range', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
   try {
     const { from, to } = req.query;
     const category = req.query.category;
