@@ -29,6 +29,8 @@ const rolesRoutes = require('./routes/roles');
 const billingRoutes = require('./routes/billing');
 const agentRoutes = require('./routes/agent');
 const agentKeysRoutes = require('./routes/agentKeys');
+// Reglas de las cargas manuales: "si fichó, esa es la fuente de la verdad".
+const manualRules = require('./manualEntryRules');
 const syncStatusRoutes = require('./routes/syncStatus');
 const { insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_MANUAL_IMPORT } = require('./motor-laboral/services/checkinsIngestService');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
@@ -252,6 +254,35 @@ async function resolveOwnerTenantId(userId, req) {
   return owner ? owner.tenant_id : null;
 }
 
+// Los fichajes reales de ese usuario ese dia, para poder decir si una carga
+// manual de horas extra se pisa con algo ya registrado por el reloj.
+//
+// El OR con Badgenumber es el mismo puente que usa todo el resto del sistema
+// (ver el comentario de fetchMovementCheckins): no todos los relojes graban
+// Checkins.USERID igual, algunos graban el numero de legajo.
+async function fichajesDelDia(userId, tenantId, fecha) {
+  const params = [fecha, userId, String(userId)];
+  let query = `
+    SELECT c.CHECKTIME FROM Checkins c
+    WHERE DATE(c.CHECKTIME) = ?
+      AND (c.USERID = ? OR CAST(c.USERID AS CHAR) = ?)`;
+  if (tenantId !== null && tenantId !== undefined) {
+    query += ' AND c.tenant_id = ?';
+    params.push(tenantId);
+  }
+  query += ' ORDER BY c.CHECKTIME';
+  const [rows] = await db.query(query, params);
+  return rows.map((r) => r.CHECKTIME);
+}
+
+// Devuelve el mensaje de choque, o null si no hay solape. `start` y `end`
+// vienen ya normalizados a 'YYYY-MM-DD HH:MM:SS'.
+async function validarSolapeConFichajes(userId, tenantId, start, end, ignorarEntryId = null) {
+  const fecha = String(start).slice(0, 10);
+  const checktimes = await fichajesDelDia(userId, tenantId, fecha);
+  return manualRules.validarSolape({ startDatetime: start, endDatetime: end }, checktimes);
+}
+
 // Lee una entrada manual validando que sea de la empresa de quien llama.
 // Devuelve null si no existe o si es de otra empresa -- los dos casos se
 // responden igual (404) a proposito: contestar "existe pero no es tuya"
@@ -359,6 +390,19 @@ app.post('/add/manual', requirePermission('attendance', 'create'), async (req, r
     const tenantId = await resolveOwnerTenantId(Number(userId), req);
     const performedBy = auditLog.actorId(req);
 
+    // "Si fichó, esa es la fuente de la verdad". Una carga manual de horas
+    // extra existe para cubrir lo que el reloj NO registró; si el reloj ya
+    // registró ese tramo, no agrega información, agrega tiempo contado dos
+    // veces. Ver manualEntryRules.js para el caso que lo destapó.
+    //
+    // Solo aplica a 'he': una licencia puede perfectamente caer sobre un
+    // horario fichado (alguien que se va a media jornada), y 'omit' no tiene
+    // duración propia.
+    if (type === 'he') {
+      const choque = await validarSolapeConFichajes(Number(userId), tenantId, start, end);
+      if (choque) return res.status(409).json({ error: choque });
+    }
+
     // El alta y su fila de auditoria van juntas en una transaccion: nunca
     // debe quedar una carga de horas sin registro de quien la hizo.
     const insertId = await auditLog.inTransaction(db, async (conn) => {
@@ -445,6 +489,14 @@ app.put('/update/manual/:id', requirePermission('attendance', 'update'), async (
       return res.status(404).json({ error: 'Registro manual no encontrado' });
     }
     const performedBy = auditLog.actorId(req);
+
+    // Misma regla que en el alta: editar una carga para moverla ENCIMA de un
+    // horario fichado es el mismo problema que crearla ahí.
+    if (type === 'he') {
+      const choque = await validarSolapeConFichajes(
+        Number(previous.userId), previous.tenant_id, start, end);
+      if (choque) return res.status(409).json({ error: choque });
+    }
 
     await auditLog.inTransaction(db, async (conn) => {
       await conn.query(
@@ -3300,12 +3352,21 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
     // marcar reloj). 'omit' anula el computo automatico de ESE dia (para
     // cuando un fichaje real no corresponde a horas extra) sin afectar el
     // estado de presentismo (llegada tarde/ausente siguen igual).
+    // Se traen tambien los horarios, la nota y quien la cargo: el detalle
+    // tiene que poder MOSTRAR la carga (pedido concreto), no solo saber que
+    // existe. Antes solo viajaba un total de minutos, y por eso la pantalla
+    // marcaba "hay carga manual" sin poder decir cual ni de cuando.
     const [manualEntryRows] = await db.query(`
-      SELECT id, userId, DATE(startDatetime) AS date, durationMinutes, type
-      FROM ManualEntries
-      WHERE startDatetime >= ? AND startDatetime < ?
+      SELECT m.id, m.userId, DATE(m.startDatetime) AS date,
+             m.startDatetime, m.endDatetime, m.durationMinutes, m.type, m.note,
+             m.createdAt, au.email AS createdByEmail
+      FROM ManualEntries m
+      LEFT JOIN app_users au ON au.id = m.created_by
+      WHERE m.startDatetime >= ? AND m.startDatetime < ?
     `, [from, exclusiveEndDateStr]);
     const manualMinutesByUserDate = new Map();
+    // Las entradas completas, para el detalle del dia.
+    const manualEntriesByUserDate = new Map();
     // Antes era un Set (solo si HABIA un omit ese dia) -- ahora un Map a su
     // id, para que el frontend pueda des-marcar "Omitir" con un checkbox
     // directo (DELETE /delete/manual/:id) sin tener que abrir el dialogo
@@ -3315,9 +3376,22 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
       const key = `${m.userId}_${m.date}`;
       if (m.type === 'omit') {
         manualOmitByUserDate.set(key, m.id);
-      } else {
-        manualMinutesByUserDate.set(key, (manualMinutesByUserDate.get(key) || 0) + Number(m.durationMinutes));
+        return;
       }
+      manualMinutesByUserDate.set(key, (manualMinutesByUserDate.get(key) || 0) + Number(m.durationMinutes));
+      if (!manualEntriesByUserDate.has(key)) manualEntriesByUserDate.set(key, []);
+      manualEntriesByUserDate.get(key).push({
+        id: m.id,
+        type: m.type,
+        start: m.startDatetime ? String(m.startDatetime).slice(11, 16) : null,
+        end: m.endDatetime ? String(m.endDatetime).slice(11, 16) : null,
+        minutes: Number(m.durationMinutes),
+        note: m.note || null,
+        // Quien la cargo y cuando: pedido explicito, y es lo que permite
+        // responder un reclamo sobre horas que alguien agrego a mano.
+        createdByEmail: m.createdByEmail || null,
+        createdAt: m.createdAt || null,
+      });
     });
 
     const getScheduleEntry = (date, assignedScheduleMap, tenantScheduleMap, employeeId, tenantId) => {
@@ -3748,7 +3822,22 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
           // parte automatica -- son cargas humanas explicitas, fuera del
           // alcance de cualquiera de los dos.
           const manualKey = u.USERID ? `${u.USERID}_${date}` : null;
-          const manualMinutesThisDay = manualKey ? (manualMinutesByUserDate.get(manualKey) || 0) : 0;
+          const manualEntriesThisDay = manualKey ? (manualEntriesByUserDate.get(manualKey) || []) : [];
+          // "Si fichó, esa es la fuente de la verdad": de los minutos
+          // cargados a mano solo cuentan los que NO están ya cubiertos por
+          // los fichajes de ese día.
+          //
+          // El alta ya bloquea cargar una HE encima de un horario fichado,
+          // pero esto igual hace falta: los fichajes pueden llegar DESPUÉS
+          // (el agente sincroniza a la noche, la carga se hizo a la mañana).
+          // Ahí el solape aparece sin que nadie haya hecho nada mal, y la
+          // validación del alta no lo puede ver. Ver manualEntryRules.js.
+          const checktimesThisDay = checks.map((c) => c.CHECKTIME ?? c);
+          const manualMinutesThisDay = manualEntriesThisDay.reduce(
+            (suma, e) => suma + manualRules.minutosQueNoSeSolapan(
+              { durationMinutes: e.minutes, startDatetime: `${date} ${e.start}:00`, endDatetime: `${date} ${e.end}:00` },
+              checktimesThisDay
+            ), 0);
           const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
           const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
           const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
@@ -3900,6 +3989,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), async (req
               // solo la bandera para mostrar el aviso cuando corresponda.
               overtimeOverCap: dayOvertimeOverCap,
               overtimeManualMinutes: manualMinutesThisDay,
+              // Las cargas manuales con su horario, la nota y quién las
+              // agregó. Antes solo viajaba el total de minutos: la pantalla
+              // sabía que había carga manual pero no tenía qué mostrar.
+              // Va también al PDF y al Excel.
+              manualEntries: manualEntriesThisDay,
               overtimeManuallyOmitted: isManuallyOmitted,
               // Pedido real: poder tildar/destildar "Omitido" directo desde
               // el detalle (sin abrir el dialogo de HE manual) -- hace falta
