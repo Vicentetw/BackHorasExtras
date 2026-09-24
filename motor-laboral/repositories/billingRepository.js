@@ -160,12 +160,39 @@ async function updateSubscriptionStatus(tenantId, status, db) {
 // Registrar un pago (manual o MercadoPago) y extender el periodo vigente a
 // partir de la fecha de vencimiento actual (o de hoy si ya estaba vencida)
 // -- para que pagar tarde no "regale" los dias de atraso.
+// Segunda red contra el doble cobro (la primera es el registro de eventos del
+// webhook, ver mercadopagoEventsRepository). MercadoPago reintenta, y si por
+// cualquier motivo el mismo pago llegara a procesarse dos veces, la clave
+// unica (method, reference) de la migracion 20260930 lo frena aca.
+//
+// Se usa ON DUPLICATE KEY con una asignacion que no cambia nada (id = id) en
+// vez de INSERT IGNORE: IGNORE se traga TODOS los errores, incluidos los que
+// habria que ver (un tenant_id que no existe, un monto invalido). Esto solo
+// ignora el choque de clave, que es el unico caso esperado.
 async function recordPayment({ tenantId, amountUsd, amountLocal, localCurrency, method, reference, periodStart, periodEnd, recordedBy }, db) {
   const [result] = await db.query(
     `INSERT INTO payment_records (tenant_id, amount_usd, amount_local, local_currency, method, reference, period_start, period_end, recorded_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE id = id`,
     [tenantId, amountUsd, amountLocal || null, localCurrency || 'ARS', method, reference || null, periodStart, periodEnd, recordedBy || null]
   );
+
+  // COMO SE SABE QUE FUE UN DUPLICADO: por `insertId`, no por `affectedRows`.
+  //
+  // Medido contra MySQL 8 con este mismo driver, porque la intuicion falla:
+  //     insercion nueva -> { affectedRows: 1, insertId: <nuevo id> }
+  //     duplicado       -> { affectedRows: 1, insertId: 0 }
+  // O sea que affectedRows vale 1 en los DOS casos y no sirve para
+  // distinguirlos. El primer intento de este arreglo uso affectedRows === 0 y
+  // los tests lo agarraron: el periodo se seguia extendiendo dos veces.
+  //
+  // Que el periodo no se extienda de nuevo es la parte que importa --
+  // extenderlo dos veces le regala un mes al cliente.
+  if (!result.insertId) {
+    const [[previo]] = await db.query(
+      'SELECT id FROM payment_records WHERE method = ? AND reference = ?', [method, reference]);
+    return previo ? previo.id : null;
+  }
   await db.query(
     `UPDATE tenant_subscriptions
      SET status = 'active', current_period_start = ?, current_period_end = ?, last_payment_at = CURRENT_TIMESTAMP,
