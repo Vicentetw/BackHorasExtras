@@ -54,7 +54,26 @@ async function main() {
   try {
     console.log('Corriendo ' + file + ' ...\n');
     const [results] = await conn.query(sql);
-    const rowsSets = Array.isArray(results) && Array.isArray(results[0]) ? results : [results];
+
+    // Con multipleStatements, un .sql de varios statements devuelve una
+    // LISTA de resultados; uno solo devuelve el resultado pelado. Hay que
+    // distinguirlos sin confundir "lista de resultados" con "lista de filas
+    // de un SELECT".
+    //
+    // Antes se miraba solo si el PRIMER elemento era un array, y eso falla
+    // justo en el caso mas comun de un arreglo: un script que empieza con
+    // START TRANSACTION. Ese primer statement devuelve un OkPacket, no un
+    // array, asi que todo el resto se trataba como un unico resultado y
+    // salia impreso como una tabla ilegible de OkPackets.
+    //
+    // El criterio correcto es mirar TODOS los elementos: en una lista de
+    // resultados cada uno es o un array de filas o un OkPacket; en una
+    // lista de filas, cada elemento es una fila comun y no cumple ninguna
+    // de las dos cosas.
+    const esResultado = (r) => Array.isArray(r) || (r && typeof r.affectedRows === 'number');
+    const rowsSets = Array.isArray(results) && results.length && results.every(esResultado)
+      ? results
+      : [results];
 
     for (const set of rowsSets) {
       if (Array.isArray(set) && set.length && set[0] && typeof set[0] === 'object' && 'chequeo' in set[0]) {
