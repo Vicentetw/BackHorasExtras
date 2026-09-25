@@ -1,0 +1,59 @@
+-- ============================================================================
+-- ¿Qué puede hacer en la base el usuario que usa la aplicación?
+-- ============================================================================
+--
+-- SOLO LEE. No cambia ningún permiso, no crea ni borra nada.
+--
+-- Cómo correrlo (PowerShell, desde la carpeta del backend):
+--   $env:MYSQL_ADDON_HOST="..."   ; $env:MYSQL_ADDON_PORT="3306"
+--   $env:MYSQL_ADDON_USER="..."   ; $env:MYSQL_ADDON_PASSWORD="..."
+--   $env:MYSQL_ADDON_DB="..."
+--   node run-sql.js DIAGNOSTICO_PRIVILEGIOS_MYSQL.sql
+--
+-- QUÉ ESTAMOS BUSCANDO (hallazgo F-12 de la auditoría)
+-- -----------------------------------------------------
+-- La aplicación necesita leer y escribir filas: SELECT, INSERT, UPDATE y
+-- DELETE. Nada más. Las migraciones (ALTER, CREATE) se corren a mano, y para
+-- eso alcanza con hacerlo una vez con un usuario más poderoso.
+--
+-- Si el usuario de la aplicación además tiene DROP, ALTER, CREATE USER, GRANT,
+-- FILE o SUPER, entonces una credencial filtrada deja de significar "alguien
+-- leyó datos" y pasa a significar "alguien borró la base y se quedó adentro".
+-- Es la diferencia entre un incidente y una catástrofe.
+--
+-- Esto se llama principio de mínimo privilegio: cada cuenta puede hacer
+-- exactamente lo que su trabajo requiere, y nada más. No evita que te roben
+-- la credencial; limita cuánto daño se puede hacer con ella.
+--
+-- CÓMO LEER EL RESULTADO
+-- ----------------------
+-- Vas a ver una o más líneas tipo:
+--
+--   GRANT SELECT, INSERT, UPDATE, DELETE ON `mi_base`.* TO `mi_usuario`@`%`
+--
+-- Buscá si aparece alguna de estas palabras:
+--
+--   ALL PRIVILEGES   <- el caso a evitar: puede hacer absolutamente todo
+--   DROP             <- puede borrar tablas enteras
+--   GRANT OPTION     <- puede darse más permisos a sí mismo, o dárselos a otro
+--   CREATE USER      <- puede crearse una cuenta nueva para volver a entrar
+--   FILE             <- puede leer y escribir archivos del servidor
+--   SUPER            <- administración del motor
+--
+-- Si no aparece ninguna, está bien y no hay nada que hacer.
+--
+-- OJO ANTES DE CAMBIAR NADA: en Clever Cloud el usuario viene dado por el
+-- proveedor y puede que no se pueda modificar sus permisos. Si ese es el caso,
+-- la respuesta no es forzarlo sino otra: pedir un usuario adicional acotado, o
+-- aceptar el riesgo sabiendo cuál es. Primero mirar, después decidir.
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1. Con qué usuario se está conectando la aplicación
+-- ---------------------------------------------------------------------------
+SELECT CURRENT_USER() AS usuario_efectivo, USER() AS usuario_conectado, DATABASE() AS base;
+
+-- ---------------------------------------------------------------------------
+-- 2. Qué tiene permitido hacer
+-- ---------------------------------------------------------------------------
+SHOW GRANTS FOR CURRENT_USER();

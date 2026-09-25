@@ -1,0 +1,147 @@
+# ============================================================================
+# Backup diario de la base, corriendo en la nube
+# ============================================================================
+#
+# QUE RESUELVE
+# ------------
+# scripts/backup-produccion.ps1 anda bien, pero corre en una PC: el dia que
+# esa maquina esta apagada, no hay backup. Ya paso -- faltaba el backup del
+# 22/09 porque la computadora no estaba prendida.
+#
+# Esto corre en los servidores de GitHub, gratis, todos los dias, sin depender
+# de ninguna maquina tuya.
+#
+# DONDE VA ESTE ARCHIVO
+# ---------------------
+# NO en BackHorasExtras. Ese repositorio es PUBLICO, y las credenciales de
+# produccion irian ahi como secrets. GitHub no se los da a los forks, asi que
+# tecnicamente no se filtran, pero un repo publico es el peor lugar para
+# acostumbrarse a guardar credenciales de produccion: alcanza una configuracion
+# distraida mas adelante para que dejen de estar protegidas.
+#
+# Crea un repositorio PRIVADO (por ejemplo "horas-dedica-backups") y pone este
+# archivo en:
+#
+#     .github/workflows/backup.yml
+#
+# CONFIGURAR LOS SECRETS
+# ----------------------
+# En ese repo privado: Settings -> Secrets and variables -> Actions -> New
+# repository secret. Uno por cada uno:
+#
+#     MYSQL_HOST       bjtzqo...-mysql.services.clever-cloud.com
+#     MYSQL_PORT       3306
+#     MYSQL_USER       (el usuario de la base)
+#     MYSQL_PASSWORD   (la password)
+#     MYSQL_DB         (el nombre de la base)
+#
+# Nunca escribas estos valores en el archivo. Para eso existen los secrets:
+# GitHub los guarda cifrados y los tapa en los logs si alguien los imprime
+# por accidente.
+#
+# PROBARLO SIN ESPERAR AL HORARIO
+# -------------------------------
+# La linea `workflow_dispatch` de abajo agrega un boton "Run workflow" en la
+# solapa Actions. Corrilo a mano la primera vez: si algo esta mal configurado,
+# es mejor enterarse ahora que dentro de tres semanas cuando lo necesites.
+# ============================================================================
+
+name: Backup diario de la base
+
+on:
+  schedule:
+    # 06:00 UTC = 03:00 en Argentina. De madrugada, cuando nadie ficha.
+    # OJO: GitHub no garantiza el horario exacto -- en momentos de mucha carga
+    # puede demorarse bastante. Para un backup diario da igual.
+    - cron: '0 6 * * *'
+  # Permite correrlo a mano desde la solapa Actions.
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar el cliente de MySQL
+        # El runner de Ubuntu no trae mysqldump. mysql-client-core es lo
+        # minimo que hace falta y tarda pocos segundos.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mysql-client-core-8.0
+
+      - name: Hacer el dump
+        env:
+          MYSQL_PWD: ${{ secrets.MYSQL_PASSWORD }}
+        run: |
+          set -euo pipefail
+          SELLO=$(date -u +'%Y-%m-%d_%H%M')
+          ARCHIVO="backup-${SELLO}.sql"
+          echo "ARCHIVO=$ARCHIVO" >> "$GITHUB_ENV"
+
+          # --single-transaction toma una foto consistente SIN bloquear la
+          # base: se puede correr con el sistema en uso.
+          # --set-gtid-purged=OFF evita que el dump traiga instrucciones de
+          # replicacion que despues rompen al restaurar en otro servidor.
+          mysqldump \
+            --host="${{ secrets.MYSQL_HOST }}" \
+            --port="${{ secrets.MYSQL_PORT }}" \
+            --user="${{ secrets.MYSQL_USER }}" \
+            --single-transaction \
+            --quick \
+            --default-character-set=utf8mb4 \
+            --set-gtid-purged=OFF \
+            "${{ secrets.MYSQL_DB }}" > "$ARCHIVO"
+
+      - name: Verificar que el dump este completo
+        # Esta verificacion NO es un adorno. Si el dump se corta a la mitad
+        # (se cae la red, se llena el disco), el archivo queda igual: con
+        # tamaño, con aspecto de backup, y sin la marca final. Un backup
+        # truncado que nadie reviso es peor que no tener backup, porque da
+        # confianza falsa.
+        run: |
+          set -euo pipefail
+          if ! tail -5 "$ARCHIVO" | grep -q "Dump completed"; then
+            echo "El dump esta truncado: no termina en 'Dump completed'."
+            exit 1
+          fi
+          PESO=$(du -h "$ARCHIVO" | cut -f1)
+          LINEAS=$(wc -l < "$ARCHIVO")
+          echo "Dump completo: $PESO, $LINEAS lineas."
+
+          # Un dump que "funciona" pero vino vacio tambien pasa la marca final.
+          # Se chequea que esten las tablas que tienen que estar.
+          for TABLA in employees Checkins tenants app_users; do
+            if ! grep -q "CREATE TABLE \`$TABLA\`" "$ARCHIVO"; then
+              echo "Falta la tabla $TABLA en el dump."
+              exit 1
+            fi
+          done
+          echo "Las tablas principales estan."
+
+      - name: Comprimir
+        run: gzip -9 "$ARCHIVO"
+
+      - name: Guardar
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-${{ github.run_number }}
+          path: ${{ env.ARCHIVO }}.gz
+          # 90 dias es el maximo de GitHub. El backup comprimido pesa ~1.5 MB,
+          # asi que 90 dias son ~135 MB: entra holgado en la cuota gratis de
+          # un repo privado (500 MB).
+          #
+          # Para guardar mas tiempo hay que mandarlo afuera (S3, Backblaze B2,
+          # Google Drive). Recien vale la pena cuando la base crezca mucho.
+          retention-days: 90
+
+      # Si el backup falla, hay que ENTERARSE. Un backup que dejo de correr y
+      # nadie noto es el caso clasico: te das cuenta el dia que lo necesitas.
+      # GitHub ya manda un mail al dueño del repo cuando falla un workflow
+      # programado -- revisa que ese mail te llegue y no se vaya a spam.
+      #
+      # Ademas, GitHub DESACTIVA los workflows programados de un repo sin
+      # actividad por 60 dias, y avisa por mail. Si el repo es solo para
+      # backups no vas a tocarlo nunca, asi que es muy probable que pase:
+      # cuando llegue ese aviso, entra y reactivalo.
+      - name: Avisar si algo fallo
+        if: failure()
+        run: echo "El backup fallo. Revisar los logs de esta corrida."
