@@ -89,7 +89,22 @@ async function main() {
         console.log('OK -- ' + set.length + ' fila(s):');
         if (set.length) {
           const TOPE = 50;
-          console.table(set.slice(0, TOPE));
+          const visibles = set.slice(0, TOPE);
+
+          // Una sola columna con texto largo (el caso tipico: SHOW GRANTS)
+          // sale ilegible en console.table: la tabla dibuja un marco del ancho
+          // del texto mas largo y hay que scrollear de costado para leer algo.
+          // En ese caso conviene una lista pelada.
+          const columnas = Object.keys(visibles[0] || {});
+          const unaSolaColumnaLarga = columnas.length === 1 &&
+            visibles.some((f) => String(f[columnas[0]] ?? '').length > 80);
+
+          if (unaSolaColumnaLarga) {
+            console.log('  (' + columnas[0] + ')');
+            visibles.forEach((f) => console.log('  - ' + f[columnas[0]]));
+          } else {
+            console.table(visibles);
+          }
           if (set.length > TOPE) {
             console.log('   (se muestran las primeras ' + TOPE + ' de ' + set.length +
                         ' -- agregale un LIMIT a la consulta si necesitas ver otras)');
