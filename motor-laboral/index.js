@@ -30,7 +30,7 @@ function createLaborEngineRoutes(db) {
       findByDate: (date, tenantId) => exclusionRepository.findByDate(date, tenantId, db)
     },
     employeeEvent: {
-      findByDate: (date) => employeeEventRepository.findByDate(date, db)
+      findByDate: (date, tenantId) => employeeEventRepository.findByDate(date, db, tenantId)
     }
   };
 

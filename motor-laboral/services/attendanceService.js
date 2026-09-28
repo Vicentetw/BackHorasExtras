@@ -295,7 +295,7 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
   const rawUsers = await repositories.user.findAll({ tenantId });
   const checkins = await repositories.checkin.findByDate(normalizedDate, tenantId);
   const exclusions = await repositories.exclusion.findByDate(normalizedDate, tenantId);
-  const leaveEvents = await repositories.employeeEvent.findByDate(normalizedDate);
+  const leaveEvents = await repositories.employeeEvent.findByDate(normalizedDate, tenantId);
 
   const usersMap = new Map();
   const tenantIds = new Set();
