@@ -46,6 +46,17 @@ async function detalle() {
   return { row, dia };
 }
 
+// Vista DIARIA de Presentismo (motor diario). Bug real: OLGUIN el 23/09/2026
+// salia "Ausente" aca aunque /attendance-range ya lo resolvia.
+async function diario(fecha) {
+  const res = await fetch(`${BASE_URL}/api/labor-engine/attendance/${fecha}?tenantId=${TENANT_A}`, { headers });
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  const fila = json.attendance.find((a) => String(a.employeeId) === String(LEGAJO));
+  assert.ok(fila, 'el empleado debe aparecer en el motor diario');
+  return { fila, summary: json.summary };
+}
+
 async function ponerModo(modo) {
   const res = await fetch(`${BASE_URL}/config/campana-presentismo-modo?tenantId=${TENANT_A}`, {
     method: 'POST',
@@ -136,6 +147,13 @@ test('modo por defecto (ignorar): los dias en el campo siguen "Ausente", igual q
   assert.equal(dia('2026-05-09').inCampaign, undefined, 'con ignorar no se agrega ninguna marca');
 });
 
+test('motor diario, modo por defecto: un dia en el campo sigue "Ausente", igual que siempre', async () => {
+  const { fila, summary } = await diario('2026-05-05');
+  assert.equal(fila.status, 'Absent');
+  assert.equal(fila.campaignCountsAs, undefined);
+  assert.equal(summary.campaign, 0);
+});
+
 test('una licencia de OTRA empresa con el mismo legajo no se cuela', async () => {
   // La empresa B cargo una licencia el miercoles para SU legajo 7001. Antes
   // del arreglo, este miercoles salia "Excused" en la empresa A.
@@ -185,6 +203,29 @@ test('sabado y domingo en campaña siguen siendo no laborables, marcados "en cam
     assert.equal(dia(fecha).status, 'NonWorkDay', fecha);
     assert.equal(dia(fecha).inCampaign, true, fecha);
   }
+});
+
+test('motor diario, modo trabajado: el dia en el campo es "Campaign", igual que en la vista mensual', async () => {
+  await ponerModo('trabajado');
+  const { fila, summary } = await diario('2026-05-05');
+  assert.equal(fila.status, 'Campaign');
+  assert.equal(fila.campaignCountsAs, 'trabajado');
+  assert.equal(summary.campaign, 1);
+  assert.equal(summary.absent, 0);
+});
+
+test('motor diario: el dia de salida cuenta por su fichaje y la licencia gana sobre la campaña', async () => {
+  await ponerModo('trabajado');
+  assert.notEqual((await diario(DESDE)).fila.status, 'Campaign');
+  assert.equal((await diario('2026-05-07')).fila.status, 'Excused');
+});
+
+test('motor diario, modo excusado: suma a excusados', async () => {
+  await ponerModo('excusado');
+  const { fila, summary } = await diario('2026-05-06');
+  assert.equal(fila.status, 'Campaign');
+  assert.equal(fila.campaignCountsAs, 'excusado');
+  assert.equal(summary.excused, 1);
 });
 
 test('modo excusado: los dias del medio suman a Excusado, no a trabajados', async () => {

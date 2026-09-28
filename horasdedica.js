@@ -40,6 +40,7 @@ const userRepository = require('./motor-laboral/repositories/userRepository');
 const employeeEventRepository = require('./motor-laboral/repositories/employeeEventRepository');
 const attendanceCalc = require('./motor-laboral/services/attendanceCalculations');
 const movementsCalc = require('./motor-laboral/services/movementsCalculations');
+const campanaService = require('./motor-laboral/services/campanaService');
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
@@ -4242,70 +4243,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
 // La lógica de detección vive en motor-laboral/services/movementsCalculations.js
 // (compartida entre este endpoint y /campana-range) para no duplicarla.
 
-async function fetchMovementCheckins(fromDate, toDateExclusive, tenantId) {
-  // El join por badge (ademas de por USERID) es necesario porque no todos
-  // los relojes graban Checkins.USERID igual: algunos graban el USERID
-  // interno, otros graban directamente el numero de legajo/badge -- mismo
-  // fallback que ya usa /attendance-range. Sin esto, los fichajes de
-  // cualquier empleado cuyo reloj haga esto quedan invisibles para el motor
-  // de salidas (se tratan como ruido) aunque sí se calculen bien las horas
-  // normales -- caso real: PERROTTA Valentina, legajo 1011, 07/07/2026.
-  //
-  // Fase 19: tenant_id en cada JOIN (users/Checkins/user_employee_map ya
-  // no son unicos solo por USERID, migracion 20260909) -- el filtrado
-  // final por employeeById.has(...) en /movements-range ya evitaba que
-  // esto se viera en la respuesta, pero un legajo coincidente entre dos
-  // empresas (ej. las dos usan "1000") podia igual atribuirle mal un
-  // movimiento a la empresa equivocada antes de llegar a esta version.
-  const params = [fromDate, toDateExclusive];
-  let query = `
-    SELECT c.CHECKTIME AS checktime, c.USERID AS rawUserId, e.employee_id AS employeeId,
-           c.MACHINE_IP AS machineIp
-    FROM Checkins c
-    LEFT JOIN users u
-      ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
-      AND u.tenant_id = c.tenant_id
-    LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
-    LEFT JOIN employees e ON e.id = uem.employee_id
-    WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?`;
-  if (tenantId !== undefined && tenantId !== null) {
-    query += ` AND c.tenant_id = ?`;
-    params.push(tenantId);
-  }
-  query += ` ORDER BY c.CHECKTIME`;
-  const [rows] = await db.query(query, params);
-  return rows.map(r => ({
-    // db.js usa dateStrings:true -- CHECKTIME llega como 'YYYY-MM-DD HH:MM:SS',
-    // no como Date. El motor de detección compara/formatea fechas, así que se
-    // parsea acá, en el único lugar que toca la fila cruda de la DB.
-    checktime: new Date(r.checktime.replace(' ', 'T')),
-    userId: r.rawUserId,
-    employeeId: r.employeeId !== null ? String(r.employeeId) : null,
-    // De que reloj vino: un marcador solo lo puede consumir un fichaje del
-    // MISMO aparato (ver mismoReloj en movementsCalculations.js).
-    machineIp: r.machineIp ?? null
-  }));
-}
-
-async function fetchMarkerMap(category, tenantId) {
-  const params = [];
-  let query = `SELECT userId, category, direction, badgeNumber FROM specialusers WHERE isActive = TRUE AND direction IS NOT NULL`;
-  if (category) {
-    query += ` AND category = ?`;
-    params.push(category);
-  }
-  // Fase 19: sin esto, el mapa de marcadores (badge 9/10) de OTRA empresa
-  // se mezclaba con el propio -- un USERID de marcador coincidente entre
-  // dos empresas hubiera abierto/cerrado eventos con el criterio equivocado.
-  if (tenantId !== undefined && tenantId !== null) {
-    query += ` AND tenant_id = ?`;
-    params.push(tenantId);
-  }
-  const [rows] = await db.query(query, params);
-  const markerMap = {};
-  rows.forEach(m => { markerMap[m.userId] = { category: m.category, direction: m.direction, badgeNumber: m.badgeNumber }; });
-  return markerMap;
-}
+// La deteccion (fichajes crudos, mapa de marcadores, ventana) vive en
+// motor-laboral/services/campanaService.js, compartida con el motor diario.
+// Estos envoltorios mantienen los nombres de siempre para los llamadores de aca.
+const fetchMovementCheckins = (fromDate, toDateExclusive, tenantId) => campanaService.fetchMovementCheckins(db, fromDate, toDateExclusive, tenantId);
+const fetchMarkerMap = (category, tenantId) => campanaService.fetchMarkerMap(db, category, tenantId);
 
 // GET /movements-range?from=&to=&category=PARTICULAR|OFICIAL&employeeId=&groupBy=day|month|year
 app.get('/movements-range', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
@@ -4493,45 +4435,10 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
 // Campañas de una empresa en un rango -- UNA sola fuente para todo el sistema
 // ============================================================================
 //
-// La usan el reporte de Campaña (/campana-range) y Presentismo
-// (/attendance-range). Antes la deteccion vivia solo dentro del reporte, y
-// Presentismo nunca se enteraba de las campañas: marcaba "Ausente" cada dia
-// que la persona estaba en el campo (OLGUIN, agosto 2026: 18 ausencias que
-// no eran). Con una sola funcion, los dos ven exactamente las mismas campañas.
-//
-// Devuelve las campañas que TOCAN el rango: las cerradas cuyo regreso cae en
-// o despues de `from`, y las que siguen abiertas. Una empresa sin marcadores
-// CAMPANA sale en la primera consulta sin tocar Checkins -- si no usa
-// campañas, esto no le cuesta nada.
-//
-// Usa `reboteRefinado` (ver movementsCalculations.js): sin eso se perdian 79
-// de 582 salidas a campaña reales en AVP.
-const CAMPANA_LOOKBACK_DAYS = 90;
-async function detectarCampanas(tenantId, from, to) {
-  const markerMap = await fetchMarkerMap('CAMPANA', tenantId);
-  if (Object.keys(markerMap).length === 0) return [];
-
-  // Una salida a campaña puede haber arrancado antes del "from" pedido --
-  // se busca hasta CAMPANA_LOOKBACK_DAYS atrás para no perder el
-  // emparejamiento con su regreso, que sí puede caer dentro del rango.
-  const [fy, fm, fd] = from.split('-').map(Number);
-  const lookbackFromStr = formatLocalDate(new Date(fy, fm - 1, fd - CAMPANA_LOOKBACK_DAYS));
-  const checkins = await fetchMovementCheckins(lookbackFromStr, nextDayStr(to), tenantId);
-  const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
-  const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
-  const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, {
-    maxMarkerGapMs, todosLosMarcadores, reboteRefinado: true,
-  });
-
-  const fromDate = new Date(fy, fm - 1, fd);
-  return [
-    ...closedEvents.filter(e => e.timeIn >= fromDate).map(e => ({ ...e, hasReturn: true })),
-    ...Array.from(openEvents.entries()).map(([employeeId, ev]) => ({
-      employeeId, category: ev.category, timeOut: ev.timeOut, timeIn: null, hasReturn: false,
-      salidaMarkerUserId: ev.salidaMarkerUserId ?? null, regresoMarkerUserId: null,
-    })),
-  ].filter(e => e.category === 'CAMPANA');
-}
+// La usan el reporte de Campaña (/campana-range), Presentismo por rango
+// (/attendance-range) y el motor diario. La implementacion vive en
+// motor-laboral/services/campanaService.js; ver CAMPANA.md.
+const detectarCampanas = (tenantId, from, to) => campanaService.detectarCampanas(db, tenantId, from, to);
 
 // GET /campana-range?from=&to=&employeeId= -- a diferencia de Particular/Oficial,
 // una salida a Campaña puede durar varios días: no se cierra al fin del día,
@@ -4621,11 +4528,8 @@ app.post('/config/campana-cutoff', requirePermission('schedules', 'update'), asy
 // Es por empresa porque cada organizacion interpreta distinto su trabajo de
 // campo. El default es 'ignorar' a proposito: una empresa que no usa
 // campañas -- o que todavia no decidio -- no ve ningun cambio.
-const CAMPANA_PRESENTISMO_MODOS = ['ignorar', 'trabajado', 'excusado'];
-async function fetchCampanaPresentismoModo(tenantId) {
-  const value = await getAppSetting('campanaPresentismoModo', tenantId, db);
-  return CAMPANA_PRESENTISMO_MODOS.includes(value) ? value : 'ignorar';
-}
+const { CAMPANA_PRESENTISMO_MODOS } = campanaService;
+const fetchCampanaPresentismoModo = (tenantId) => campanaService.fetchCampanaPresentismoModo(db, tenantId);
 
 app.get('/config/campana-presentismo-modo', requirePermission('schedules', 'read'), async (req, res) => {
   try {
@@ -4656,11 +4560,7 @@ app.post('/config/campana-presentismo-modo', requirePermission('schedules', 'upd
 // empleado, o porque lo dejó fichado sin volver) podía terminar
 // atribuyéndosele a cualquiera que fichara minutos después por un motivo
 // no relacionado -- caso real: Perrotta 02/07/2026.
-async function fetchMarkerMaxGapMs(tenantId) {
-  const value = await getAppSetting('markerMaxGapSeconds', tenantId, db);
-  const seconds = value ? Number(value) : 30;
-  return (Number.isFinite(seconds) && seconds > 0 ? seconds : 30) * 1000;
-}
+const fetchMarkerMaxGapMs = (tenantId) => campanaService.fetchMarkerMaxGapMs(db, tenantId);
 
 app.get('/config/marker-max-gap-seconds', requirePermission('schedules', 'read'), async (req, res) => {
   try {

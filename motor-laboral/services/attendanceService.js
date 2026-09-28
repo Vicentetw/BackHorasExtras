@@ -102,7 +102,10 @@ function getScheduleEntryOrNull(assignedScheduleMap, tenantScheduleMap, employee
 // mismo fix en /attendance-range de horasdedica2.js). assignedScheduleMapYesterday/
 // tenantScheduleMapYesterday: mismo shape que sus pares de "hoy", pero
 // resueltos para el dia anterior -- ver calculateDailyAttendance.
-function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents = [], assignedScheduleMapYesterday = null, tenantScheduleMapYesterday = null) {
+// campana: { modo: 'trabajado'|'excusado', empleados: Set<legajo> } -- quienes
+// estan adentro de una campaña ese dia (campanaService.empleadosEnCampanaElDia).
+// null = la empresa no interpreta campañas (modo 'ignorar'): nada cambia.
+function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents = [], assignedScheduleMapYesterday = null, tenantScheduleMapYesterday = null, campana = null) {
   checkins.forEach(c => {
     const entry = usersMap.get(String(c.employeeId));
     if (entry) {
@@ -204,6 +207,13 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       status = 'NonWorkDay';
     } else if (exclusion || leaveEvent) {
       status = 'Excused';
+    } else if (campana && campana.empleados.has(String(u.employeeId))) {
+      // Dia habil sin fichaje, adentro de una campaña (bug real: OLGUIN,
+      // 23/09/2026, "Ausente" en la vista diaria estando en el campo). Mismo
+      // lugar en la cadena que en /attendance-range: despues de la licencia
+      // (una carga humana gana sobre la deteccion automatica) y antes de
+      // inactivo. Como cuenta lo decide la empresa -- ver buildSummary.
+      status = 'Campaign';
     } else if (!u.active) {
       // Inactivo y SIN fichaje -- no corresponde contarlo como ausente (ya
       // no trabaja acá, no es una ausencia real). buildSummary no cuenta
@@ -223,6 +233,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       } : null,
       name: u.name,
       status,
+      campaignCountsAs: status === 'Campaign' ? campana.modo : undefined,
       inactiveWarning,
       firstCheckin,
       lastCheckin,
@@ -251,7 +262,12 @@ function buildSummary(attendance) {
     late: attendance.filter(a => a.status === 'Late').length,
     lateJustified: attendance.filter(a => a.status === 'LateJustified').length,
     absent: attendance.filter(a => a.status === 'Absent').length,
-    excused: attendance.filter(a => a.status === 'Excused').length,
+    // Un dia en campaña contado como 'excusado' suma aca, igual que en
+    // /attendance-range. Contado como 'trabajado' no entra en ninguno de los
+    // contadores de puntualidad (no ficho: no fue ni a tiempo ni tarde);
+    // queda en `campaign`.
+    excused: attendance.filter(a => a.status === 'Excused' || (a.status === 'Campaign' && a.campaignCountsAs === 'excusado')).length,
+    campaign: attendance.filter(a => a.status === 'Campaign').length,
     // Solo aplica a empleados con turno partido (mas de un bloque WORK por
     // dia) -- faltó marcar entrada y/o salida de alguna de sus visitas, pero
     // no de todas (si no, ya cuenta como Absent). Ver evaluateMultiVisitDay.
@@ -359,7 +375,14 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
     }
   }
 
-  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday);
+  // Campañas (ver campanaService.empleadosEnCampanaElDia): null si la empresa
+  // no las interpreta. `repositories.campana` es opcional para no obligar a
+  // cada llamador (tests con repositorios armados a mano) a proveerlo.
+  const campana = repositories.campana
+    ? await repositories.campana.empleadosEnCampanaElDia(normalizedDate, tenantId)
+    : null;
+
+  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana);
   const summary = buildSummary(attendance);
   const anyMotorSchedule = attendance.some(a => a.schedule.source === 'motor');
   const usedMotorSchedule = schedule.source === 'motor' || anyMotorSchedule;

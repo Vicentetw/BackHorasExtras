@@ -8,6 +8,7 @@ const checkinRepository = require('./repositories/checkinRepository');
 const exclusionRepository = require('./repositories/exclusionRepository');
 const employeeEventRepository = require('./repositories/employeeEventRepository');
 const attendanceService = require('./services/attendanceService');
+const campanaService = require('./services/campanaService');
 const { firebaseAuthMiddleware } = require('../firebaseAuth');
 
 function createLaborEngineRoutes(db) {
@@ -31,6 +32,9 @@ function createLaborEngineRoutes(db) {
     },
     employeeEvent: {
       findByDate: (date, tenantId) => employeeEventRepository.findByDate(date, db, tenantId)
+    },
+    campana: {
+      empleadosEnCampanaElDia: (date, tenantId) => campanaService.empleadosEnCampanaElDia(db, tenantId, date)
     }
   };
 
