@@ -151,9 +151,44 @@ async function logUserExclusion(conn, { tenantId, exclusionId, userId, action, d
   );
 }
 
+/**
+ * Registra un movimiento sobre marker_corrections ("este marcador era de
+ * otra persona"). Ver migracion 20261003_marker_corrections.sql.
+ *
+ * @param {object} conn conexion DENTRO de la transaccion (ver inTransaction)
+ * @param {object} p
+ * @param {number} p.tenantId
+ * @param {number} p.correctionId id de la fila de marker_corrections
+ * @param {'created'|'updated'|'deleted'} p.action
+ * @param {object} p.data como queda la correccion (o como estaba, si se deshizo)
+ * @param {object|null} [p.previous] como estaba ANTES (solo update/delete)
+ * @param {number|null} p.performedBy app_users.id de quien lo hizo
+ */
+async function logMarkerCorrection(conn, { tenantId, correctionId, action, data, previous, performedBy }) {
+  await conn.query(
+    `INSERT INTO marker_correction_log
+       (tenant_id, correction_id, action, marker_user_id, marker_time,
+        assigned_employee_id, previous_employee_id, reason, previous_data, performed_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      tenantId,
+      correctionId,
+      action,
+      data.marker_user_id,
+      data.marker_time,
+      data.assigned_employee_id ?? null,
+      data.previous_employee_id ?? null,
+      data.reason ?? null,
+      snapshot(previous),
+      performedBy ?? null
+    ]
+  );
+}
+
 module.exports = {
   inTransaction,
   actorId,
   logManualEntry,
-  logUserExclusion
+  logUserExclusion,
+  logMarkerCorrection
 };

@@ -114,16 +114,52 @@ plantilla (en el mismo período, 9). No es una inconsistencia: miden cosas
 distintas. El reporte mide cuánto tiempo estuvo afuera (sirve, por ejemplo,
 para viáticos) y Presentismo mide asistencia a la jornada.
 
+## Corregir a mano de quién era un marcador
+
+Pedido del 2026-09-28: "este marcador era de otra persona", dejando registrado
+quién lo corrigió y cuándo.
+
+**Dónde:** en Salidas (Particular, Oficial) y en Campaña, cada marcador tiene
+un lápiz al lado. Se elige "era de otra persona" (y quién) o "no era de nadie,
+se apretó por error", con un motivo obligatorio. Un ícono de persona con
+tilde marca los que ya fueron corregidos; desde el mismo lápiz se deshacen.
+
+**Cómo lo aplica el motor** (`detectMovements`, opción
+`correccionesMarcadores`):
+
+- "Era de X": el marcador **no entra en la adivinanza**. Queda reservado
+  para el próximo fichaje de X, de cualquier reloj, dentro de 10 minutos
+  (`VENTANA_MARCADOR_CORREGIDO_MS`). Nadie más se lo puede llevar, y no toca
+  el marcador que otra persona tenga pendiente en ese reloj. No le aplica la
+  regla de rebote ni la regla AVILA ("primer fichaje del día"): una persona
+  ya confirmó de quién era.
+- "No era de nadie": el marcador se ignora, como si no se hubiera apretado.
+- Si X no fichó en esos 10 minutos, el backend **rechaza** la corrección al
+  cargarla, en vez de guardar algo que no cambiaría nada.
+
+**Vale para todo**, no solo para el reporte donde se corrigió: la misma
+corrección se aplica en Salidas, Campaña, Presentismo (salida particular y
+horas extra) y las campañas de la vista diaria. Es un hecho sobre el
+marcador.
+
+**Auditoría:** `marker_corrections` es el estado actual (lo que lee el
+motor) y `marker_correction_log` el historial solo-inserción: alta, cambio y
+deshacer, con usuario, fecha, motivo, a quién se lo había dado el sistema y
+cómo estaba antes. Deshacer borra la corrección pero no el historial.
+Migración `20261003_marker_corrections.sql`. Tests:
+`test/marcadores-corregidos.test.js` (motor) y
+`test/marker-corrections.test.js` (endpoints, auditoría y aislamiento entre
+empresas).
+
 ## Qué NO hace todavía (extensiones previstas)
 
 - **Carga manual de una campaña**, para quien se olvidó el marcador. El
   camino previsto es usar el mismo mecanismo de las licencias
   (`employee_events` con un tipo de novedad), con un origen (marcador /
   manual) para evitar duplicados.
-- **Corregir a mano la asignación de un marcador** (pedido del 2026-09-28):
-  "este marcador era de otra persona", dejando registrado quién lo corrigió y
-  cuándo. Se necesita una tabla de correcciones con auditoría, igual que
-  `manual_entry_log`.
+- **Una lista de marcadores que nadie se llevó** (el marcador venció porque
+  la persona fichó tarde). Hoy solo se puede corregir un marcador que aparece
+  en una fila de Salidas o Campaña.
 - **Motor Legacy** (`/attendance/:date`, solo para comparar): queda
   congelado a propósito. El motor diario (`/api/labor-engine/attendance/:date`,
   el de la vista diaria) **sí** conoce las campañas desde `a150523`: usa

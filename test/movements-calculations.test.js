@@ -13,6 +13,17 @@ const {
   filterEventsOpenedByFirstCheckinOfDay
 } = require('../motor-laboral/services/movementsCalculations');
 
+// Los eventos traen tambien la hora exacta de cada marcador y si vino de una
+// correccion manual (ver marcadores-corregidos.test.js). Son datos para la
+// pantalla; estos tests comparan lo que el motor DECIDE, asi que los sacan.
+const DETALLE_DE_MARCADOR = ['salidaMarkerAt', 'salidaCorregida', 'regresoMarkerAt', 'regresoCorregido'];
+function sinDetalleDeMarcador(valor) {
+  if (Array.isArray(valor)) return valor.map(sinDetalleDeMarcador);
+  const copia = { ...valor };
+  DETALLE_DE_MARCADOR.forEach(k => delete copia[k]);
+  return copia;
+}
+
 const PARTICULAR_MARKERS = {
   5: { category: 'PARTICULAR', direction: 'REGRESO' },
   6: { category: 'PARTICULAR', direction: 'SALIDA' }
@@ -43,7 +54,7 @@ test('detectMovements: caso real legajo 2518 (23/07/2026), con ruido y marcadore
 
   assert.equal(openEvents.size, 0);
   assert.equal(closedEvents.length, 1);
-  assert.deepEqual(closedEvents[0], {
+  assert.deepEqual(sinDetalleDeMarcador(closedEvents[0]), {
     employeeId: '2518',
     category: 'PARTICULAR',
     timeOut: dt('09:43:38'),
@@ -84,7 +95,7 @@ test('detectMovements: sin fichaje de regreso ese dia queda abierta', () => {
 
   assert.equal(closedEvents.length, 0);
   assert.equal(openEvents.size, 1);
-  assert.deepEqual(openEvents.get('2525'), { category: 'PARTICULAR', timeOut: dt('09:00:05'), salidaMarkerUserId: 6 });
+  assert.deepEqual(sinDetalleDeMarcador(openEvents.get('2525')), { category: 'PARTICULAR', timeOut: dt('09:00:05'), salidaMarkerUserId: 6 });
 });
 
 test('detectMovements: marcador de regreso sin salida abierta no arma un evento cerrado/abierto, pero se reporta como orphanReturn', () => {
@@ -97,7 +108,7 @@ test('detectMovements: marcador de regreso sin salida abierta no arma un evento 
   assert.equal(closedEvents.length, 0);
   assert.equal(openEvents.size, 0);
   assert.equal(orphanReturns.length, 1);
-  assert.deepEqual(orphanReturns[0], { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('09:00:05'), regresoMarkerUserId: 5 });
+  assert.deepEqual(sinDetalleDeMarcador(orphanReturns[0]), { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('09:00:05'), regresoMarkerUserId: 5 });
 });
 
 test('detectMovements: caso real Perrotta 02/07/2026 -- aviso de entrada particular (regreso antes del primer ingreso del dia)', () => {
@@ -114,7 +125,7 @@ test('detectMovements: caso real Perrotta 02/07/2026 -- aviso de entrada particu
   assert.equal(closedEvents.length, 0);
   assert.equal(openEvents.size, 0);
   assert.equal(orphanReturns.length, 1);
-  assert.deepEqual(orphanReturns[0], { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('08:43:17'), regresoMarkerUserId: 5 });
+  assert.deepEqual(sinDetalleDeMarcador(orphanReturns[0]), { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('08:43:17'), regresoMarkerUserId: 5 });
 });
 
 test('detectMovements: un marcador vencido (>2min sin consumirse) no se le atribuye a otro empleado', () => {
@@ -147,7 +158,7 @@ test('detectMovements: dentro de la ventana default (30s), el marcador sigue sie
   const { openEvents } = detectMovements(checkins, PARTICULAR_MARKERS);
 
   assert.equal(openEvents.size, 1);
-  assert.deepEqual(openEvents.get('2525'), { category: 'PARTICULAR', timeOut: dt2('13:34:15'), salidaMarkerUserId: 6 });
+  assert.deepEqual(sinDetalleDeMarcador(openEvents.get('2525')), { category: 'PARTICULAR', timeOut: dt2('13:34:15'), salidaMarkerUserId: 6 });
 });
 
 test('detectMovements: rebote del propio empleado no consume el marcador de OTRO empleado fichado en el medio', () => {
@@ -190,7 +201,7 @@ test('detectMovements: dos lecturas propias mas alla de la ventana de rebote SI 
   const { openEvents } = detectMovements(checkins, markers);
 
   assert.equal(openEvents.size, 1);
-  assert.deepEqual(openEvents.get('2446'), { category: 'CAMPANA', timeOut: dt2('13:37:25'), salidaMarkerUserId: 8 });
+  assert.deepEqual(sinDetalleDeMarcador(openEvents.get('2446')), { category: 'CAMPANA', timeOut: dt2('13:37:25'), salidaMarkerUserId: 8 });
 });
 
 // ============================================================================
@@ -351,7 +362,7 @@ test('closeOpenEventsAtScheduleExit: cierra con el horario de salida resuelto', 
 
   const result = closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId);
 
-  assert.deepEqual(result, [{
+  assert.deepEqual(sinDetalleDeMarcador(result), [{
     employeeId: '2525',
     category: 'PARTICULAR',
     timeOut: dt('09:00:05'),
@@ -391,7 +402,7 @@ test('openOrphanReturnsAtScheduleEntrance: sintetiza la salida con el horario de
 
   const result = openOrphanReturnsAtScheduleEntrance(orphanReturns, entranceTimeByEmployeeId);
 
-  assert.deepEqual(result, [{
+  assert.deepEqual(sinDetalleDeMarcador(result), [{
     employeeId: '2525',
     category: 'PARTICULAR',
     timeOut: dt('07:00:00'),

@@ -97,6 +97,74 @@ async function fetchMarkerMaxGapMs(db, tenantId) {
   return (Number.isFinite(seconds) && seconds > 0 ? seconds : 30) * 1000;
 }
 
+// Correcciones manuales de marcadores ("este marcador era de X" / "no era de
+// nadie") en [fromDate, toDateExclusive), listas para detectMovements
+// (opcion correccionesMarcadores). Ver migracion 20261003 y el comentario
+// "Correcciones manuales" en movementsCalculations.js.
+//
+// Se leen para TODAS las detecciones (HE, Particular, Oficial, Campaña): la
+// correccion es un hecho sobre el marcador, no sobre un reporte. Si se
+// corrigiera solo en un reporte, la misma hora extra diria una cosa en
+// Salidas y otra en Presentismo.
+async function fetchCorreccionesMarcadores(db, fromDate, toDateExclusive, tenantId) {
+  const correcciones = new Map();
+  if (tenantId === undefined || tenantId === null) return correcciones;
+  // Si la migracion 20261003 todavia no se corrio (por ejemplo, el backend
+  // se publico antes que la migracion), no hay correcciones: se sigue como
+  // siempre en vez de romper Salidas y Presentismo por una tabla que falta.
+  const [rows] = await db.query(
+    `SELECT mc.id, mc.marker_user_id, mc.marker_time, mc.assigned_employee_id, mc.reason,
+            COALESCE(mc.updated_at, mc.created_at) AS corrected_at,
+            au.email AS corrected_by
+     FROM marker_corrections mc
+     LEFT JOIN app_users au ON au.id = COALESCE(mc.updated_by, mc.created_by)
+     WHERE mc.tenant_id = ? AND mc.marker_time >= ? AND mc.marker_time < ?`,
+    [tenantId, fromDate, toDateExclusive]
+  ).catch((err) => {
+    if (err && err.code === 'ER_NO_SUCH_TABLE') return [[]];
+    throw err;
+  });
+  for (const r of rows) {
+    // El motor solo mira employeeId; el resto es para mostrar en pantalla
+    // quien corrigio, cuando y por que.
+    correcciones.set(`${r.marker_user_id}|${r.marker_time}`, {
+      employeeId: r.assigned_employee_id != null ? String(r.assigned_employee_id) : null,
+      id: r.id,
+      reason: r.reason,
+      correctedAt: r.corrected_at,
+      correctedBy: r.corrected_by ?? null,
+    });
+  }
+  return correcciones;
+}
+
+// Lo que necesita una pantalla para mostrar (y corregir) los marcadores de un
+// evento: el USERID y la hora exacta de cada marcador -- que es como se
+// identifica al pedir una correccion -- y, si ya fue corregido, quien, cuando
+// y por que. Devuelve campos planos para sumar a la fila del reporte.
+function datosDeMarcadores(ev, correcciones) {
+  const uno = (userId, at) => {
+    if (userId == null || !at) return { userId: null, at: null, correccion: null };
+    const clave = movementsCalc.claveMarcador(userId, at);
+    const c = correcciones ? correcciones.get(clave) : undefined;
+    return {
+      userId,
+      at: movementsCalc.fechaHoraLocal(at),
+      correccion: c ? { id: c.id, reason: c.reason, correctedAt: c.correctedAt, correctedBy: c.correctedBy } : null,
+    };
+  };
+  const salida = uno(ev.salidaMarkerUserId, ev.salidaMarkerAt);
+  const regreso = uno(ev.regresoMarkerUserId, ev.regresoMarkerAt);
+  return {
+    salidaMarkerUserId: salida.userId,
+    salidaMarkerAt: salida.at,
+    salidaCorreccion: salida.correccion,
+    regresoMarkerUserId: regreso.userId,
+    regresoMarkerAt: regreso.at,
+    regresoCorreccion: regreso.correccion,
+  };
+}
+
 // Devuelve las campañas que TOCAN el rango: las cerradas cuyo regreso cae en
 // o despues de `from`, y las que siguen abiertas. Una empresa sin marcadores
 // CAMPANA sale en la primera consulta sin tocar Checkins -- si no usa
@@ -117,18 +185,22 @@ async function detectarCampanas(db, tenantId, from, to) {
   const checkins = await fetchMovementCheckins(db, lookbackFromStr, nextDayStr(to), tenantId);
   const maxMarkerGapMs = await fetchMarkerMaxGapMs(db, tenantId);
   const todosLosMarcadores = await fetchMarkerMap(db, null, tenantId);
+  const correccionesMarcadores = await fetchCorreccionesMarcadores(db, lookbackFromStr, nextDayStr(to), tenantId);
   const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, {
-    maxMarkerGapMs, todosLosMarcadores, reboteRefinado: true,
+    maxMarkerGapMs, todosLosMarcadores, reboteRefinado: true, correccionesMarcadores,
   });
 
   const fromDate = new Date(fy, fm - 1, fd);
+  const conMarcadores = (e) => ({ ...e, ...datosDeMarcadores(e, correccionesMarcadores) });
   return [
     ...closedEvents.filter(e => e.timeIn >= fromDate).map(e => ({ ...e, hasReturn: true })),
     ...Array.from(openEvents.entries()).map(([employeeId, ev]) => ({
       employeeId, category: ev.category, timeOut: ev.timeOut, timeIn: null, hasReturn: false,
-      salidaMarkerUserId: ev.salidaMarkerUserId ?? null, regresoMarkerUserId: null,
+      salidaMarkerUserId: ev.salidaMarkerUserId ?? null, salidaMarkerAt: ev.salidaMarkerAt ?? null,
+      salidaCorregida: ev.salidaCorregida === true,
+      regresoMarkerUserId: null, regresoMarkerAt: null, regresoCorregido: false,
     })),
-  ].filter(e => e.category === 'CAMPANA');
+  ].filter(e => e.category === 'CAMPANA').map(conMarcadores);
 }
 
 // Como cuenta Presentismo los dias habiles en campaña sin fichar -- ver
@@ -189,6 +261,8 @@ module.exports = {
   fetchMovementCheckins,
   fetchMarkerMap,
   fetchMarkerMaxGapMs,
+  fetchCorreccionesMarcadores,
+  datosDeMarcadores,
   detectarCampanas,
   fetchCampanaPresentismoModo,
   fetchCampanaCutoff,

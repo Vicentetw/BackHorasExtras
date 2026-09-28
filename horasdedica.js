@@ -3517,6 +3517,9 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
     // COMPLETOS el mismo dia (closedEvents) -- no reproduce la logica de
     // eventos abiertos/huerfanos de /movements-range (eso queda para la
     // pantalla de Salidas, que sigue siendo la fuente de verdad del detalle).
+    // Marcadores corregidos a mano (ver POST /marker-corrections): valen para
+    // la deteccion de Particular y de HE de aca abajo, igual que en Salidas.
+    const correccionesMarcadores = await campanaService.fetchCorreccionesMarcadores(db, from, exclusiveEndDateStr, tenantId);
     const possibleJustificationByEmployeeDate = new Map();
     const particularExitByEmployeeDate = new Set(); // `${employeeId}|${date}`
     {
@@ -3527,7 +3530,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       // buscando los PARTICULAR (ver movementsCalculations.js).
       const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
       for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
-        const { closedEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs, todosLosMarcadores });
+        const { closedEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
         closedEvents
           .filter(ev => ev.category === 'PARTICULAR')
           .forEach(ev => particularExitByEmployeeDate.add(`${ev.employeeId}|${date}`));
@@ -3559,7 +3562,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
         const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
         for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
-          const { closedEvents } = movementsCalc.detectMovements(dayCheckins, heMarkerMap, { maxMarkerGapMs, todosLosMarcadores });
+          const { closedEvents } = movementsCalc.detectMovements(dayCheckins, heMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
           closedEvents
             .filter(ev => ev.category === 'HE')
             .forEach(ev => {
@@ -4318,6 +4321,8 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
     // datos de julio 2026: daba 65hs de "salida particular").
     const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
     const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
+    // Marcadores corregidos a mano (ver POST /marker-corrections).
+    const correccionesMarcadores = await campanaService.fetchCorreccionesMarcadores(db, from, exclusiveEnd, tenantId);
     const checkinsByDate = new Map();
     checkins.forEach(c => {
       const dateStr = formatLocalDate(c.checktime);
@@ -4327,7 +4332,7 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
 
     const allEvents = [];
     for (const [dateStr, dayCheckins] of checkinsByDate.entries()) {
-      const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, markerMap, { maxMarkerGapMs, todosLosMarcadores });
+      const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, markerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
       // Bug real: AVILA Natalia, legajo 9006, abril 2026 -- una llegada
       // tarde quedaba marcada como "Salida Particular" de 6h+ porque el
       // marcador de Salida lo fichó otra persona justo antes de que Natalia
@@ -4418,7 +4423,10 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
         regresoMarkerBadge: badgeByMarkerUserId(e.regresoMarkerUserId),
         timeIn: formatLocalDateTime(e.timeIn),
         hasReturn: e.hasReturn,
-        durationMinutes
+        durationMinutes,
+        // Hora exacta de cada marcador y su correccion, si la tiene: es lo
+        // que usa el boton "corregir marcador" de la pantalla.
+        ...campanaService.datosDeMarcadores(e, correccionesMarcadores)
       });
 
       const key = `${e.employeeId}|${periodKey(dateStr)}`;
@@ -4500,6 +4508,8 @@ app.get('/campana-range', requirePermission('attendance', 'read'), reportesRateL
 
     const events = (await detectarCampanas(tenantId, from, to))
       .filter(e => employeeById.has(e.employeeId));
+    const campanaMarkerMap = await fetchMarkerMap('CAMPANA', tenantId);
+    const badgeByMarkerUserId = (userId) => (userId != null && campanaMarkerMap[userId]) ? campanaMarkerMap[userId].badgeNumber : null;
 
     const rows = events.map(e => {
       const emp = employeeById.get(e.employeeId);
@@ -4511,7 +4521,16 @@ app.get('/campana-range', requirePermission('attendance', 'read'), reportesRateL
         timeOut: formatLocalDateTime(e.timeOut),
         timeIn: formatLocalDateTime(e.timeIn),
         hasReturn: e.hasReturn,
-        dias
+        dias,
+        // Marcadores de salida y regreso (badge, hora exacta y correccion).
+        salidaMarkerBadge: badgeByMarkerUserId(e.salidaMarkerUserId),
+        regresoMarkerBadge: badgeByMarkerUserId(e.regresoMarkerUserId),
+        salidaMarkerUserId: e.salidaMarkerUserId,
+        salidaMarkerAt: e.salidaMarkerAt,
+        salidaCorreccion: e.salidaCorreccion,
+        regresoMarkerUserId: e.regresoMarkerUserId,
+        regresoMarkerAt: e.regresoMarkerAt,
+        regresoCorreccion: e.regresoCorreccion
       };
     });
 
@@ -4586,6 +4605,194 @@ app.post('/config/campana-presentismo-modo', requirePermission('schedules', 'upd
   } catch (err) {
     console.error('ERROR saving campana presentismo modo:', err);
     res.status(500).json({ error: 'Error saving campana presentismo modo' });
+  }
+});
+
+// ============================================================================
+// /marker-corrections -- corregir a mano de quien era un marcador
+// ============================================================================
+//
+// El sistema adivina de quien es cada marcador (ver "Correcciones manuales"
+// en movementsCalculations.js). Cuando se equivoca, quien estuvo ahi lo
+// corrige desde Salidas o Campaña: "este marcador era de X" o "no era de
+// nadie, se apreto por error". Cada alta, cambio y deshacer queda en
+// marker_correction_log con quien, cuando, motivo y estado anterior, dentro
+// de la MISMA transaccion que el cambio (ver auditLog.js).
+//
+// Un marcador se identifica por (USERID del marcador, hora exacta), que es
+// lo que devuelven /movements-range y /campana-range en salidaMarkerUserId /
+// salidaMarkerAt (y los de regreso).
+const FECHA_HORA_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+function sumarMsAFechaHora(fechaHora, ms) {
+  return movementsCalc.fechaHoraLocal(new Date(new Date(fechaHora.replace(' ', 'T')).getTime() + ms));
+}
+
+async function legajoDeLaEmpresa(legajo, tenantId) {
+  if (legajo === null || legajo === undefined || legajo === '') return null;
+  const n = Number(legajo);
+  if (!Number.isInteger(n)) return undefined;
+  const [rows] = await db.query('SELECT employee_id FROM employees WHERE tenant_id = ? AND employee_id = ? LIMIT 1', [tenantId, n]);
+  return rows.length ? n : undefined;
+}
+
+app.get('/marker-corrections', requirePermission('attendance', 'read'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const { from, to } = req.query;
+    if (!from || !to) return res.status(400).json({ error: 'from y to requeridos' });
+    const [rows] = await db.query(
+      `SELECT mc.id, mc.marker_user_id AS markerUserId, mc.marker_time AS markerAt,
+              su.badgeNumber AS markerBadge, su.name AS markerName,
+              mc.assigned_employee_id AS assignedEmployeeId, ea.nombre AS assignedEmployeeName,
+              mc.previous_employee_id AS previousEmployeeId, ep.nombre AS previousEmployeeName,
+              mc.reason, COALESCE(mc.updated_at, mc.created_at) AS correctedAt,
+              au.email AS correctedBy
+       FROM marker_corrections mc
+       LEFT JOIN specialusers su ON su.userId = mc.marker_user_id AND su.tenant_id = mc.tenant_id
+       LEFT JOIN employees ea ON ea.employee_id = mc.assigned_employee_id AND ea.tenant_id = mc.tenant_id
+       LEFT JOIN employees ep ON ep.employee_id = mc.previous_employee_id AND ep.tenant_id = mc.tenant_id
+       LEFT JOIN app_users au ON au.id = COALESCE(mc.updated_by, mc.created_by)
+       WHERE mc.tenant_id = ? AND mc.marker_time >= ? AND mc.marker_time < ?
+       ORDER BY mc.marker_time`,
+      [tenantId, from, nextDayStr(to)]
+    );
+    res.json({ rows });
+  } catch (err) {
+    console.error('ERROR fetching marker corrections:', err);
+    res.status(500).json({ error: 'Error fetching marker corrections' });
+  }
+});
+
+// POST /marker-corrections
+//   { markerUserId, markerAt: 'YYYY-MM-DD HH:MM:SS', fromEmployeeId, toEmployeeId | null, reason }
+// fromEmployeeId: a quien se lo habia atribuido el sistema (informativo, para
+// el historial). toEmployeeId null = "no era de nadie". Si el marcador ya
+// tenia una correccion, se reemplaza (y el log guarda la anterior).
+app.post('/marker-corrections', requirePermission('attendance', 'update'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+
+    const markerUserId = Number(req.body.markerUserId);
+    const markerAt = String(req.body.markerAt || '');
+    const reason = String(req.body.reason || '').trim();
+    if (!Number.isInteger(markerUserId) || !FECHA_HORA_RE.test(markerAt)) {
+      return res.status(400).json({ error: 'markerUserId y markerAt (AAAA-MM-DD HH:MM:SS) son obligatorios' });
+    }
+    if (!reason) return res.status(400).json({ error: 'Escribí el motivo de la corrección' });
+    if (reason.length > 255) return res.status(400).json({ error: 'El motivo no puede superar los 255 caracteres' });
+
+    // El marcador tiene que ser de esta empresa y tiene que existir ese
+    // fichaje: no se corrigen marcadores inventados.
+    const [[marcador]] = await db.query(
+      'SELECT userId FROM specialusers WHERE tenant_id = ? AND userId = ? AND direction IS NOT NULL LIMIT 1',
+      [tenantId, markerUserId]
+    );
+    if (!marcador) return res.status(400).json({ error: 'Ese usuario no es un marcador de la empresa' });
+    const [[fichaje]] = await db.query(
+      'SELECT MACHINE_IP AS machineIp FROM Checkins WHERE tenant_id = ? AND USERID = ? AND CHECKTIME = ? LIMIT 1',
+      [tenantId, markerUserId, markerAt]
+    );
+    if (!fichaje) return res.status(404).json({ error: 'No existe ese fichaje de marcador' });
+
+    const fromEmployeeId = await legajoDeLaEmpresa(req.body.fromEmployeeId, tenantId);
+    if (fromEmployeeId === undefined) return res.status(400).json({ error: 'El empleado original no es de la empresa' });
+    const toEmployeeId = await legajoDeLaEmpresa(req.body.toEmployeeId, tenantId);
+    if (toEmployeeId === undefined) return res.status(400).json({ error: 'El empleado elegido no es de la empresa' });
+    if (toEmployeeId !== null && toEmployeeId === fromEmployeeId) {
+      return res.status(400).json({ error: 'El marcador ya está atribuido a esa persona' });
+    }
+
+    // "Era de X" solo tiene sentido si X ficho poco despues: ese fichaje es
+    // el que se va a llevar el marcador (ver VENTANA_MARCADOR_CORREGIDO_MS).
+    // Si no hay ninguno, la correccion no cambiaria nada y es mejor decirlo
+    // ahora que guardarla en silencio.
+    if (toEmployeeId !== null) {
+      const ventanaMs = movementsCalc.VENTANA_MARCADOR_CORREGIDO_MS;
+      const fichajes = await fetchMovementCheckins(markerAt, sumarMsAFechaHora(markerAt, ventanaMs + 1000), tenantId);
+      const propio = fichajes.find(c => c.employeeId === String(toEmployeeId) && c.checktime >= new Date(markerAt.replace(' ', 'T')));
+      if (!propio) {
+        return res.status(400).json({
+          error: `Esa persona no fichó en los ${ventanaMs / 60000} minutos siguientes al marcador. `
+            + 'Para asignarle el marcador tiene que haber un fichaje suyo después de apretarlo.'
+        });
+      }
+    }
+
+    const performedBy = auditLog.actorId(req);
+    const id = await auditLog.inTransaction(db, async (conn) => {
+      const [[anterior]] = await conn.query(
+        'SELECT * FROM marker_corrections WHERE tenant_id = ? AND marker_user_id = ? AND marker_time = ? FOR UPDATE',
+        [tenantId, markerUserId, markerAt]
+      );
+      const data = {
+        marker_user_id: markerUserId,
+        marker_time: markerAt,
+        assigned_employee_id: toEmployeeId,
+        // Si ya estaba corregido, "a quien se lo habia dado el sistema" sigue
+        // siendo el de la primera correccion, no el de la anterior.
+        previous_employee_id: anterior ? anterior.previous_employee_id : fromEmployeeId,
+        reason,
+      };
+      let correctionId;
+      if (anterior) {
+        await conn.query(
+          `UPDATE marker_corrections SET assigned_employee_id = ?, reason = ?, updated_by = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [toEmployeeId, reason, performedBy, anterior.id]
+        );
+        correctionId = anterior.id;
+      } else {
+        const [ins] = await conn.query(
+          `INSERT INTO marker_corrections
+             (tenant_id, marker_user_id, marker_time, machine_ip, assigned_employee_id, previous_employee_id, reason, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [tenantId, markerUserId, markerAt, fichaje.machineIp ?? null, toEmployeeId, fromEmployeeId, reason, performedBy]
+        );
+        correctionId = ins.insertId;
+      }
+      await auditLog.logMarkerCorrection(conn, {
+        tenantId, correctionId, action: anterior ? 'updated' : 'created', data, previous: anterior || null, performedBy,
+      });
+      return correctionId;
+    });
+    res.json({ id });
+  } catch (err) {
+    console.error('ERROR saving marker correction:', err);
+    res.status(500).json({ error: 'Error saving marker correction' });
+  }
+});
+
+// DELETE /marker-corrections/:id -- deshace la correccion: el marcador vuelve
+// a atribuirse solo, como antes. La fila se borra, el log la conserva.
+app.delete('/marker-corrections/:id', requirePermission('attendance', 'update'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'id inválido' });
+
+    const performedBy = auditLog.actorId(req);
+    const borrada = await auditLog.inTransaction(db, async (conn) => {
+      // tenant_id en el WHERE: una empresa no puede deshacer correcciones de
+      // otra adivinando el id.
+      const [[anterior]] = await conn.query(
+        'SELECT * FROM marker_corrections WHERE id = ? AND tenant_id = ? FOR UPDATE', [id, tenantId]
+      );
+      if (!anterior) return false;
+      await conn.query('DELETE FROM marker_corrections WHERE id = ?', [id]);
+      await auditLog.logMarkerCorrection(conn, {
+        tenantId, correctionId: id, action: 'deleted', data: anterior, previous: anterior, performedBy,
+      });
+      return true;
+    });
+    if (!borrada) return res.status(404).json({ error: 'Corrección no encontrada' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR deleting marker correction:', err);
+    res.status(500).json({ error: 'Error deleting marker correction' });
   }
 });
 

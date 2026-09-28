@@ -96,7 +96,7 @@ async function deleteTestUser(uid) {
 
   const [[appUser]] = await db.query('SELECT id FROM app_users WHERE firebase_uid = ?', [uid]);
   if (appUser) {
-    for (const table of ['manual_entry_log', 'user_exclusion_log', 'manual_checkin_log']) {
+    for (const table of ['manual_entry_log', 'user_exclusion_log', 'manual_checkin_log', 'marker_correction_log']) {
       await db.query(`DELETE FROM ${table} WHERE performed_by = ?`, [appUser.id]).catch(() => {});
     }
     await db.query('UPDATE ManualEntries SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
@@ -104,6 +104,8 @@ async function deleteTestUser(uid) {
     await db.query('UPDATE userexclusions SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
     await db.query('UPDATE userexclusions SET updated_by = NULL WHERE updated_by = ?', [appUser.id]).catch(() => {});
     await db.query('UPDATE Checkins SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE marker_corrections SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE marker_corrections SET updated_by = NULL WHERE updated_by = ?', [appUser.id]).catch(() => {});
   }
 
   await db.query('DELETE FROM app_users WHERE firebase_uid = ?', [uid]).catch(() => {});

@@ -185,8 +185,56 @@ function marcadorDelReloj(marcadoresPorReloj, machineIp) {
   return null;
 }
 
+// ============================================================================
+// Correcciones manuales: "este marcador era de otra persona"
+// ============================================================================
+//
+// POR QUE
+// -------
+// Todo lo de arriba es una ADIVINANZA razonable: el marcador se le da al
+// proximo fichaje real del mismo reloj. Cuando se equivoca (se metio otra
+// persona en el medio), alguien que estuvo ahi puede decir de quien era de
+// verdad. Esa palabra vale mas que cualquier regla, asi que un marcador
+// corregido NO pasa por la adivinanza. Tabla `marker_corrections`, migracion
+// 20261003.
+//
+// COMO SE APLICA
+// --------------
+// - "No era de nadie" (employeeId null): el marcador se ignora, como si no se
+//   hubiera apretado. No pisa al marcador pendiente de ese reloj.
+// - "Era de X": el marcador queda RESERVADO para X. Lo consume el proximo
+//   fichaje real de X (de cualquier reloj: lo dijo una persona, no hace
+//   falta inferirlo) dentro de VENTANA_MARCADOR_CORREGIDO_MS. Nadie mas
+//   puede llevarselo, y tampoco toca la cola del reloj: el marcador pendiente
+//   de otra persona sigue esperando a quien corresponde.
+// - Un marcador corregido es siempre una accion nueva: no le aplica la regla
+//   de rebote (alguien confirmo que X apreto el marcador y puso el dedo).
+//
+// La ventana es mucho mas larga que la de la adivinanza (6 s en AVP) porque
+// el caso tipico es justamente que X puso el dedo tarde, despues de otro.
+// Si X no ficho dentro de esos minutos, la correccion no tiene a que
+// aplicarse: el endpoint lo rechaza al cargarla (POST /marker-corrections).
+const VENTANA_MARCADOR_CORREGIDO_MS = 10 * 60 * 1000;
+
+// 'YYYY-MM-DD HH:MM:SS' en hora local: el mismo formato en que la base
+// devuelve CHECKTIME y marker_time (db.js usa dateStrings:true). Comparar por
+// texto evita cualquier problema de zona horaria entre la base y Node.
+function fechaHoraLocal(date) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
+}
+
+// Clave de un fichaje de marcador en el mapa de correcciones.
+function claveMarcador(userId, checktime) {
+  return `${userId}|${fechaHoraLocal(checktime)}`;
+}
+
 function detectMovements(checkins, markerMap, options = {}) {
   const maxMarkerGapMs = options.maxMarkerGapMs ?? DEFAULT_MAX_MARKER_GAP_MS;
+  // Map claveMarcador -> { employeeId: string|null }. Ver "Correcciones
+  // manuales" arriba. Si no se pasa, el comportamiento es el de antes.
+  const correcciones = options.correccionesMarcadores ?? null;
+  const reservadosPorEmpleado = new Map(); // employeeId -> marcador corregido
   const ownCheckinBounceMs = options.ownCheckinBounceMs ?? DEFAULT_OWN_CHECKIN_BOUNCE_MS;
   const reboteRefinado = options.reboteRefinado === true;
   // TODOS los marcadores de la empresa, no solo los de la categoria que se
@@ -204,6 +252,21 @@ function detectMovements(checkins, markerMap, options = {}) {
 
   for (const row of sorted) {
     const marker = markerMap[row.userId];
+
+    // Marcador corregido a mano: no entra en la cola del reloj.
+    const correccion = correcciones && !row.employeeId
+      ? correcciones.get(claveMarcador(row.userId, row.checktime))
+      : undefined;
+    if (correccion !== undefined) {
+      if (marker && correccion.employeeId != null) {
+        reservadosPorEmpleado.set(String(correccion.employeeId), {
+          category: marker.category, direction: marker.direction,
+          markedAt: row.checktime, userId: row.userId, corregido: true,
+        });
+      }
+      continue;
+    }
+
     if (marker) {
       // Dos marcadores seguidos: gana el ULTIMO. El .set() pisa al anterior.
       // Caso real: alguien aprieta el 5 (regreso de salida particular) y se
@@ -263,12 +326,22 @@ function detectMovements(checkins, markerMap, options = {}) {
     // Y tampoco se puede cortar el procesamiento de la fila aca: este fichaje
     // puede estar CERRANDO una salida que el propio empleado tenia abierta, y
     // eso no tiene nada que ver con el marcador pendiente de otro aparato.
-    const pendiente = marcadorDelReloj(marcadoresPorReloj, row.machineIp ?? null);
-    const marcadorAplicable = pendiente ? pendiente.marcador : null;
+    //
+    // Un marcador que una persona le asigno a este empleado gana sobre el del
+    // reloj, y en ese caso la cola del reloj no se toca (pendiente = null).
+    let reservado = reservadosPorEmpleado.get(row.employeeId) || null;
+    if (reservado && (row.checktime - reservado.markedAt) > VENTANA_MARCADOR_CORREGIDO_MS) {
+      reservadosPorEmpleado.delete(row.employeeId);
+      reservado = null;
+    }
+    if (reservado) reservadosPorEmpleado.delete(row.employeeId);
+    const pendiente = reservado ? null : marcadorDelReloj(marcadoresPorReloj, row.machineIp ?? null);
+    const marcadorAplicable = reservado || (pendiente ? pendiente.marcador : null);
 
     const previousOwnCheckin = lastRealCheckinByEmployeeId.get(row.employeeId);
     const isOwnBounce = previousOwnCheckin != null && (row.checktime - previousOwnCheckin) <= ownCheckinBounceMs;
-    const marcadorNuevoEnElMedio = reboteRefinado && marcadorEsDeEstaLectura(marcadorAplicable, previousOwnCheckin, row.checktime);
+    const marcadorNuevoEnElMedio = reservado != null
+      || (reboteRefinado && marcadorEsDeEstaLectura(marcadorAplicable, previousOwnCheckin, row.checktime));
 
     const open = openEvents.get(row.employeeId);
     if (open && reboteRefinado && isOwnBounce && !marcadorNuevoEnElMedio) {
@@ -294,7 +367,11 @@ function detectMovements(checkins, markerMap, options = {}) {
         timeOut: open.timeOut,
         timeIn: row.checktime,
         salidaMarkerUserId: open.salidaMarkerUserId,
-        regresoMarkerUserId: marcadorAplicable ? marcadorAplicable.userId : null
+        salidaMarkerAt: open.salidaMarkerAt ?? null,
+        salidaCorregida: open.salidaCorregida === true,
+        regresoMarkerUserId: marcadorAplicable ? marcadorAplicable.userId : null,
+        regresoMarkerAt: marcadorAplicable ? marcadorAplicable.markedAt : null,
+        regresoCorregido: marcadorAplicable ? marcadorAplicable.corregido === true : false
       });
       openEvents.delete(row.employeeId);
       // Solo se consume el marcador de ESTE reloj: los de los otros siguen
@@ -318,14 +395,18 @@ function detectMovements(checkins, markerMap, options = {}) {
       openEvents.set(row.employeeId, {
         category: marcadorAplicable.category,
         timeOut: row.checktime,
-        salidaMarkerUserId: marcadorAplicable.userId
+        salidaMarkerUserId: marcadorAplicable.userId,
+        salidaMarkerAt: marcadorAplicable.markedAt,
+        salidaCorregida: marcadorAplicable.corregido === true
       });
     } else if (marcadorAplicable && marcadorAplicable.direction === 'REGRESO') {
       orphanReturns.push({
         employeeId: row.employeeId,
         category: marcadorAplicable.category,
         timeIn: row.checktime,
-        regresoMarkerUserId: marcadorAplicable.userId
+        regresoMarkerUserId: marcadorAplicable.userId,
+        regresoMarkerAt: marcadorAplicable.markedAt,
+        regresoCorregido: marcadorAplicable.corregido === true
       });
     }
     // Se consume SOLO el de este reloj. Si no habia ninguno para este
@@ -360,9 +441,13 @@ function closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId) {
       timeIn: exit,
       hasReturn: false,
       salidaMarkerUserId: ev.salidaMarkerUserId ?? null,
+      salidaMarkerAt: ev.salidaMarkerAt ?? null,
+      salidaCorregida: ev.salidaCorregida === true,
       // El regreso se sintetizo con el horario de salida programado -- no
       // hubo ningun marcador real que lo cierre.
-      regresoMarkerUserId: null
+      regresoMarkerUserId: null,
+      regresoMarkerAt: null,
+      regresoCorregido: false
     });
   }
   return results;
@@ -398,7 +483,11 @@ function openOrphanReturnsAtScheduleEntrance(orphanReturns, entranceTimeByEmploy
       // La salida se sintetizo con el horario de entrada programado -- no
       // hubo ningun marcador real que la abra.
       salidaMarkerUserId: null,
-      regresoMarkerUserId: r.regresoMarkerUserId ?? null
+      salidaMarkerAt: null,
+      salidaCorregida: false,
+      regresoMarkerUserId: r.regresoMarkerUserId ?? null,
+      regresoMarkerAt: r.regresoMarkerAt ?? null,
+      regresoCorregido: r.regresoCorregido === true
     };
   });
 }
@@ -499,8 +588,12 @@ function isFirstRealCheckinOfDay(employeeId, timeOut, dayCheckins) {
 // Aplica isFirstRealCheckinOfDay a un array de eventos (cerrados o los
 // resultados ya de closeOpenEventsAtScheduleExit) -- se sacan los que
 // abrieron con el primer fichaje real del día de esa persona.
+//
+// Una salida cuyo marcador fue corregido a mano NO se filtra: la regla de
+// arriba es una sospecha ("probablemente el marcador era de otro"), y una
+// persona ya confirmo de quien era.
 function filterEventsOpenedByFirstCheckinOfDay(events, dayCheckins) {
-  return (events || []).filter((e) => !isFirstRealCheckinOfDay(e.employeeId, e.timeOut, dayCheckins));
+  return (events || []).filter((e) => e.salidaCorregida === true || !isFirstRealCheckinOfDay(e.employeeId, e.timeOut, dayCheckins));
 }
 
 module.exports = {
@@ -511,5 +604,8 @@ module.exports = {
   diasInterioresDeCampana,
   regresoCuentaComoCampana,
   isFirstRealCheckinOfDay,
-  filterEventsOpenedByFirstCheckinOfDay
+  filterEventsOpenedByFirstCheckinOfDay,
+  claveMarcador,
+  fechaHoraLocal,
+  VENTANA_MARCADOR_CORREGIDO_MS
 };
