@@ -3746,7 +3746,6 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         } else if (checks.length > 0) {
           daysWorked++;
           if (!employeeActivo) inactiveWarningDays++;
-          if (leaveEvent) leaveConflictDays++;
           const first = checks[0];
           const last = checks[checks.length - 1];
           const firstMin = timeToMinutes(extractTime(first));
@@ -3964,6 +3963,22 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
             isPartialAbsence = !!(multiVisit && multiVisit.isPartial);
           }
 
+          // Fichó teniendo una licencia cargada, o una excepcion que no
+          // justifico nada (llego y se fue a horario) -- mismo criterio que la
+          // vista diaria, ver resolverAvisoLicencia en attendanceCalculations.js.
+          const avisoLicencia = attendanceCalc.resolverAvisoLicencia({
+            leaveEvent,
+            exclusion,
+            totalCheckins: checks.length,
+            isLate,
+            isPartial: isPartialAbsence,
+            multiVisit: !!multiVisit,
+            lastMinutes: lastMin,
+            exitMinutes: schedule.timeExit ? timeToMinutes(String(schedule.timeExit).substring(0, 5)) : null,
+            toleranceMinutes: tolerance,
+          });
+          if (avisoLicencia) leaveConflictDays++;
+
           if (isPartialAbsence) {
             partialAbsence++;
           } else if (isLate && lateJustifiedThisDay) {
@@ -4089,11 +4104,9 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
               // credencial por error?) -- se mantiene el status normal
               // calculado arriba, solo se agrega el aviso.
               inactiveWarning: !employeeActivo,
-              // Fichó teniendo una licencia cargada -- ver leaveConflict en
-              // attendanceService.js (mismo criterio en la vista diaria).
-              leaveConflict: leaveEvent
-                ? { descripcion: leaveEvent.eventTypeDescripcion || leaveEvent.observaciones || 'Licencia' }
-                : null,
+              // Fichó teniendo una licencia (o una excepcion que no justifico
+              // nada) -- ver avisoLicencia arriba.
+              leaveConflict: avisoLicencia,
               lateMinutes: isLate ? lateMinutes : 0,
               reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
               eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,

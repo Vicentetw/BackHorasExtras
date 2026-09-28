@@ -242,3 +242,53 @@ test('evaluateMultiVisitDay: no fue a la 2da visita en absoluto -> Ausente parci
   assert.equal(r.visits[1].missing, 'both');
   assert.equal(r.visits[1].blockName, 'Tarde');
 });
+
+// ---------------------------------------------------------------------------
+// resolverAvisoLicencia: "fichó teniendo una licencia o justificación cargada"
+// ---------------------------------------------------------------------------
+// Horario 07:00-13:38, tolerancia 10 min. Caso real que lo pidio: PERROTTA,
+// 29/06/2026, "articulo 55" cargado como justificacion y dia trabajado
+// completo (06:53 a 13:43).
+{
+  const { resolverAvisoLicencia } = require('../motor-laboral/services/attendanceCalculations');
+  const SALIDA = 13 * 60 + 38;
+  const base = {
+    leaveEvent: null, exclusion: { reason: 'artículo 55' }, totalCheckins: 2, isLate: false,
+    isPartial: false, multiVisit: false, lastMinutes: 13 * 60 + 43, exitMinutes: SALIDA, toleranceMinutes: 10,
+  };
+
+  test('aviso: justificacion cargada y el dia trabajado completo (el caso de PERROTTA)', () => {
+    assert.deepEqual(resolverAvisoLicencia(base), { descripcion: 'artículo 55', origen: 'excepcion' });
+  });
+
+  test('sin aviso: la justificacion cubrio una llegada tarde (entrada particular)', () => {
+    assert.equal(resolverAvisoLicencia({ ...base, isLate: true }), null);
+  });
+
+  test('sin aviso: se fue antes de hora (salida particular)', () => {
+    assert.equal(resolverAvisoLicencia({ ...base, lastMinutes: 11 * 60 }), null);
+  });
+
+  test('aviso: se fue dentro de la tolerancia sigue siendo un dia completo', () => {
+    assert.ok(resolverAvisoLicencia({ ...base, lastMinutes: SALIDA - 5 }));
+  });
+
+  test('sin aviso: un solo fichaje, turno partido, ausencia parcial o sin horario de salida', () => {
+    assert.equal(resolverAvisoLicencia({ ...base, totalCheckins: 1 }), null);
+    assert.equal(resolverAvisoLicencia({ ...base, multiVisit: true }), null);
+    assert.equal(resolverAvisoLicencia({ ...base, isPartial: true }), null);
+    assert.equal(resolverAvisoLicencia({ ...base, exitMinutes: null }), null);
+  });
+
+  test('sin fichajes nunca hay aviso (el dia es Excusado)', () => {
+    assert.equal(resolverAvisoLicencia({ ...base, totalCheckins: 0 }), null);
+    assert.equal(resolverAvisoLicencia({ ...base, totalCheckins: 0, leaveEvent: { eventTypeDescripcion: 'Vacaciones' } }), null);
+  });
+
+  test('una LICENCIA con fichaje avisa siempre, aunque haya llegado tarde', () => {
+    assert.deepEqual(
+      resolverAvisoLicencia({ ...base, exclusion: null, isLate: true, leaveEvent: { eventTypeDescripcion: 'Vacaciones' } }),
+      { descripcion: 'Vacaciones', origen: 'licencia' }
+    );
+  });
+}

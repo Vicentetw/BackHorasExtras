@@ -3,6 +3,8 @@ const {
   getEntranceReference,
   resolveToleranceMinutes,
   resolveLateJustification,
+  resolverAvisoLicencia,
+  timeToMinutes,
   evaluateMultiVisitDay,
   stripOvernightCarryover
 } = require('./attendanceCalculations');
@@ -146,6 +148,9 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
     // status normal (a horario/tarde/etc.) pero se marca con un aviso en vez
     // de agregar un status nuevo que oculte la info real de esa marcación.
     let inactiveWarning = false;
+    // Para el aviso de licencia/excepcion (resolverAvisoLicencia): si llego
+    // tarde, lo calcula la rama de un solo bloque de mas abajo.
+    let llegoTarde = false;
     // Dia de regreso de campaña habiendo vuelto a la hora de corte o despues
     // (ver campanaService.diasDeCampana): su fichaje es el regreso del campo,
     // no una entrada a la jornada -- no se evalua tardanza. Solo en un dia
@@ -177,6 +182,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
           exclusion
         });
         status = !isLate ? 'OnTime' : (justified ? 'LateJustified' : 'Late');
+        llegoTarde = isLate;
       }
       if (isHoliday) {
         status = 'WorkedHoliday';
@@ -253,9 +259,22 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       // inactiveWarning. Solo licencias (employee_events): una excepcion
       // (userexclusions) con fichaje es normal, se usa para justificar una
       // tardanza.
-      leaveConflict: checkinsSorted.length > 0 && leaveEvent
-        ? { descripcion: leaveEvent.eventTypeDescripcion || leaveEvent.observaciones || 'Licencia' }
-        : null,
+      //
+      // Desde el 2026-09-28 tambien una EXCEPCION (userexclusions) que no
+      // justifico nada: ver resolverAvisoLicencia en attendanceCalculations.js.
+      leaveConflict: resolverAvisoLicencia({
+        leaveEvent,
+        // El dia de regreso de campaña no se evalua como jornada: una
+        // excepcion ahi no se puede juzgar con la regla de horario.
+        exclusion: status === 'Campaign' ? null : exclusion,
+        totalCheckins: checkinsSorted.length,
+        isLate: llegoTarde,
+        isPartial: status === 'PartialAbsence',
+        multiVisit: !!multiVisit,
+        lastMinutes: lastCheckin ? timeToMinutes(lastCheckin.split(' ')[1].substring(0, 5)) : null,
+        exitMinutes: userSchedule.timeExit ? timeToMinutes(String(userSchedule.timeExit).substring(0, 5)) : null,
+        toleranceMinutes: toleranceMin,
+      }),
       firstCheckin,
       lastCheckin,
       totalCheckins: checkinsSorted.length,

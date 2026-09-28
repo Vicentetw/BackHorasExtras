@@ -10,12 +10,13 @@
 //   - lleva leaveConflict con el motivo de la licencia;
 //   - un dia de licencia SIN fichaje sigue "Excusado", sin aviso;
 //   - alguien sin licencia que ficha no lleva aviso (nada cambia);
-//   - una EXCEPCION de dia completo (userexclusions, no una licencia):
-//     sin fichaje cuenta como Excusado; con fichaje manda el fichaje, y no
-//     hay aviso (una excepcion con fichaje es normal: justifica una
-//     tardanza). Antes esto solo lo cubria un test de caracterizacion
-//     sobre datos reales (attendance-daily, 29/06 de Perrotta), que dejo de
-//     probarlo cuando esos datos cambiaron.
+//   - una JUSTIFICACION (userexclusions, no una licencia): sin fichaje cuenta
+//     como Excusado. Con fichaje manda el fichaje, y hay aviso SOLO si la
+//     justificacion no justifico nada: llego y se fue a horario (pedido
+//     2026-09-28, "articulo 55" de PERROTTA el 29/06). Si llego tarde, la
+//     justificacion cumplio su funcion (entrada particular): sin aviso.
+//     Las reglas finas estan en attendance-calculations.test.js
+//     (resolverAvisoLicencia).
 //
 // Requiere el backend local corriendo contra la misma base.
 // Tenant descartable propio (999936), NUNCA AVP.
@@ -33,6 +34,7 @@ const SIN_LICENCIA = 8002;
 const CON_EXCEPCION = 8003;
 const DIA_QUE_FICHO = '2026-05-13'; // miercoles, en medio de sus vacaciones
 const DIA_QUE_NO_FICHO = '2026-05-12';
+const DIA_QUE_LLEGO_TARDE = '2026-05-14'; // CON_EXCEPCION: "entrada particular"
 
 let headers;
 
@@ -84,6 +86,14 @@ before(async () => {
           [userId, TENANT, dia]
         );
       }
+      await db.query(
+        `INSERT INTO userexclusions (userId, tenant_id, excDate, reason, type) VALUES (?, ?, ?, 'entrada particular (test)', 'FULL_DAY')`,
+        [userId, TENANT, DIA_QUE_LLEGO_TARDE]
+      );
+      await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?)`, [
+        userId, TENANT, `${DIA_QUE_LLEGO_TARDE} 09:30:00`,
+        userId, TENANT, `${DIA_QUE_LLEGO_TARDE} 14:00:00`,
+      ]);
     }
   }
 });
@@ -106,8 +116,10 @@ test('vista diaria: de vacaciones pero fichó -> se ve el fichaje (presente) con
   assert.notEqual(fila.status, 'Excused', 'el fichaje manda: estuvo');
   assert.ok(['OnTime', 'Late'].includes(fila.status), fila.status);
   assert.equal(fila.firstCheckin.slice(11, 16), '07:00');
-  assert.deepEqual(fila.leaveConflict, { descripcion: 'Vacaciones (test)' });
-  assert.equal(summary.leaveConflicts, 1);
+  assert.deepEqual(fila.leaveConflict, { descripcion: 'Vacaciones (test)', origen: 'licencia' });
+  // 2: este y el de CON_EXCEPCION, que ese mismo dia trabajo completo con una
+  // justificacion cargada (ver los tests de justificaciones mas abajo).
+  assert.equal(summary.leaveConflicts, 2);
 });
 
 test('vista diaria: de vacaciones y sin fichar -> Excusado, sin aviso (como siempre)', async () => {
@@ -123,7 +135,7 @@ test('vista diaria: sin licencia y fichó -> sin aviso (nada cambia)', async () 
 
 test('vista mensual: el dia que fichó lleva el aviso y el empleado cuenta 1 dia a revisar', async () => {
   const { row, dia } = await mensual(DE_VACACIONES);
-  assert.deepEqual(dia(DIA_QUE_FICHO).leaveConflict, { descripcion: 'Vacaciones (test)' });
+  assert.deepEqual(dia(DIA_QUE_FICHO).leaveConflict, { descripcion: 'Vacaciones (test)', origen: 'licencia' });
   assert.notEqual(dia(DIA_QUE_FICHO).status, 'Excused');
   assert.equal(dia(DIA_QUE_NO_FICHO).status, 'Excused');
   assert.equal(row.leaveConflictDays, 1);
@@ -141,8 +153,24 @@ test('vista diaria: excepcion de dia completo y sin fichar -> Excusado', async (
   assert.equal(fila.exclusion.type, 'FULL_DAY');
 });
 
-test('vista diaria: excepcion de dia completo pero fichó -> manda el fichaje, sin aviso', async () => {
-  const { fila } = await diario(DIA_QUE_FICHO, CON_EXCEPCION);
-  assert.ok(['OnTime', 'Late'].includes(fila.status), fila.status);
-  assert.equal(fila.leaveConflict, null, 'una excepcion con fichaje es normal: no se avisa');
+test('vista diaria: justificacion y trabajó el dia completo -> manda el fichaje, CON aviso', async () => {
+  const { fila, summary } = await diario(DIA_QUE_FICHO, CON_EXCEPCION);
+  assert.equal(fila.status, 'OnTime');
+  assert.deepEqual(fila.leaveConflict, { descripcion: 'articulo 55 (test)', origen: 'excepcion' });
+  assert.equal(summary.leaveConflicts, 2, 'el de vacaciones y este');
+});
+
+test('vista diaria: justificacion que cubrio una llegada tarde (entrada particular) -> sin aviso', async () => {
+  const { fila } = await diario(DIA_QUE_LLEGO_TARDE, CON_EXCEPCION);
+  assert.equal(fila.status, 'LateJustified');
+  assert.equal(fila.leaveConflict, null);
+});
+
+test('vista mensual: mismo criterio que la diaria para las justificaciones', async () => {
+  const { row, dia } = await mensual(CON_EXCEPCION);
+  assert.deepEqual(dia(DIA_QUE_FICHO).leaveConflict, { descripcion: 'articulo 55 (test)', origen: 'excepcion' });
+  assert.equal(dia(DIA_QUE_LLEGO_TARDE).status, 'LateJustified');
+  assert.equal(dia(DIA_QUE_LLEGO_TARDE).leaveConflict, null);
+  assert.equal(dia(DIA_QUE_NO_FICHO).status, 'Excused');
+  assert.equal(row.leaveConflictDays, 1);
 });

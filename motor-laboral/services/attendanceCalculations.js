@@ -132,6 +132,57 @@ function resolveLateJustification({ firstMinutes, entranceMinutes, toleranceMinu
   return { isLate: true, lateMinutes, justified };
 }
 
+// ============================================================================
+// Aviso "fichó teniendo una licencia cargada" (leaveConflict)
+// ============================================================================
+//
+// Dos fuentes, con reglas distintas:
+//
+// 1. LICENCIA (employee_events: vacaciones, enfermedad, comision...): si
+//    ficho ese dia, una de las dos cosas esta mal. Aviso siempre.
+//
+// 2. EXCEPCION (userexclusions): aca NO alcanza con "tiene excepcion y
+//    ficho", porque las excepciones se usan para dos cosas. Unas son
+//    ausencias ("articulo 55") y otras son justificaciones de un dia en que
+//    la persona SI fue ("entrada particular", "salida particular",
+//    "autorizado"). En los datos reales todas estan cargadas como FULL_DAY,
+//    asi que el tipo no las distingue. Avisar siempre llenaria de falsos
+//    avisos cada entrada/salida particular.
+//
+//    Se avisa cuando la excepcion NO JUSTIFICO NADA: llego a horario y se
+//    fue a horario. Si no llego tarde ni se fue antes, no habia nada que
+//    justificar, asi que o la excepcion esta de mas o el fichaje es de otro.
+//    Caso real (pedido 2026-09-28): PERROTTA, 29/06/2026, "articulo 55",
+//    entro 06:53 y salio 13:43 con horario 07:00-13:38.
+//
+//    Casos en que NO se avisa (la excepcion cumplio su funcion o no se
+//    puede afirmar que sobre): llego tarde (la excepcion lo justifica), se
+//    fue antes de hora (idem, "salida particular"), un solo fichaje (no se
+//    sabe cuando se fue), turno partido (reglas propias), o no se conoce el
+//    horario de salida.
+//
+// Devuelve { descripcion, origen: 'licencia' | 'excepcion' } o null. Lo usan
+// la vista diaria (attendanceService.js) y la mensual (/attendance-range).
+function resolverAvisoLicencia({
+  leaveEvent, exclusion, totalCheckins, isLate, isPartial, multiVisit,
+  lastMinutes, exitMinutes, toleranceMinutes,
+}) {
+  if (!totalCheckins) return null;
+  if (leaveEvent) {
+    return {
+      descripcion: leaveEvent.eventTypeDescripcion || leaveEvent.observaciones || 'Licencia',
+      origen: 'licencia',
+    };
+  }
+  if (!exclusion || isLate || isPartial || multiVisit) return null;
+  if (totalCheckins < 2 || lastMinutes == null || exitMinutes == null) return null;
+  if (lastMinutes < exitMinutes - toleranceMinutes) return null; // se fue antes: la excepcion lo justifica
+  return {
+    descripcion: exclusion.reason || exclusion.eventTypeDescripcion || 'Excepción cargada',
+    origen: 'excepcion',
+  };
+}
+
 // Turno partido / visitas multiples en un mismo dia (profesor que da clase a
 // la mañana y a la tarde, medico que atiende en dos horarios): cada bloque
 // WORK de la plantilla es una "visita" independiente y requiere su propia
@@ -201,6 +252,7 @@ module.exports = {
   getEntranceReference,
   resolveToleranceMinutes,
   resolveLateJustification,
+  resolverAvisoLicencia,
   evaluateMultiVisitDay,
   findCrossingWorkBlock,
   stripOvernightCarryover,
