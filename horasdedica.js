@@ -3651,6 +3651,29 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       let inactiveWarningDays = 0;
       let campaignDays = 0;
       let leaveConflictDays = 0;
+      // Faltas SEGUIDAS sin aviso (dias habiles en "Ausente", sin nada que
+      // las justifique). En RRHH es la señal que mas importa: varias faltas
+      // seguidas sin aviso pueden ser un abandono de trabajo, y hay que
+      // actuar a tiempo. Un fin de semana o un feriado en el medio NO corta
+      // la racha (faltar viernes y lunes son dos faltas seguidas); un dia
+      // trabajado, justificado o en campaña si.
+      //
+      // No se toca ninguna de las ramas de abajo: se mira, al empezar cada
+      // dia, como cambiaron los contadores durante el dia anterior. Asi da
+      // igual por que rama salio ese dia, y ningun numero existente cambia.
+      let rachaFaltas = 0;
+      let rachaFaltasMax = 0;
+      let antesDelDia = null;
+      const cerrarDiaParaRacha = () => {
+        if (!antesDelDia) return;
+        if (absent > antesDelDia.absent) {
+          rachaFaltas++;
+          if (rachaFaltas > rachaFaltasMax) rachaFaltasMax = rachaFaltas;
+        } else if (daysWorked > antesDelDia.daysWorked || excused > antesDelDia.excused) {
+          rachaFaltas = 0;
+        }
+        antesDelDia = null;
+      };
       const days = detailEmployeeId ? [] : null;
       // Pedido real: un empleado inactivo (baja no cargada formalmente) no
       // debe contarse ni mostrarse como "ausente" solo por no fichar -- ver
@@ -3658,6 +3681,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       const employeeActivo = u.activo === undefined || u.activo === null ? true : !!Number(u.activo);
 
       dateRange.forEach(date => {
+        cerrarDiaParaRacha();
+        antesDelDia = { absent, daysWorked, excused };
         const dateSchedules = scheduleByDate[date];
         const schedule = getScheduleEntry(date, dateSchedules.assignedScheduleMap, dateSchedules.tenantScheduleMap, employeeId, u.tenantId);
         const checks = checksByDate[date] || [];
@@ -4208,6 +4233,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
           }
         }
       });
+      cerrarDiaParaRacha();
 
       // isOvertimeAuthorized se recalcula por dia dentro del forEach de
       // arriba (puede variar si el modo es 'custom' y el flag del empleado
@@ -4243,7 +4269,12 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         campaignDays,
         // Dias en que fichó teniendo una licencia cargada -- a revisar, igual
         // que inactiveWarningDays: visible en el listado sin abrir el detalle.
-        leaveConflictDays
+        leaveConflictDays,
+        // Faltas seguidas sin aviso: la racha mas larga del periodo, y la que
+        // sigue abierta al ultimo dia (la que pide actuar YA). Ver
+        // rachaFaltas arriba.
+        faltasSeguidasMax: rachaFaltasMax,
+        faltasSeguidasAlFinal: rachaFaltas
       };
       if (days) {
         row.days = days;
@@ -4644,6 +4675,66 @@ app.post('/config/campana-presentismo-modo', requirePermission('schedules', 'upd
   } catch (err) {
     console.error('ERROR saving campana presentismo modo:', err);
     res.status(500).json({ error: 'Error saving campana presentismo modo' });
+  }
+});
+
+// ============================================================================
+// Avisos de Presentismo: umbrales por empresa
+// ============================================================================
+//
+// GET/POST /config/avisos-asistencia
+//   faltasSeguidas         avisar desde N faltas SEGUIDAS sin aviso (default 2)
+//   faltasSinAvisoPeriodo  avisar desde N faltas sin aviso en el periodo que
+//                          se mira (default: apagado)
+//   justificadasPeriodo    avisar desde N dias justificados en el periodo
+//                          (default: apagado)
+//   cupoPorAgotarsePct     avisar "por agotarse" desde este % del cupo de un
+//                          motivo (default 80). Vacio = solo agotado/superado.
+// Vacio (null) en cualquiera = ese aviso apagado. Los avisos solo se
+// MUESTRAN: no cambian ningun numero de Presentismo.
+//
+// Criterio de RRHH para los defaults: dos faltas seguidas sin aviso ya piden
+// una llamada (el abandono de trabajo empieza asi, y actuar tarde complica
+// cualquier intimacion); los topes por periodo dependen mucho de cada
+// empresa y de su convenio, asi que arrancan apagados.
+const AVISOS_ASISTENCIA_DEFAULT = { faltasSeguidas: 2, faltasSinAvisoPeriodo: null, justificadasPeriodo: null, cupoPorAgotarsePct: 80 };
+const AVISOS_ASISTENCIA_RANGOS = {
+  faltasSeguidas: [1, 60], faltasSinAvisoPeriodo: [1, 366], justificadasPeriodo: [1, 366], cupoPorAgotarsePct: [1, 100],
+};
+
+async function fetchAvisosAsistencia(tenantId) {
+  const raw = await getAppSetting('avisosAsistencia', tenantId, db);
+  let guardado = {};
+  try { guardado = raw ? JSON.parse(raw) : {}; } catch (_) { guardado = {}; }
+  return { ...AVISOS_ASISTENCIA_DEFAULT, ...guardado };
+}
+
+app.get('/config/avisos-asistencia', requirePermission('attendance', 'read'), async (req, res) => {
+  try {
+    res.json(await fetchAvisosAsistencia(resolveTenantId(req)));
+  } catch (err) {
+    console.error('ERROR fetching avisos asistencia:', err);
+    res.status(500).json({ error: 'Error fetching avisos asistencia' });
+  }
+});
+
+app.post('/config/avisos-asistencia', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const limpio = {};
+    for (const [clave, [min, max]] of Object.entries(AVISOS_ASISTENCIA_RANGOS)) {
+      const v = req.body[clave];
+      if (v === null || v === undefined || v === '') { limpio[clave] = null; continue; }
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < min || n > max) {
+        return res.status(400).json({ error: `${clave} debe ser un número entero entre ${min} y ${max}, o vacío` });
+      }
+      limpio[clave] = n;
+    }
+    await setAppSetting('avisosAsistencia', resolveTenantId(req), JSON.stringify(limpio), db);
+    res.json({ ok: true, ...limpio });
+  } catch (err) {
+    console.error('ERROR saving avisos asistencia:', err);
+    res.status(500).json({ error: 'Error saving avisos asistencia' });
   }
 });
 

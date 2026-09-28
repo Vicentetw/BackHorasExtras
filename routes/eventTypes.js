@@ -250,6 +250,26 @@ module.exports = function (db) {
   });
 
   // ==========================
+  // 7b. ESTADO DE CUPOS DE TODA LA EMPRESA (avisos de Presentismo)
+  // GET /api/event-types/cupos/estado?fecha=&porcentaje=
+  // Quien esta por agotarse (>= porcentaje del tope), agotado o superado.
+  // porcentaje vacio = solo agotado/superado.
+  // ==========================
+  router.get('/cupos/estado', requireAnyPermission([['attendance', 'read'], ['exclusions', 'read'], ['leaves', 'read']]), async (req, res) => {
+    try {
+      const tenantId = resolveTenantId(req);
+      if (tenantId == null) return res.json({ success: true, filas: [] });
+      const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : new Date().toISOString().slice(0, 10);
+      const pct = req.query.porcentaje === undefined ? 80 : (req.query.porcentaje === '' ? null : Number(req.query.porcentaje));
+      const filas = await cupoMotivoRepository.estadoCuposEmpresa(db, tenantId, fecha, pct === null || Number.isFinite(pct) ? pct : 80);
+      res.json({ success: true, fecha, filas });
+    } catch (err) {
+      console.error('ERROR fetching estado de cupos:', err);
+      res.status(500).json({ success: false, error: 'Error calculando el estado de los cupos' });
+    }
+  });
+
+  // ==========================
   // 8. CONSUMO DEL MOTIVO POR UN EMPLEADO (y preview de una carga nueva)
   // GET /api/event-types/:id/consumo?employeeId=|userId=&fecha=&desde=&hasta=
   //     &excluirLicenciaId=&excluirJustificacionId=

@@ -164,4 +164,69 @@ async function verificarCarga(db, { employeeInternalId, eventTypeId, desde, hast
   };
 }
 
-module.exports = { PERIODOS, ACCIONES, findCupos, createCupo, consumoDeEmpleado, empleadoDeUserId, verificarCarga };
+/**
+ * Quienes de la empresa estan cerca o pasados del cupo de algun motivo, a una
+ * fecha. Para los avisos de Presentismo ("Art. 55: 6 de 6").
+ *
+ * Solo se calcula para quien tiene algo cargado de un motivo con cupo: el
+ * resto va en 0 y no hace falta mirarlo. Cada persona se calcula con
+ * consumoDeEmpleado, la MISMA funcion que la pantalla de carga: el numero del
+ * aviso y el de "usados X de N" no pueden diferir.
+ *
+ * @param {number|null} porcentaje  desde que % del tope se avisa "por agotarse" (ej. 80)
+ */
+async function estadoCuposEmpresa(db, tenantId, fecha, porcentaje = 80) {
+  let cuposRows = [];
+  try {
+    [cuposRows] = await db.query(
+      `SELECT q.*, et.descripcion FROM event_type_quotas q JOIN event_types et ON et.id = q.event_type_id
+       WHERE q.tenant_id = ?`,
+      [tenantId]
+    );
+  } catch (err) {
+    if (!err || err.code !== 'ER_NO_SUCH_TABLE') throw err;
+  }
+  const porMotivo = new Map();
+  cuposRows.forEach((c) => {
+    if (!porMotivo.has(c.event_type_id)) porMotivo.set(c.event_type_id, []);
+    porMotivo.get(c.event_type_id).push(c);
+  });
+
+  const filas = [];
+  for (const [eventTypeId, cupos] of porMotivo) {
+    const cupo = cupoVigente(fecha, cupos);
+    if (!cupo || cupo.max_dias_anio == null) continue;
+    // Candidatos: quien tiene una licencia o una justificacion de dia completo
+    // de este motivo en los ultimos 2 años (cubre el periodo por aniversario).
+    const [cand] = await db.query(
+      `SELECT e.id, e.employee_id FROM employees e
+       WHERE e.tenant_id = ? AND e.activo = 1 AND (
+         EXISTS (SELECT 1 FROM employee_events ee WHERE ee.employee_id = e.id AND ee.event_type_id = ?
+                   AND ee.fecha_hasta >= DATE_SUB(?, INTERVAL 2 YEAR))
+         OR EXISTS (SELECT 1 FROM user_employee_map m JOIN userexclusions ux
+                      ON ux.userId = m.USERID AND ux.tenant_id = m.tenant_id
+                    WHERE m.employee_id = e.id AND m.tenant_id = e.tenant_id AND ux.event_type_id = ?
+                      AND ux.type = 'FULL_DAY' AND ux.excDate >= DATE_SUB(?, INTERVAL 2 YEAR)))`,
+      [tenantId, eventTypeId, fecha, eventTypeId, fecha]
+    );
+    for (const c of cand) {
+      const r = await consumoDeEmpleado(db, { tenantId, employeeInternalId: c.id, eventTypeId, fecha });
+      if (!r || !r.cupo || r.cupo.maxDiasAnio == null) continue;
+      const max = r.cupo.maxDiasAnio;
+      let estado = null;
+      if (r.usados > max) estado = 'superado';
+      else if (r.usados === max) estado = 'agotado';
+      else if (porcentaje != null && max > 0 && r.usados * 100 >= max * porcentaje) estado = 'por_agotarse';
+      if (!estado) continue;
+      filas.push({
+        employeeId: String(c.employee_id), eventTypeId, motivo: cupo.descripcion,
+        usados: r.usados, max, estado, periodo: r.periodo,
+      });
+    }
+  }
+  return filas;
+}
+
+module.exports = {
+  PERIODOS, ACCIONES, findCupos, createCupo, consumoDeEmpleado, empleadoDeUserId, verificarCarga, estadoCuposEmpresa,
+};
