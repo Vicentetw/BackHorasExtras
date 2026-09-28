@@ -19,6 +19,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { saltarSinDatosReales } = require('../test-helpers/datosReales');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TEST_UID = 'test-timezone-regression';
@@ -28,7 +29,8 @@ after(async () => {
   await closeDb();
 });
 
-test('/movements-range: timeOut/timeIn son strings planos "YYYY-MM-DD HH:mm:ss", no ISO con Z', async () => {
+test('/movements-range: timeOut/timeIn son strings planos "YYYY-MM-DD HH:mm:ss", no ISO con Z', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   const headers = await getTestAuthHeaders(TEST_UID);
   const res = await fetch(`${BASE_URL}/movements-range?from=2026-08-01&to=2026-08-31&category=PARTICULAR&groupBy=month`, { headers });
   assert.equal(res.status, 200);

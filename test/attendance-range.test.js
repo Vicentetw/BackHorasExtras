@@ -15,6 +15,7 @@ require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { saltarSinDatosReales } = require('../test-helpers/datosReales');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TEST_UID = 'test-attendance-range-characterization';
@@ -30,7 +31,8 @@ after(async () => {
   await closeDb();
 });
 
-test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async () => {
+test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   const res = await fetch(`${BASE_URL}/attendance-range?from=2026-06-01&to=2026-06-30`, { headers });
   assert.equal(res.status, 200);
 
@@ -86,7 +88,8 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   assert.equal(withOvertime, 74, 'cantidad de empleados con horas extras > 0');
 });
 
-test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conocidos', async () => {
+test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conocidos', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   const res = await fetch(`${BASE_URL}/attendance-range?from=2026-06-01&to=2026-06-30`, { headers });
   const json = await res.json();
   const perrotta = json.data.find((e) => String(e.employeeId) === '2525');

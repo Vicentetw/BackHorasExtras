@@ -5,6 +5,7 @@ require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { saltarSinDatosReales } = require('../test-helpers/datosReales');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TEST_UID = 'test-matching-characterization';
@@ -20,7 +21,8 @@ after(async () => {
   await closeDb();
 });
 
-test('/api/matching/diagnosis/report: usuarios con fichajes reales aparecen primero', async () => {
+test('/api/matching/diagnosis/report: usuarios con fichajes reales aparecen primero', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   const res = await fetch(`${BASE_URL}/api/matching/diagnosis/report`, { headers });
   assert.equal(res.status, 200);
 

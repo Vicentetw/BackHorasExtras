@@ -5,22 +5,49 @@
 // (2) si un dia ya tenia una exclusion cargada, no aborta el resto -- lo
 // reporta como "skipped" y sigue con los demas.
 require('dotenv').config();
-const { test, after } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const UID = 'test-exclusions-range-ci';
-// USERID real de AVP2 (tenant de prueba, no la empresa real).
-const TEST_USER_ID = 205;
+// Empresa y usuario de reloj propios del test. Antes usaba el USERID 205, un
+// usuario real de la empresa de fixture 4: en una base vacia (el CI) no
+// existia y el test fallaba sin haber probado nada.
+const TENANT_ID = 999951;
+const TEST_USER_ID = 8890101;
 // Rango lejos de cualquier dato real -- año de prueba dedicado.
 const DATE_FROM = '2099-01-10';
 const DATE_TO = '2099-01-14'; // 5 dias
 const PRELOADED_DATE = '2099-01-12'; // el del medio, cargado a mano antes
 
+async function cleanup() {
+  await db.query('DELETE FROM user_exclusion_log WHERE tenant_id = ?', [TENANT_ID]);
+  await db.query('DELETE FROM userexclusions WHERE tenant_id = ?', [TENANT_ID]);
+  await db.query('DELETE FROM user_employee_map WHERE tenant_id = ?', [TENANT_ID]);
+  await db.query('DELETE FROM users WHERE tenant_id = ?', [TENANT_ID]);
+  await db.query('DELETE FROM employees WHERE tenant_id = ?', [TENANT_ID]);
+}
+
+before(async () => {
+  await db.query(
+    `INSERT INTO tenants (id, name, code) VALUES (?, 'Tenant Exclusions Range (test)', 'tenant-exclusions-range-test')
+     ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+    [TENANT_ID]
+  );
+  await cleanup();
+  const [emp] = await db.query(
+    `INSERT INTO employees (employee_id, nombre, tenant_id, activo) VALUES (900801, 'Exclusions Range Test', ?, 1)`,
+    [TENANT_ID]
+  );
+  await db.query(`INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, '900801', 'Exclusions Range Test')`, [TEST_USER_ID, TENANT_ID]);
+  await db.query(`INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, 'test')`, [TEST_USER_ID, TENANT_ID, emp.insertId]);
+});
+
 after(async () => {
-  await db.query('DELETE FROM userexclusions WHERE userId = ? AND excDate BETWEEN ? AND ?', [TEST_USER_ID, DATE_FROM, DATE_TO]);
+  await cleanup();
+  await db.query('DELETE FROM tenants WHERE id = ?', [TENANT_ID]);
   await deleteTestUser(UID);
   await closeDb();
 });

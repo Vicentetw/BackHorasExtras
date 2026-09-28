@@ -7,6 +7,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { saltarSinDatosReales } = require('../test-helpers/datosReales');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const NO_PERMS_UID = 'test-manual-entries-none-ci';
@@ -69,7 +70,8 @@ test('/clear/checkins exige superadmin -- un usuario normal con todos los permis
   assert.equal(res.status, 403, 'borrar TODOS los fichajes no debe alcanzar con un permiso de modulo, solo superadmin');
 });
 
-test('ManualEntries: alta, edicion y baja de una HE manual, reflejada en /attendance-range', async () => {
+test('ManualEntries: alta, edicion y baja de una HE manual, reflejada en /attendance-range', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   assert.ok(userIdFor2525, 'legajo 2525 debe tener un USERID de reloj asociado para esta prueba');
   const headers = await getTestAuthHeaders(FULL_PERMS_UID, { isSuperadmin: true });
   // Tiene que ser una fecha PASADA -- /attendance-range recorta el rango a

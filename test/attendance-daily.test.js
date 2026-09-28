@@ -13,6 +13,7 @@ require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { saltarSinDatosReales } = require('../test-helpers/datosReales');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TEST_UID = 'test-attendance-daily-characterization';
@@ -28,7 +29,8 @@ after(async () => {
   await closeDb();
 });
 
-test('/api/labor-engine/attendance/:date 2026-06-30 (dia cerrado): mismos totales que hoy', async () => {
+test('/api/labor-engine/attendance/:date 2026-06-30 (dia cerrado): mismos totales que hoy', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   const res = await fetch(`${BASE_URL}/api/labor-engine/attendance/2026-06-30`, { headers });
   assert.equal(res.status, 200);
 
@@ -49,7 +51,8 @@ test('/api/labor-engine/attendance/:date 2026-06-30 (dia cerrado): mismos totale
   assert.equal(json.summary.excused, 1);
 });
 
-test('/api/labor-engine/attendance/:date 2026-06-29 (dia con una exclusion FULL_DAY): mismos totales que hoy', async () => {
+test('/api/labor-engine/attendance/:date 2026-06-29 (dia con una exclusion FULL_DAY): mismos totales que hoy', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   const res = await fetch(`${BASE_URL}/api/labor-engine/attendance/2026-06-29`, { headers });
   const json = await res.json();
   assert.equal(json.summary.excused, 1, 'la exclusion FULL_DAY del legajo 2525 debe seguir contando como Excused');

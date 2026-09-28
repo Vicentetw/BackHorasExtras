@@ -16,6 +16,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { saltarSinDatosReales } = require('../test-helpers/datosReales');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const FULL_PERMS_UID = 'test-overtime-cap-alert-ci';
@@ -74,7 +75,8 @@ after(async () => {
   await closeDb();
 });
 
-test('un dia con HE real por encima del tope muestra el numero REAL (sin truncar) + aviso overtimeOverCap', async () => {
+test('un dia con HE real por encima del tope muestra el numero REAL (sin truncar) + aviso overtimeOverCap', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   assert.ok(userIdFor2525, 'legajo 2525 debe tener un USERID de reloj asociado para esta prueba');
   const testDate = '2026-08-18'; // martes habil (2026-08-17 es feriado San Martin, 08-16 es domingo)
 
@@ -97,7 +99,8 @@ test('un dia con HE real por encima del tope muestra el numero REAL (sin truncar
   assert.equal(day.overtimeOverCap, true, 'debe avisar que ese dia supera el tope configurado');
 });
 
-test('una carga manual que sola supera el tope tambien dispara el aviso, sumada al total real', async () => {
+test('una carga manual que sola supera el tope tambien dispara el aviso, sumada al total real', async (t) => {
+  if (await saltarSinDatosReales(t)) return;
   const testDate = '2026-08-19'; // miercoles habil
 
   await setCapMinutes(1440);
