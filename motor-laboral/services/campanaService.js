@@ -155,6 +155,30 @@ async function fetchCorreccionesMarcadores(db, fromDate, toDateExclusive, tenant
   return correcciones;
 }
 
+// "Solo detectar campañas de empleados afectados" (Salidas > Campaña). Por
+// empresa, apagado por default: una empresa que no marco a nadie no ve
+// ningun cambio.
+async function fetchCampanaSoloAfectados(db, tenantId) {
+  return (await getAppSetting('campanaSoloAfectados', tenantId, db)) === '1';
+}
+
+// Legajos con la tilde "Afectado a campaña / viajes", o null si la empresa
+// no activo el ajuste (null = cualquiera puede llevarse un marcador, como
+// siempre). Si la columna todavia no existe (backend publicado antes que la
+// migracion 20261004), tambien null: se sigue como siempre.
+async function legajosAfectadosACampana(db, tenantId) {
+  if (tenantId === undefined || tenantId === null) return null;
+  if (!(await fetchCampanaSoloAfectados(db, tenantId))) return null;
+  const [rows] = await db.query(
+    'SELECT employee_id FROM employees WHERE tenant_id = ? AND afectado_campana = 1',
+    [tenantId]
+  ).catch((err) => {
+    if (err && err.code === 'ER_BAD_FIELD_ERROR') return [null];
+    throw err;
+  });
+  return rows ? new Set(rows.map(r => String(r.employee_id))) : null;
+}
+
 // Lo que necesita una pantalla para mostrar (y corregir) los marcadores de un
 // evento: el USERID y la hora exacta de cada marcador -- que es como se
 // identifica al pedir una correccion -- y, si ya fue corregido, quien, cuando
@@ -190,7 +214,10 @@ function datosDeMarcadores(ev, correcciones) {
 // Usa `reboteRefinado` (ver movementsCalculations.js): sin eso se perdian 79
 // de 582 salidas a campaña reales en AVP.
 const CAMPANA_LOOKBACK_DAYS = 90;
-async function detectarCampanas(db, tenantId, from, to) {
+// opciones.ignorarAfectados: detecta como si el ajuste "solo afectados"
+// estuviera apagado. Lo usa la sugerencia de a quien marcar (si no, seria
+// circular: nadie marcado -> ninguna campaña -> nadie para sugerir).
+async function detectarCampanas(db, tenantId, from, to, opciones = {}) {
   const markerMap = await fetchMarkerMap(db, 'CAMPANA', tenantId);
   if (Object.keys(markerMap).length === 0) return [];
 
@@ -203,8 +230,9 @@ async function detectarCampanas(db, tenantId, from, to) {
   const maxMarkerGapMs = await fetchMarkerMaxGapMs(db, tenantId);
   const todosLosMarcadores = await fetchMarkerMap(db, null, tenantId);
   const correccionesMarcadores = await fetchCorreccionesMarcadores(db, lookbackFromStr, nextDayStr(to), tenantId);
+  const soloPuedenConsumir = opciones.ignorarAfectados ? null : await legajosAfectadosACampana(db, tenantId);
   const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, {
-    maxMarkerGapMs, todosLosMarcadores, reboteRefinado: true, correccionesMarcadores,
+    maxMarkerGapMs, todosLosMarcadores, reboteRefinado: true, correccionesMarcadores, soloPuedenConsumir,
   });
 
   const fromDate = new Date(fy, fm - 1, fd);
@@ -279,6 +307,8 @@ module.exports = {
   fetchMarkerMap,
   fetchMarkerMaxGapMs,
   fetchCorreccionesMarcadores,
+  fetchCampanaSoloAfectados,
+  legajosAfectadosACampana,
   datosDeMarcadores,
   detectarCampanas,
   fetchCampanaPresentismoModo,

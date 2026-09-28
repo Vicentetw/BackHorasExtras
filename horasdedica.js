@@ -4609,6 +4609,123 @@ app.post('/config/campana-presentismo-modo', requirePermission('schedules', 'upd
 });
 
 // ============================================================================
+// "Afectado a campaña / viajes" -- quien puede llevarse un marcador de campaña
+// ============================================================================
+//
+// Ver migracion 20261004 y `soloPuedenConsumir` en movementsCalculations.js.
+// Dos piezas:
+//   - la tilde por empleado (employees.afectado_campana), que se marca desde
+//     el legajo o en lote desde Salidas > Campaña;
+//   - el ajuste de la empresa (campanaSoloAfectados), apagado por default.
+// La tilde sola no cambia nada: recien cuenta cuando se activa el ajuste.
+
+async function contarAfectadosACampana(tenantId) {
+  const [[{ n }]] = await db.query(
+    'SELECT COUNT(*) AS n FROM employees WHERE tenant_id = ? AND afectado_campana = 1 AND activo = 1', [tenantId]
+  );
+  return n;
+}
+
+app.get('/config/campana-solo-afectados', requirePermission('schedules', 'read'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    res.json({
+      campanaSoloAfectados: await campanaService.fetchCampanaSoloAfectados(db, tenantId),
+      afectados: await contarAfectadosACampana(tenantId),
+    });
+  } catch (err) {
+    console.error('ERROR fetching campana solo afectados:', err);
+    res.status(500).json({ error: 'Error fetching campana solo afectados' });
+  }
+});
+
+app.post('/config/campana-solo-afectados', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    if (typeof req.body.campanaSoloAfectados !== 'boolean') {
+      return res.status(400).json({ error: 'campanaSoloAfectados (true/false) es requerido' });
+    }
+    // Activarlo sin nadie marcado haria desaparecer TODAS las campañas de la
+    // empresa de un momento a otro. Se frena aca y no solo en la pantalla.
+    if (req.body.campanaSoloAfectados && (await contarAfectadosACampana(tenantId)) === 0) {
+      return res.status(400).json({
+        error: 'Primero marcá a los empleados que salen a campaña: con nadie marcado desaparecerían todas las campañas.'
+      });
+    }
+    await setAppSetting('campanaSoloAfectados', tenantId, req.body.campanaSoloAfectados ? '1' : '0', db);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving campana solo afectados:', err);
+    res.status(500).json({ error: 'Error saving campana solo afectados' });
+  }
+});
+
+// GET /campana/afectados-sugeridos -- quienes salieron a campaña en los
+// ultimos 6 meses segun los marcadores, para marcarlos de una vez en vez de
+// buscar uno por uno entre cientos de legajos. Se detecta sin el filtro de
+// afectados (si no, seria circular). Incluye cuantas campañas tuvo cada uno:
+// alguien con una sola puede ser justamente un marcador mal atribuido, y
+// conviene mirarlo antes de marcarlo.
+const MESES_SUGERENCIA_AFECTADOS = 6;
+app.get('/campana/afectados-sugeridos', requirePermission('employees', 'read'), reportesRateLimiter, async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const hoy = new Date();
+    const to = formatLocalDate(hoy);
+    const from = formatLocalDate(new Date(hoy.getFullYear(), hoy.getMonth() - MESES_SUGERENCIA_AFECTADOS, hoy.getDate()));
+    const eventos = await campanaService.detectarCampanas(db, tenantId, from, to, { ignorarAfectados: true });
+    const cantidad = new Map();
+    eventos.forEach(e => cantidad.set(e.employeeId, (cantidad.get(e.employeeId) || 0) + 1));
+    if (cantidad.size === 0) return res.json({ from, to, rows: [] });
+
+    const [emps] = await db.query(
+      `SELECT employee_id, nombre, afectado_campana FROM employees
+       WHERE tenant_id = ? AND activo = 1 AND employee_id IN (?)`,
+      [tenantId, [...cantidad.keys()].map(Number)]
+    );
+    const rows = emps
+      .map(e => ({
+        employeeId: String(e.employee_id),
+        nombre: e.nombre,
+        campanas: cantidad.get(String(e.employee_id)) || 0,
+        afectado: e.afectado_campana === 1,
+      }))
+      .sort((a, b) => b.campanas - a.campanas || (a.nombre || '').localeCompare(b.nombre || ''));
+    res.json({ from, to, rows });
+  } catch (err) {
+    console.error('ERROR fetching afectados sugeridos:', err);
+    res.status(500).json({ error: 'Error fetching afectados sugeridos' });
+  }
+});
+
+// POST /campana/afectados { legajos: string[], afectado: boolean } -- marca o
+// desmarca en lote. Solo toca empleados de la propia empresa.
+app.post('/campana/afectados', requirePermission('employees', 'update'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const { legajos, afectado } = req.body;
+    if (!Array.isArray(legajos) || legajos.length === 0 || legajos.length > 2000) {
+      return res.status(400).json({ error: 'legajos debe ser una lista de 1 a 2000 legajos' });
+    }
+    if (typeof afectado !== 'boolean') return res.status(400).json({ error: 'afectado (true/false) es requerido' });
+    const numeros = [...new Set(legajos.map(Number).filter(Number.isInteger))];
+    if (numeros.length === 0) return res.status(400).json({ error: 'legajos inválidos' });
+    const [r] = await db.query(
+      'UPDATE employees SET afectado_campana = ? WHERE tenant_id = ? AND employee_id IN (?)',
+      [afectado ? 1 : 0, tenantId, numeros]
+    );
+    res.json({ ok: true, updated: r.affectedRows });
+  } catch (err) {
+    console.error('ERROR saving afectados:', err);
+    res.status(500).json({ error: 'Error saving afectados' });
+  }
+});
+
+// ============================================================================
 // /marker-corrections -- corregir a mano de quien era un marcador
 // ============================================================================
 //

@@ -229,12 +229,30 @@ function claveMarcador(userId, checktime) {
   return `${userId}|${fechaHoraLocal(checktime)}`;
 }
 
+// ============================================================================
+// Quien puede llevarse un marcador (opcion `soloPuedenConsumir`)
+// ============================================================================
+//
+// Set de legajos. Si se pasa, un fichaje de alguien que NO esta en el set
+// no consume el marcador pendiente de su reloj: lo deja pasar, y el marcador
+// sigue esperando a la persona que corresponde (dentro de su ventana, como
+// siempre).
+//
+// Lo usa la deteccion de Campaña cuando la empresa activa "solo empleados
+// afectados a campaña" (employees.afectado_campana, migracion 20261004): si
+// alguien de oficina ficha justo despues del marcador de salida a campaña de
+// otro, ya no se le abre una campaña de dias -- y ademas el marcador le llega
+// a quien lo apreto, que es lo que de verdad importa.
+//
+// Una correccion manual ("era de X") gana igual aunque X no este en el set:
+// es una decision explicita de una persona.
 function detectMovements(checkins, markerMap, options = {}) {
   const maxMarkerGapMs = options.maxMarkerGapMs ?? DEFAULT_MAX_MARKER_GAP_MS;
   // Map claveMarcador -> { employeeId: string|null }. Ver "Correcciones
   // manuales" arriba. Si no se pasa, el comportamiento es el de antes.
   const correcciones = options.correccionesMarcadores ?? null;
   const reservadosPorEmpleado = new Map(); // employeeId -> marcador corregido
+  const soloPuedenConsumir = options.soloPuedenConsumir ?? null;
   const ownCheckinBounceMs = options.ownCheckinBounceMs ?? DEFAULT_OWN_CHECKIN_BOUNCE_MS;
   const reboteRefinado = options.reboteRefinado === true;
   // TODOS los marcadores de la empresa, no solo los de la categoria que se
@@ -335,7 +353,8 @@ function detectMovements(checkins, markerMap, options = {}) {
       reservado = null;
     }
     if (reservado) reservadosPorEmpleado.delete(row.employeeId);
-    const pendiente = reservado ? null : marcadorDelReloj(marcadoresPorReloj, row.machineIp ?? null);
+    const puedeUsarLaCola = !soloPuedenConsumir || soloPuedenConsumir.has(row.employeeId);
+    const pendiente = (reservado || !puedeUsarLaCola) ? null : marcadorDelReloj(marcadoresPorReloj, row.machineIp ?? null);
     const marcadorAplicable = reservado || (pendiente ? pendiente.marcador : null);
 
     const previousOwnCheckin = lastRealCheckinByEmployeeId.get(row.employeeId);

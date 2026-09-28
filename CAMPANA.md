@@ -151,6 +151,34 @@ Migración `20261003_marker_corrections.sql`. Tests:
 `test/marker-corrections.test.js` (endpoints, auditoría y aislamiento entre
 empresas).
 
+## Quién puede llevarse un marcador de campaña ("Afectado a campaña / viajes")
+
+Un marcador de salida a campaña atribuido a alguien de oficina le abre una
+campaña de días. Solución en dos piezas (migración `20261004`):
+
+- **Tilde por empleado** `employees.afectado_campana` (ficha del empleado, o
+  en lote desde Salidas > Campaña). Por defecto apagada.
+- **Ajuste de la empresa** `campanaSoloAfectados` ("Solo detectar campañas de
+  empleados afectados"), apagado por defecto. La tilde sola no cambia nada.
+
+Con el ajuste encendido, un empleado sin tilde **no consume** el marcador de
+campaña (`soloPuedenConsumir` en `detectMovements`): el marcador sigue
+esperando, dentro de su ventana, a quien lo apretó. No es un filtro posterior:
+además de sacarle la campaña a quien no correspondía, se la da al que sí.
+Una corrección manual gana igual aunque la persona no tenga la tilde.
+
+No se puede encender con nadie marcado (desaparecerían todas las campañas):
+lo frena el backend, no solo la pantalla. Para no tildar a mano entre cientos
+de legajos, "Ver quiénes salieron a campaña" lista a quienes tuvieron campañas
+en los últimos 6 meses (detectadas **sin** el filtro, si no sería circular) y
+preselecciona a los de 2 o más; los de 1 sola conviene mirarlos, porque pueden
+ser justamente un marcador mal atribuido. Con los datos de AVP (mar-sep 2026):
+381 campañas de 29 personas, 23 con 2 o más y 6 con una sola.
+
+Un PUT de empleado que no manda el campo (un cliente viejo, el import) no
+borra la tilde. Tests: `test/campana-afectados.test.js` y los de
+`soloPuedenConsumir` en `test/marcadores-corregidos.test.js`.
+
 ## Qué NO hace todavía (extensiones previstas)
 
 - **Carga manual de una campaña**, para quien se olvidó el marcador. El
@@ -164,8 +192,6 @@ empresas).
   congelado a propósito. El motor diario (`/api/labor-engine/attendance/:date`,
   el de la vista diaria) **sí** conoce las campañas desde `a150523`: usa
   `campanaService`, la misma detección que la vista mensual.
-- **Tilde por empleado "Afectado a campaña / viajes"**, para que un marcador
-  mal asignado no convierta en campaña las ausencias de alguien de oficina.
 - **Ciclos que no siguen la semana** (10x4, 14x7), comisiones y otros
   regímenes. El modelo de "período con tipo" los admite, pero no se
   implementan hasta que alguna empresa los necesite.

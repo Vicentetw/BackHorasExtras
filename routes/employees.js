@@ -216,7 +216,8 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
       overtime_authorized,
       payroll_regime,
       exclude_from_report,
-      legajo_alt
+      legajo_alt,
+      afectado_campana
     } = req.body;
 
     // Validaciones básicas
@@ -313,8 +314,8 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
     // Insertar
     const [result] = await db.query(
       `INSERT INTO employees
-       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, ciudad_id, sucursal_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, payroll_regime, exclude_from_report, legajo_alt, tenant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, ciudad_id, sucursal_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, payroll_regime, exclude_from_report, legajo_alt, tenant_id, afectado_campana)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         employee_id,
         nombre,
@@ -333,7 +334,8 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
         payroll_regime || null,
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
-        effectiveTenantId
+        effectiveTenantId,
+        afectado_campana ? 1 : 0
       ]
     );
 
@@ -377,7 +379,8 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
       exclude_from_report,
       legajo_alt,
       tenant_id,
-      category_id
+      category_id,
+      afectado_campana
     } = req.body;
 
     // Validaciones básicas
@@ -456,7 +459,8 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
        employee_id = ?, nombre = ?, documento = ?, tipo_documento = ?,
        direccion = ?, zona_id = ?, zona_real_id = ?, ciudad_id = ?, sucursal_id = ?, fecha_alta = ?,
        fecha_baja = ?, activo = ?, motivo_baja = ?, overtime_authorized = ?, payroll_regime = ?, exclude_from_report = ?, legajo_alt = ?, tenant_id = ?,
-       category_id = ?
+       category_id = ?,
+       afectado_campana = COALESCE(?, afectado_campana)
        WHERE id = ?`,
       [
         employee_id,
@@ -478,6 +482,9 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
         legajo_alt || null,
         effectiveTenantId,
         category_id || null,
+        // Si no viene (un cliente viejo, o el import), se deja como estaba:
+        // un PUT que no sabe de la tilde no la tiene que borrar.
+        afectado_campana === undefined ? null : (afectado_campana ? 1 : 0),
         id
       ]
     );

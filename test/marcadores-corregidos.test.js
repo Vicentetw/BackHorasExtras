@@ -161,3 +161,44 @@ test('sin correcciones el resultado es identico al de siempre', () => {
   const b = detectMovements(EL_CASO, MARCADORES, { ...opciones, correccionesMarcadores: new Map() });
   assert.deepEqual([...a.openEvents.entries()], [...b.openEvents.entries()]);
 });
+
+// ---------------------------------------------------------------------------
+// soloPuedenConsumir: "Afectado a campaña / viajes" (migracion 20261004)
+// ---------------------------------------------------------------------------
+
+const CAMPANA = { 8: { category: 'CAMPANA', direction: 'SALIDA' } };
+const SALIDA_A_CAMPANA = [
+  marcador('08:00:00', 8),
+  fichaje('08:00:02', 100, W), // W es de oficina y ficho justo en el medio
+  fichaje('08:00:04', 200, X), // X es quien sale al campo
+];
+
+test('sin el ajuste, la campaña se la lleva W (el error que se quiere evitar)', () => {
+  const { openEvents } = detectMovements(SALIDA_A_CAMPANA, CAMPANA, opciones);
+  assert.ok(openEvents.has(W));
+  assert.ok(!openEvents.has(X));
+});
+
+test('con solo X afectado: W deja pasar el marcador y le llega a X', () => {
+  const { openEvents } = detectMovements(SALIDA_A_CAMPANA, CAMPANA, {
+    ...opciones, soloPuedenConsumir: new Set([X]),
+  });
+  assert.ok(!openEvents.has(W));
+  assert.equal(openEvents.get(X).timeOut.getTime(), t('08:00:04').getTime());
+});
+
+test('el marcador que W deja pasar igual vence: no se lo lleva alguien 10 minutos despues', () => {
+  const { openEvents } = detectMovements([
+    marcador('08:00:00', 8),
+    fichaje('08:00:02', 100, W),
+    fichaje('08:10:00', 200, X),
+  ], CAMPANA, { ...opciones, soloPuedenConsumir: new Set([X]) });
+  assert.equal(openEvents.size, 0);
+});
+
+test('una correccion manual gana aunque la persona no este marcada como afectada', () => {
+  const { openEvents } = detectMovements(SALIDA_A_CAMPANA, CAMPANA, {
+    ...opciones, soloPuedenConsumir: new Set([X]), correccionesMarcadores: corregido('08:00:00', 8, W),
+  });
+  assert.ok(openEvents.has(W));
+});
