@@ -182,6 +182,26 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       // inactivo): un feriado de toda la empresa pesa mas que cualquier
       // otro motivo individual.
       status = 'HolidayAbsent';
+    } else if (!userSchedule.isWorkDay) {
+      // Bug real reportado (sabado 26/09/2026: "habia muchos ausentes que en
+      // realidad no estaban ausentes"): sin esta rama, un dia que segun la
+      // plantilla del empleado NO es laborable caia en el 'Absent' inicial.
+      //
+      // Ausente tiene que significar una sola cosa: tenia que venir y no
+      // vino. Un sabado para alguien que trabaja de lunes a viernes no es
+      // una ausencia, es un dia que no le tocaba -- contarlo como falta
+      // ensucia el numero justo cuando mas se lo mira, y obliga a quien lee
+      // el informe a descartar a mano los que no correspondian.
+      //
+      // Mismo criterio y mismo orden que /attendance-range (ver
+      // horasdedica.js: `if (!isWorkDay && !holidayNonWorkApplies)`), que ya
+      // lo resolvia bien -- por eso el calendario mensual y el PDF salian
+      // correctos y solo fallaba esta pantalla. El feriado se evalua ANTES,
+      // a proposito: un feriado pesa mas que el dia de la semana.
+      //
+      // El motivo de una licencia que caiga en este dia no se pierde: viaja
+      // aparte en el campo `leave` del return, mas abajo.
+      status = 'NonWorkDay';
     } else if (exclusion || leaveEvent) {
       status = 'Excused';
     } else if (!u.active) {
