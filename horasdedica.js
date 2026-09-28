@@ -3574,15 +3574,12 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
     // 'ignorar' (el default) no se hace ni una consulta y el resultado es
     // identico al de siempre. tenantId null es la vista cruzada de
     // superadmin: ahi no hay UNA configuracion de empresa que aplicar.
-    const campanaModo = tenantId != null ? await fetchCampanaPresentismoModo(tenantId) : 'ignorar';
-    const campanaDayByEmployeeDate = new Set(); // `${employeeId}|${date}`
-    if (campanaModo !== 'ignorar') {
-      const hastaStr = formatLocalDate(effectiveEndDate);
-      for (const ev of await detectarCampanas(tenantId, from, hastaStr)) {
-        movementsCalc.diasInterioresDeCampana(ev.timeOut, ev.timeIn, from, hastaStr)
-          .forEach(date => campanaDayByEmployeeDate.add(`${ev.employeeId}|${date}`));
-      }
-    }
+    const diasCampana = await campanaService.diasDeCampana(db, tenantId, from, formatLocalDate(effectiveEndDate));
+    const campanaModo = diasCampana ? diasCampana.modo : 'ignorar';
+    const campanaDayByEmployeeDate = diasCampana ? diasCampana.interiores : new Set(); // `${employeeId}|${date}`
+    // Dias de regreso que cuentan como campaña (volvio a la hora de corte o
+    // despues). Si volvio antes, no estan aca y el dia se evalua normal.
+    const campanaRegresoByEmployeeDate = diasCampana ? diasCampana.regresos : new Set();
 
     const result = [];
 
@@ -3714,7 +3711,35 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         const exclusion = u.USERID ? exclusionsMap.get(`${u.USERID}_${date}`) : null;
         const leaveEvent = leaveEventMap.get(`${employeeId}_${date}`);
 
-        if (checks.length > 0) {
+        if (checks.length > 0 && campanaRegresoByEmployeeDate.has(`${employeeId}|${date}`)) {
+          // Dia de regreso de campaña, habiendo vuelto a la hora de corte o
+          // despues (bug real: OLGUIN volvio el 11/09/2026 a las 20:39 y salia
+          // "Tarde" -- 13 horas tarde respecto de su entrada de las 07:00). Su
+          // fichaje no es una entrada a la jornada, es el regreso del campo:
+          // no se evalua tardanza ni HE automatica, y el dia cuenta como
+          // campaña segun el modo de la empresa. Las cargas manuales se
+          // respetan igual que en cualquier otro dia.
+          campaignDays++;
+          if (campanaModo === 'trabajado') daysWorked++;
+          else excused++;
+          const manualKeyRegreso = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesRegreso = manualKeyRegreso ? (manualMinutesByUserDate.get(manualKeyRegreso) || 0) : 0;
+          if (manualMinutesRegreso > 0) overtimeMinutes += manualMinutesRegreso;
+          if (days) {
+            days.push({
+              date,
+              status: 'Campaign',
+              campaignCountsAs: campanaModo,
+              campaignMoment: 'regreso',
+              firstCheckin: extractTime(checks[0]),
+              lastCheckin: extractTime(checks[checks.length - 1]),
+              totalCheckins: checks.length,
+              checkins: checks.map(c => extractTime(c)),
+              overtimeManualMinutes: manualMinutesRegreso,
+              hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
+            });
+          }
+        } else if (checks.length > 0) {
           daysWorked++;
           if (!employeeActivo) inactiveWarningDays++;
           const first = checks[0];

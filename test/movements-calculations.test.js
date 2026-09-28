@@ -8,6 +8,7 @@ const {
   openOrphanReturnsAtScheduleEntrance,
   computeCampanaDias,
   diasInterioresDeCampana,
+  regresoCuentaComoCampana,
   isFirstRealCheckinOfDay,
   filterEventsOpenedByFirstCheckinOfDay
 } = require('../motor-laboral/services/movementsCalculations');
@@ -320,6 +321,26 @@ test('diasInterioresDeCampana: se recorta al rango pedido (campaña que empezo e
 test('diasInterioresDeCampana: salida y regreso el mismo dia o al dia siguiente no dejan dias interiores', () => {
   assert.deepEqual(diasInterioresDeCampana(new Date('2026-08-10T08:00:00'), new Date('2026-08-10T18:00:00'), '2026-08-01', '2026-08-31'), []);
   assert.deepEqual(diasInterioresDeCampana(new Date('2026-08-10T08:00:00'), new Date('2026-08-11T09:00:00'), '2026-08-01', '2026-08-31'), []);
+});
+
+test('regresoCuentaComoCampana: con corte 09:00, volver a las 20:39 cuenta como campaña y a las 08:00 no', () => {
+  // OLGUIN volvio el 11/09/2026 a las 20:39: ese dia lo paso viajando.
+  assert.equal(regresoCuentaComoCampana(new Date('2026-09-11T20:39:00'), '09:00'), true);
+  // Volver a las 08:00 es llegar a tiempo para trabajar: dia normal.
+  assert.equal(regresoCuentaComoCampana(new Date('2026-09-11T08:00:00'), '09:00'), false);
+  // Justo a la hora de corte ya cuenta (mismo criterio que computeCampanaDias).
+  assert.equal(regresoCuentaComoCampana(new Date('2026-09-11T09:00:00'), '09:00'), true);
+  // Campaña abierta: no hay regreso.
+  assert.equal(regresoCuentaComoCampana(null, '09:00'), false);
+});
+
+test('regresoCuentaComoCampana y computeCampanaDias usan la misma regla (el reporte y Presentismo no pueden contar distinto)', () => {
+  const salida = new Date('2026-09-07T07:39:00');
+  for (const hora of ['06:00', '08:59', '09:00', '20:39']) {
+    const regreso = new Date(`2026-09-11T${hora}:00`);
+    const diasReporte = computeCampanaDias(salida, regreso, '09:00');
+    assert.equal(diasReporte === 5, regresoCuentaComoCampana(regreso, '09:00'), hora);
+  }
 });
 
 test('closeOpenEventsAtScheduleExit: cierra con el horario de salida resuelto', () => {

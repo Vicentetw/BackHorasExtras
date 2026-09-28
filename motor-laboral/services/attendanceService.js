@@ -102,8 +102,9 @@ function getScheduleEntryOrNull(assignedScheduleMap, tenantScheduleMap, employee
 // mismo fix en /attendance-range de horasdedica2.js). assignedScheduleMapYesterday/
 // tenantScheduleMapYesterday: mismo shape que sus pares de "hoy", pero
 // resueltos para el dia anterior -- ver calculateDailyAttendance.
-// campana: { modo: 'trabajado'|'excusado', empleados: Set<legajo> } -- quienes
-// estan adentro de una campaña ese dia (campanaService.empleadosEnCampanaElDia).
+// campana: { modo: 'trabajado'|'excusado', empleados: Set<legajo>, regresos: Set<legajo> }
+// -- quienes estan adentro de una campaña ese dia, y quienes vuelven ese dia
+// despues de la hora de corte (campanaService.empleadosEnCampanaElDia).
 // null = la empresa no interpreta campañas (modo 'ignorar'): nada cambia.
 function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents = [], assignedScheduleMapYesterday = null, tenantScheduleMapYesterday = null, campana = null) {
   checkins.forEach(c => {
@@ -145,7 +146,15 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
     // status normal (a horario/tarde/etc.) pero se marca con un aviso en vez
     // de agregar un status nuevo que oculte la info real de esa marcación.
     let inactiveWarning = false;
-    if (checkinsSorted.length > 0) {
+    // Dia de regreso de campaña habiendo vuelto a la hora de corte o despues
+    // (ver campanaService.diasDeCampana): su fichaje es el regreso del campo,
+    // no una entrada a la jornada -- no se evalua tardanza. Solo en un dia
+    // habil y no feriado: esos siguen su propia regla de siempre.
+    const esRegresoDeCampana = checkinsSorted.length > 0 && !isHoliday && !!userSchedule.isWorkDay
+      && !!campana && campana.regresos.has(String(u.employeeId));
+    if (esRegresoDeCampana) {
+      status = 'Campaign';
+    } else if (checkinsSorted.length > 0) {
       if (workBlocks.length > 1) {
         multiVisit = evaluateMultiVisitDay({
           workBlocks,
@@ -234,6 +243,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       name: u.name,
       status,
       campaignCountsAs: status === 'Campaign' ? campana.modo : undefined,
+      campaignMoment: esRegresoDeCampana ? 'regreso' : undefined,
       inactiveWarning,
       firstCheckin,
       lastCheckin,

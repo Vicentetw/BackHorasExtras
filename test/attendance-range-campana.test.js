@@ -220,6 +220,47 @@ test('motor diario: el dia de salida cuenta por su fichaje y la licencia gana so
   assert.equal((await diario('2026-05-07')).fila.status, 'Excused');
 });
 
+async function ponerCorte(hora) {
+  const res = await fetch(`${BASE_URL}/config/campana-cutoff?tenantId=${TENANT_A}`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ campanaArrivalCutoffTime: hora }),
+  });
+  assert.equal(res.status, 200);
+}
+
+test('dia de regreso: si vuelve a la hora de corte o despues, cuenta como campaña y no como llegada tarde', async () => {
+  // El regreso de este test es a las 07:00:03. Con el corte en 06:00, volvio
+  // "despues del corte": ese dia cuenta como campaña (caso OLGUIN 11/09, que
+  // volvio a las 20:39 y salia "Tarde").
+  await ponerModo('trabajado');
+  await ponerCorte('06:00');
+  try {
+    const { row, dia } = await detalle();
+    assert.equal(dia(HASTA).status, 'Campaign');
+    assert.equal(dia(HASTA).campaignMoment, 'regreso');
+    assert.equal(dia(HASTA).firstCheckin, '07:00');
+    assert.equal(row.campaignDays, 4, '3 dias del medio + el regreso');
+    assert.equal(row.daysWorked, 5, 'salida fichada + 3 del medio + regreso');
+    assert.equal(row.late, 0);
+
+    const { fila } = await diario(HASTA);
+    assert.equal(fila.status, 'Campaign');
+    assert.equal(fila.campaignMoment, 'regreso');
+  } finally {
+    await ponerCorte('09:00');
+  }
+});
+
+test('dia de regreso: si vuelve antes de la hora de corte, es un dia normal de trabajo', async () => {
+  // Corte 09:00 y regreso 07:00:03: llego a tiempo para trabajar.
+  await ponerModo('trabajado');
+  const { dia } = await detalle();
+  assert.notEqual(dia(HASTA).status, 'Campaign');
+  assert.equal(dia(HASTA).campaignMoment, undefined);
+  assert.notEqual((await diario(HASTA)).fila.status, 'Campaign');
+});
+
 test('motor diario, modo excusado: suma a excusados', async () => {
   await ponerModo('excusado');
   const { fila, summary } = await diario('2026-05-06');

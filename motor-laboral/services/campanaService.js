@@ -140,23 +140,49 @@ async function fetchCampanaPresentismoModo(db, tenantId) {
   return CAMPANA_PRESENTISMO_MODOS.includes(value) ? value : 'ignorar';
 }
 
-// Para el motor diario: que empleados estan "adentro" de una campaña en
-// `date` (mismo criterio que /attendance-range: ni el dia de salida ni el de
-// regreso, ver diasInterioresDeCampana). Devuelve null si no hay nada que
-// interpretar -- modo 'ignorar', o vista cruzada de superadmin (tenantId
-// null: no hay UNA configuracion de empresa que aplicar). En ese caso no se
-// hace ninguna consulta de fichajes.
-async function empleadosEnCampanaElDia(db, tenantId, date) {
+// Hora de corte del dia de regreso (Salidas > Campaña). La misma para la
+// columna "Dias" del reporte y para Presentismo.
+async function fetchCampanaCutoff(db, tenantId) {
+  const value = await getAppSetting('campanaArrivalCutoffTime', tenantId, db);
+  return value || '09:00';
+}
+
+// Que dias de [from, to] le toca interpretar a Presentismo, para cada
+// empleado. Devuelve null si no hay nada que interpretar -- modo 'ignorar', o
+// vista cruzada de superadmin (tenantId null: no hay UNA configuracion de
+// empresa que aplicar). En ese caso no se hace ninguna consulta de fichajes.
+//
+//   interiores: `${legajo}|${fecha}` -- los dias entre la salida y el regreso
+//               (diasInterioresDeCampana: sin los extremos).
+//   regresos:   `${legajo}|${fecha}` -- dias de regreso que cuentan como
+//               campaña porque volvio a la hora de corte o despues
+//               (regresoCuentaComoCampana). Si volvio antes, no esta aca y el
+//               dia se evalua normal.
+async function diasDeCampana(db, tenantId, from, to) {
   if (tenantId == null) return null;
   const modo = await fetchCampanaPresentismoModo(db, tenantId);
   if (modo === 'ignorar') return null;
-  const empleados = new Set();
-  for (const ev of await detectarCampanas(db, tenantId, date, date)) {
-    if (movementsCalc.diasInterioresDeCampana(ev.timeOut, ev.timeIn, date, date).length > 0) {
-      empleados.add(String(ev.employeeId));
+  const cutoff = await fetchCampanaCutoff(db, tenantId);
+  const interiores = new Set();
+  const regresos = new Set();
+  for (const ev of await detectarCampanas(db, tenantId, from, to)) {
+    movementsCalc.diasInterioresDeCampana(ev.timeOut, ev.timeIn, from, to)
+      .forEach(d => interiores.add(`${ev.employeeId}|${d}`));
+    if (movementsCalc.regresoCuentaComoCampana(ev.timeIn, cutoff)) {
+      const d = formatLocalDate(ev.timeIn);
+      if (d >= from && d <= to) regresos.add(`${ev.employeeId}|${d}`);
     }
   }
-  return { modo, empleados };
+  return { modo, cutoff, interiores, regresos };
+}
+
+// Para el motor diario: lo mismo que diasDeCampana, para un solo dia y por
+// legajo. null = nada que interpretar.
+async function empleadosEnCampanaElDia(db, tenantId, date) {
+  const dias = await diasDeCampana(db, tenantId, date, date);
+  if (!dias) return null;
+  const legajos = (set) => new Set([...set].map(k => k.split('|')[0]));
+  return { modo: dias.modo, empleados: legajos(dias.interiores), regresos: legajos(dias.regresos) };
 }
 
 module.exports = {
@@ -165,6 +191,8 @@ module.exports = {
   fetchMarkerMaxGapMs,
   detectarCampanas,
   fetchCampanaPresentismoModo,
+  fetchCampanaCutoff,
+  diasDeCampana,
   empleadosEnCampanaElDia,
   CAMPANA_PRESENTISMO_MODOS,
 };

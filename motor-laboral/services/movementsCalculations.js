@@ -424,6 +424,18 @@ function computeCampanaDias(timeOut, timeIn, cutoffTimeStr) {
   return Math.max(dias, 0);
 }
 
+// ¿El dia de regreso cuenta como dia de campaña? Misma regla que ya usa
+// computeCampanaDias para la columna "Dias" del reporte, asi el reporte y
+// Presentismo no pueden contar distinto: si vuelve a la hora de corte o
+// despues, ese dia lo paso viajando/en el campo; si vuelve antes, llego a
+// tiempo para trabajar y el dia se evalua normal (su fichaje de regreso es
+// su entrada). La hora de corte la configura cada empresa
+// (campanaArrivalCutoffTime, default 09:00).
+function regresoCuentaComoCampana(timeIn, cutoffTimeStr) {
+  if (!timeIn) return false;
+  return timeIn.getHours() * 60 + timeIn.getMinutes() >= timeToMinutes(cutoffTimeStr);
+}
+
 // Dias "de adentro" de una campaña, los que Presentismo tiene que
 // interpretar: los que caen ESTRICTAMENTE entre el dia de salida y el de
 // regreso. Los dos extremos quedan afuera a proposito: esos dias la persona
@@ -497,6 +509,7 @@ module.exports = {
   openOrphanReturnsAtScheduleEntrance,
   computeCampanaDias,
   diasInterioresDeCampana,
+  regresoCuentaComoCampana,
   isFirstRealCheckinOfDay,
   filterEventsOpenedByFirstCheckinOfDay
 };

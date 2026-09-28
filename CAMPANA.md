@@ -85,9 +85,19 @@ Reglas de interpretación (todas probadas en `test/attendance-range-campana.test
   el día de la semana. Un sábado de campaña de alguien que trabaja de lunes
   a viernes sigue siendo "Sin jornada": solo se pinta del color de la
   campaña. Con un patrón que incluya el sábado, contaría.
-- **El día de salida y el de regreso** cuentan por sus fichajes. Se toman
-  solo los días *estrictamente entre* esos dos (`diasInterioresDeCampana`),
-  así nada se cuenta dos veces.
+- **El día de salida** cuenta por su fichaje: ese día la persona se
+  presentó a su horario. Los días del medio son los *estrictamente entre*
+  la salida y el regreso (`diasInterioresDeCampana`), así nada se cuenta
+  dos veces.
+- **El día de regreso depende de la hora de corte** (Salidas > Campaña,
+  `campanaArrivalCutoffTime`, default 09:00). Es el mismo ajuste que ya
+  usaba la columna "Días" del reporte, así el reporte y Presentismo cuentan
+  con la misma regla (`regresoCuentaComoCampana`):
+  - vuelve **a la hora de corte o después** (OLGUIN, 11/09/2026, 20:39): el
+    día lo pasó viajando. Cuenta como campaña según el modo y **no se evalúa
+    tardanza**. Antes salía "Tarde" por 13 horas;
+  - vuelve **antes** (por ejemplo 08:00): llegó a tiempo para trabajar. Es un
+    día normal y su fichaje de regreso es su entrada.
 - **Una campaña abierta** (sin regreso todavía) cuenta hasta la fecha
   consultada. No se inventa un regreso.
 - **Una licencia o excepción cargada a mano gana** sobre la campaña
@@ -114,8 +124,12 @@ para viáticos) y Presentismo mide asistencia a la jornada.
   "este marcador era de otra persona", dejando registrado quién lo corrigió y
   cuándo. Se necesita una tabla de correcciones con auditoría, igual que
   `manual_entry_log`.
-- **Motor diario** (`/attendance/:date` y el motor de reglas): todavía no
-  conocen las campañas. Hoy muestra "Ausente" a quien está en el campo.
+- **Motor Legacy** (`/attendance/:date`, solo para comparar): queda
+  congelado a propósito. El motor diario (`/api/labor-engine/attendance/:date`,
+  el de la vista diaria) **sí** conoce las campañas desde `a150523`: usa
+  `campanaService`, la misma detección que la vista mensual.
+- **Tilde por empleado "Afectado a campaña / viajes"**, para que un marcador
+  mal asignado no convierta en campaña las ausencias de alguien de oficina.
 - **Ciclos que no siguen la semana** (10x4, 14x7), comisiones y otros
   regímenes. El modelo de "período con tipo" los admite, pero no se
   implementan hasta que alguna empresa los necesite.
