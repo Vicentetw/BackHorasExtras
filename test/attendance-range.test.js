@@ -42,7 +42,15 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   // que no hay ninguno con employee_id/nombre sospechoso) mientras se
   // probaba el formulario de Empleados recien arreglado esta sesion. No
   // afecta el resto de los campos de Perrotta ni la suma total.
-  assert.equal(json.data.length, 477, 'cantidad de empleados en el reporte');
+  // Actualizado 2026-09-28: estos valores fallaban desde el 18/09 sin que
+  // hubiera ningun bug. Ese dia se reimportaron los fichajes de junio de la
+  // base local (todos tienen created_at 2026-09-18 02:17:35) y la ventana de
+  // marcadores paso a 6 s. Verificado con git bisect: el codigo del 17/09
+  // (22c56e3, el que fijo los valores anteriores) da HOY exactamente lo
+  // mismo que el codigo actual sobre estos datos. La unica diferencia de
+  // logica en el medio es 7a6678c (un marcador solo lo consume un fichaje
+  // del mismo reloj), que bajo la suma de HE de 2771.00 a 2763.46.
+  assert.equal(json.data.length, 478, 'cantidad de empleados en el reporte');
 
   let sumOvertime = 0;
   let withOvertime = 0;
@@ -84,8 +92,11 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   // junio tambien tenia casos asi, no solo el de septiembre que lo
   // destapo. withOvertime sigue en 74 -- ningun empleado quedo en 0 HE
   // solo por esto.
-  assert.equal(sumOvertime.toFixed(2), '1730.31', 'suma total de horas extras del mes');
-  assert.equal(withOvertime, 74, 'cantidad de empleados con horas extras > 0');
+  //
+  // Actualizado 2026-09-28: 1730.31 -> 2763.46 y 74 -> 129. Ver el
+  // comentario al principio de este test (datos reimportados el 18/09).
+  assert.equal(sumOvertime.toFixed(2), '2763.46', 'suma total de horas extras del mes');
+  assert.equal(withOvertime, 129, 'cantidad de empleados con horas extras > 0');
 });
 
 test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conocidos', async (t) => {
@@ -103,7 +114,10 @@ test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conoci
   // configurado en vez de "14:00" fijo) -- antes '40.10'.
   // Actualizado 2026-09-17: 40.30 -> 40.23 -- descarte de HE fantasma por
   // marcador atribuido a su primer fichaje del dia (ver comentario arriba).
-  assert.equal(perrotta.overtimeHours, '40.23');
+  // Actualizado 2026-09-28: 40.23 -> 40.30. NO es que se deshizo el
+  // descarte de HE fantasma del 17/09: el codigo de ese dia tambien da 40.30
+  // con los datos reimportados el 18/09 (ver el primer test de este archivo).
+  assert.equal(perrotta.overtimeHours, '40.30');
   assert.equal(perrotta.personalLeaveLimitHours, '4.00');
 });
 

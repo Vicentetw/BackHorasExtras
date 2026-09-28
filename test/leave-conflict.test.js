@@ -9,7 +9,13 @@
 //   - el dia con fichaje se evalua como siempre (presente/tarde), NO "Excusado";
 //   - lleva leaveConflict con el motivo de la licencia;
 //   - un dia de licencia SIN fichaje sigue "Excusado", sin aviso;
-//   - alguien sin licencia que ficha no lleva aviso (nada cambia).
+//   - alguien sin licencia que ficha no lleva aviso (nada cambia);
+//   - una EXCEPCION de dia completo (userexclusions, no una licencia):
+//     sin fichaje cuenta como Excusado; con fichaje manda el fichaje, y no
+//     hay aviso (una excepcion con fichaje es normal: justifica una
+//     tardanza). Antes esto solo lo cubria un test de caracterizacion
+//     sobre datos reales (attendance-daily, 29/06 de Perrotta), que dejo de
+//     probarlo cuando esos datos cambiaron.
 //
 // Requiere el backend local corriendo contra la misma base.
 // Tenant descartable propio (999936), NUNCA AVP.
@@ -24,6 +30,7 @@ const TEST_UID = 'test-leave-conflict';
 const TENANT = 999936;
 const DE_VACACIONES = 8001;
 const SIN_LICENCIA = 8002;
+const CON_EXCEPCION = 8003;
 const DIA_QUE_FICHO = '2026-05-13'; // miercoles, en medio de sus vacaciones
 const DIA_QUE_NO_FICHO = '2026-05-12';
 
@@ -52,7 +59,7 @@ before(async () => {
   );
   const [et] = await db.query(`INSERT INTO event_types (tenant_id, code, descripcion, active) VALUES (?, 'TEST_VAC', 'Vacaciones (test)', 1)`, [TENANT]);
 
-  for (const legajo of [DE_VACACIONES, SIN_LICENCIA]) {
+  for (const legajo of [DE_VACACIONES, SIN_LICENCIA, CON_EXCEPCION]) {
     const [emp] = await db.query(
       `INSERT INTO employees (employee_id, nombre, tenant_id, fecha_alta, exclude_from_report) VALUES (?, ?, ?, '2020-01-01', 0)`,
       [legajo, `Empleado ${legajo}`, TENANT]
@@ -70,12 +77,21 @@ before(async () => {
         [emp.insertId, et.insertId]
       );
     }
+    if (legajo === CON_EXCEPCION) {
+      for (const dia of [DIA_QUE_NO_FICHO, DIA_QUE_FICHO]) {
+        await db.query(
+          `INSERT INTO userexclusions (userId, tenant_id, excDate, reason, type) VALUES (?, ?, ?, 'articulo 55 (test)', 'FULL_DAY')`,
+          [userId, TENANT, dia]
+        );
+      }
+    }
   }
 });
 
 after(async () => {
   await db.query('DELETE ee FROM employee_events ee JOIN employees e ON e.id = ee.employee_id WHERE e.tenant_id = ?', [TENANT]);
   await db.query('DELETE FROM event_types WHERE tenant_id = ?', [TENANT]);
+  await db.query('DELETE FROM userexclusions WHERE tenant_id = ?', [TENANT]);
   await db.query('DELETE FROM Checkins WHERE tenant_id = ?', [TENANT]);
   await db.query('DELETE FROM user_employee_map WHERE tenant_id = ?', [TENANT]);
   await db.query('DELETE FROM users WHERE tenant_id = ?', [TENANT]);
@@ -117,4 +133,16 @@ test('vista mensual: sin licencia -> 0 dias a revisar', async () => {
   const { row, dia } = await mensual(SIN_LICENCIA);
   assert.equal(row.leaveConflictDays, 0);
   assert.equal(dia(DIA_QUE_FICHO).leaveConflict, null);
+});
+
+test('vista diaria: excepcion de dia completo y sin fichar -> Excusado', async () => {
+  const { fila } = await diario(DIA_QUE_NO_FICHO, CON_EXCEPCION);
+  assert.equal(fila.status, 'Excused');
+  assert.equal(fila.exclusion.type, 'FULL_DAY');
+});
+
+test('vista diaria: excepcion de dia completo pero fichó -> manda el fichaje, sin aviso', async () => {
+  const { fila } = await diario(DIA_QUE_FICHO, CON_EXCEPCION);
+  assert.ok(['OnTime', 'Late'].includes(fila.status), fila.status);
+  assert.equal(fila.leaveConflict, null, 'una excepcion con fichaje es normal: no se avisa');
 });

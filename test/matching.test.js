@@ -45,6 +45,9 @@ test('/api/matching/diagnosis/report: usuarios con fichajes reales aparecen prim
   // conteo no haya bajado, en vez de un numero exacto que se desactualiza
   // solo con el paso del tiempo.
   const top = unmatchedUsers[0];
-  assert.equal(top.Badgenumber, '2837', 'el usuario con mas fichajes reales sin vincular');
+  // Actualizado 2026-09-28: '2837' -> '2454'. El 2837 (CARRO) ya esta
+  // vinculado a un empleado, asi que salio de esta lista, que es justo lo
+  // que se espera cuando alguien resuelve un vinculo pendiente.
+  assert.equal(top.Badgenumber, '2454', 'el usuario con mas fichajes reales sin vincular');
   assert.ok(Number(top.checkinCount) >= 15, 'el conteo de fichajes de este usuario no deberia bajar con el tiempo');
 });
