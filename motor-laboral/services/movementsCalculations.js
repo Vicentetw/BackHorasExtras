@@ -58,6 +58,61 @@ const DEFAULT_MAX_MARKER_GAP_MS = 30 * 1000;
 const DEFAULT_OWN_CHECKIN_BOUNCE_MS = 20 * 1000;
 
 // ============================================================================
+// Rebote refinado (opcion `reboteRefinado`, apagada por defecto)
+// ============================================================================
+//
+// POR QUE
+// -------
+// La regla de rebote de arriba trata cualquier segunda lectura de la misma
+// persona dentro de 20 s como "la misma accion", sin mirar que paso en el
+// medio. Medido en produccion (AVP, enero-septiembre 2026): de 582 salidas a
+// Campaña, 79 se perdian por esa regla, en dos formas:
+//
+//   A) marcador -> lectura 1 -> lectura 2 (3 s despues)
+//      La lectura 1 abre la campaña y la lectura 2, que es el rebote del
+//      lector, la CIERRA en el acto: quedaba una "campaña" de 3 segundos.
+//      Caso real: legajo 9448, 05/01/2026 07:05:31 / :34 / :37.
+//
+//   B) lectura 1 -> marcador -> lectura 2 (OLGUIN, legajo 2555)
+//      07:58:13 ficha, 07:58:19 aprieta el 8, 07:58:22 vuelve a fichar. La
+//      lectura 2 se tomaba como rebote y NO consumia el marcador: la campaña
+//      nunca se abria.
+//
+// En los 79 casos la persona tardo DIAS en volver a fichar (58 a 800 horas),
+// o sea que las campañas eran reales.
+//
+// EL PRINCIPIO
+// ------------
+// Dos lecturas de la misma persona dentro de la ventana de rebote son UNA
+// accion, salvo que entre las dos se haya apretado un marcador y ese
+// marcador este al menos tan cerca de la segunda lectura como de la primera.
+// Eso es una accion nueva y deliberada: apretar el marcador y poner el dedo.
+//
+//   - Forma A: la lectura 2 no tiene marcador en el medio -> es rebote, y un
+//     rebote NO cierra lo que la lectura 1 acaba de abrir.
+//   - Forma B: el marcador esta a 6 s de la lectura 1 y a 3 s de la 2 -> es
+//     de la lectura 2, que lo consume.
+//
+// El caso SANTIBAÑEZ (18/08/2026) sigue protegido: 13:37:29 ficha, 13:37:34
+// marcador 8, 13:37:41 ficha. El marcador esta a 5 s de la primera y a 7 s
+// de la segunda -> mas cerca de la primera -> la segunda sigue siendo rebote.
+// (Con la ventana de 6 s de AVP, ademas, el marcador ya habria vencido.)
+//
+// En los 50 casos visibles del diagnostico, marcador -> lectura 2 fue de 3 a
+// 6 s y siempre <= lectura 1 -> marcador. Ver DIAGNOSTICO_CAMPANA_REBOTE_DETALLE.sql.
+//
+// POR QUE ES UNA OPCION Y NO EL COMPORTAMIENTO DE SIEMPRE
+// -------------------------------------------------------
+// El mismo motor calcula horas extra y salidas particulares. Aplicarlo ahi
+// cambiaria numeros de liquidacion ya calculados, y eso se decide midiendo
+// primero, no de rebote. Hoy solo lo pide la deteccion de Campaña.
+function marcadorEsDeEstaLectura(marcador, lecturaAnterior, ahora) {
+  if (!marcador || lecturaAnterior == null) return false;
+  if (marcador.markedAt <= lecturaAnterior) return false;
+  return (ahora - marcador.markedAt) <= (marcador.markedAt - lecturaAnterior);
+}
+
+// ============================================================================
 // Un marcador solo lo puede consumir un fichaje del MISMO reloj
 // ============================================================================
 //
@@ -133,6 +188,7 @@ function marcadorDelReloj(marcadoresPorReloj, machineIp) {
 function detectMovements(checkins, markerMap, options = {}) {
   const maxMarkerGapMs = options.maxMarkerGapMs ?? DEFAULT_MAX_MARKER_GAP_MS;
   const ownCheckinBounceMs = options.ownCheckinBounceMs ?? DEFAULT_OWN_CHECKIN_BOUNCE_MS;
+  const reboteRefinado = options.reboteRefinado === true;
   // TODOS los marcadores de la empresa, no solo los de la categoria que se
   // esta detectando en esta pasada. Hace falta para que "gana el ultimo"
   // funcione entre categorias distintas -- ver el comentario en el loop.
@@ -210,7 +266,17 @@ function detectMovements(checkins, markerMap, options = {}) {
     const pendiente = marcadorDelReloj(marcadoresPorReloj, row.machineIp ?? null);
     const marcadorAplicable = pendiente ? pendiente.marcador : null;
 
+    const previousOwnCheckin = lastRealCheckinByEmployeeId.get(row.employeeId);
+    const isOwnBounce = previousOwnCheckin != null && (row.checktime - previousOwnCheckin) <= ownCheckinBounceMs;
+    const marcadorNuevoEnElMedio = reboteRefinado && marcadorEsDeEstaLectura(marcadorAplicable, previousOwnCheckin, row.checktime);
+
     const open = openEvents.get(row.employeeId);
+    if (open && reboteRefinado && isOwnBounce && !marcadorNuevoEnElMedio) {
+      // Forma A (ver "Rebote refinado"): el rebote de la lectura que acaba
+      // de abrir la salida no es un regreso.
+      lastRealCheckinByEmployeeId.set(row.employeeId, row.checktime);
+      continue;
+    }
     if (open) {
       // Este empleado ya tenia una salida abierta: este fichaje la cierra,
       // sin importar si tambien vino precedido de un marcador de regreso.
@@ -238,14 +304,13 @@ function detectMovements(checkins, markerMap, options = {}) {
       continue;
     }
 
-    const previousOwnCheckin = lastRealCheckinByEmployeeId.get(row.employeeId);
-    const isOwnBounce = previousOwnCheckin != null && (row.checktime - previousOwnCheckin) <= ownCheckinBounceMs;
     lastRealCheckinByEmployeeId.set(row.employeeId, row.checktime);
 
-    if (isOwnBounce) {
+    if (isOwnBounce && !marcadorNuevoEnElMedio) {
       // No consume el marcador activo -- si en el medio fichó otra
       // persona (el caso real), el marcador le sigue llegando a ella en
-      // vez de a este rebote.
+      // vez de a este rebote. Con reboteRefinado, un marcador apretado
+      // entre las dos lecturas y mas cerca de esta SI es suyo (forma B).
       continue;
     }
 
@@ -359,6 +424,30 @@ function computeCampanaDias(timeOut, timeIn, cutoffTimeStr) {
   return Math.max(dias, 0);
 }
 
+// Dias "de adentro" de una campaña, los que Presentismo tiene que
+// interpretar: los que caen ESTRICTAMENTE entre el dia de salida y el de
+// regreso. Los dos extremos quedan afuera a proposito: esos dias la persona
+// ficho, asi que ya cuentan por sus fichajes y sumarlos aca los contaria dos
+// veces. Una campaña abierta (timeIn null) llega hasta `hasta` -- no se
+// inventa ninguna fecha de regreso.
+//
+// Devuelve fechas 'YYYY-MM-DD' (hora local), recortadas a [desde, hasta].
+// Que un dia sea habil, sabado o feriado NO se decide aca: eso lo sigue
+// decidiendo la plantilla del empleado en /attendance-range.
+function diasInterioresDeCampana(timeOut, timeIn, desde, hasta) {
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const dias = [];
+  const d = new Date(timeOut.getFullYear(), timeOut.getMonth(), timeOut.getDate() + 1);
+  const ultimoExclusivo = timeIn ? fmt(timeIn) : null;
+  for (; ; d.setDate(d.getDate() + 1)) {
+    const s = fmt(d);
+    if (s > hasta) break;
+    if (ultimoExclusivo !== null && s >= ultimoExclusivo) break;
+    if (s >= desde) dias.push(s);
+  }
+  return dias;
+}
+
 // Caso real: AVILA Natalia, legajo 9006, abril 2026 -- una llegada tarde
 // (07:23) quedó marcada como "Salida Particular" de 6h29m/6h37m que nunca
 // pasó. Alguien más fichó el marcador de Salida (badge 6) justo antes de
@@ -407,6 +496,7 @@ module.exports = {
   closeOpenEventsAtScheduleExit,
   openOrphanReturnsAtScheduleEntrance,
   computeCampanaDias,
+  diasInterioresDeCampana,
   isFirstRealCheckinOfDay,
   filterEventsOpenedByFirstCheckinOfDay
 };

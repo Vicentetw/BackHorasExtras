@@ -1,0 +1,130 @@
+# Campaña: cómo la detecta el sistema y cómo la cuenta Presentismo
+
+Última actualización: 2026-09-28.
+
+## El problema que resolvió esto
+
+OLGUIN (AVP, legajo 2555) se fue al campo el 03/08/2026 y volvió el 15/08.
+Presentismo lo mostraba **Ausente los 9 días hábiles del medio**. Había dos
+fallas encadenadas:
+
+1. **La campaña ni siquiera se detectaba.** La regla anti-rebote del motor de
+   marcadores descartaba su segunda lectura (ver más abajo). Medido en
+   producción: **79 de 582 salidas a campaña** de 2026 se perdían así.
+2. **Presentismo nunca miraba las campañas.** Solo el reporte de Campaña
+   (Salidas > Campaña) las conocía. Un día hábil sin fichaje ni licencia
+   terminaba siempre en "Ausente".
+
+## Las dos capas
+
+La idea central es **separar el hecho de su interpretación**:
+
+| Capa | Qué responde | Dónde vive |
+|---|---|---|
+| **Detección** | "Esta persona salió a campaña el X y volvió el Y" | `detectMovements` (motor de marcadores) + `detectarCampanas` en `horasdedica.js` |
+| **Interpretación** | "¿Qué significa ese período para el presentismo?" | `/attendance-range`, según `campanaPresentismoModo` de cada empresa |
+
+`detectarCampanas` es **la única fuente** de campañas: la usan el reporte y
+Presentismo, así que ya no pueden contradecirse.
+
+## Detección
+
+Una campaña se arma con los marcadores que la empresa configuró como
+`CAMPANA` en la pantalla Marcadores (en AVP: 8 = sale, 7 = vuelve). El
+marcador no dice de quién es: se le atribuye al próximo fichaje real **del
+mismo reloj** dentro de la ventana (`markerMaxGapSeconds`, 6 s en AVP).
+
+Una empresa **sin marcadores CAMPANA** no tiene campañas y `detectarCampanas`
+vuelve sin consultar fichajes: no le cuesta nada.
+
+### La regla de rebote refinada
+
+Dos lecturas de la misma persona separadas por 20 s o menos se toman como
+una sola acción (rebote del lector). El problema es que la regla original no
+miraba qué había pasado **entre** esas dos lecturas. Los 79 casos perdidos
+tenían dos formas:
+
+- **Forma A: marcador, lectura, lectura.** La primera lectura abre la campaña
+  y la segunda, 3 s después, la **cerraba**: una campaña de 3 segundos.
+- **Forma B: lectura, marcador, lectura** (OLGUIN). La segunda lectura se
+  tomaba como rebote y **no se quedaba con el marcador**: no se abría nada.
+
+La regla nueva: *dos lecturas cercanas son una sola acción, salvo que entre
+ellas se haya apretado un marcador que esté al menos tan cerca de la segunda
+como de la primera*. En ese caso es una acción nueva (apretar el marcador y
+poner el dedo).
+
+- En la forma A no hay marcador en el medio: el rebote se ignora y no cierra nada.
+- En la forma B el marcador está a 6 s de la primera lectura y a 3 s de la
+  segunda, así que es de la segunda.
+- **SANTIBAÑEZ (18/08/2026)** sigue protegido: su marcador está a 5 s de la
+  primera lectura y a 7 s de la segunda, más cerca de la primera.
+
+La validación con datos reales: en los 79 casos la persona tardó **días** en
+volver a fichar (entre 58 y 800 horas), que es lo que se espera de alguien
+que se fue al campo.
+
+**Se aplica solo a la detección de campañas** (`reboteRefinado: true`). Las
+horas extra y las salidas particulares usan el mismo motor, y ahí cambiaría
+números de liquidación ya calculados. Extenderlo a esas categorías es una
+decisión aparte, que hay que tomar después de medir su impacto.
+
+## Interpretación en Presentismo
+
+Cada empresa elige en **Salidas > Campaña** (`/config/campana-presentismo-modo`):
+
+| Modo | Días hábiles en campaña sin fichar |
+|---|---|
+| `ignorar` (**default**) | "Ausente", como siempre. Cero cambios. |
+| `trabajado` | Suman a "Días trab." y se muestran "⛺ En campaña" |
+| `excusado` | Suman a "Excusado" y se muestran "⛺ En campaña" |
+
+Reglas de interpretación (todas probadas en `test/attendance-range-campana.test.js`):
+
+- **Qué días son hábiles lo sigue decidiendo la plantilla del empleado**, no
+  el día de la semana. Un sábado de campaña de alguien que trabaja de lunes
+  a viernes sigue siendo "Sin jornada": solo se pinta del color de la
+  campaña. Con un patrón que incluya el sábado, contaría.
+- **El día de salida y el de regreso** cuentan por sus fichajes. Se toman
+  solo los días *estrictamente entre* esos dos (`diasInterioresDeCampana`),
+  así nada se cuenta dos veces.
+- **Una campaña abierta** (sin regreso todavía) cuenta hasta la fecha
+  consultada. No se inventa un regreso.
+- **Una licencia o excepción cargada a mano gana** sobre la campaña
+  detectada, porque es una decisión humana explícita. Si alguna empresa
+  necesita el orden inverso, esto tiene que pasar a ser configurable.
+- **No se inventan horas**: el día cuenta como trabajado o excusado, pero no
+  se le suman minutos trabajados.
+
+### Por qué el reporte y Presentismo cuentan distinto
+
+El reporte de Campaña cuenta **días corridos** (`computeCampanaDias`: del
+03/08 al 15/08 son 13). Presentismo cuenta **días hábiles** según la
+plantilla (en el mismo período, 9). No es una inconsistencia: miden cosas
+distintas. El reporte mide cuánto tiempo estuvo afuera (sirve, por ejemplo,
+para viáticos) y Presentismo mide asistencia a la jornada.
+
+## Qué NO hace todavía (extensiones previstas)
+
+- **Carga manual de una campaña**, para quien se olvidó el marcador. El
+  camino previsto es usar el mismo mecanismo de las licencias
+  (`employee_events` con un tipo de novedad), con un origen (marcador /
+  manual) para evitar duplicados.
+- **Corregir a mano la asignación de un marcador** (pedido del 2026-09-28):
+  "este marcador era de otra persona", dejando registrado quién lo corrigió y
+  cuándo. Se necesita una tabla de correcciones con auditoría, igual que
+  `manual_entry_log`.
+- **Motor diario** (`/attendance/:date` y el motor de reglas): todavía no
+  conocen las campañas. Hoy muestra "Ausente" a quien está en el campo.
+- **Ciclos que no siguen la semana** (10x4, 14x7), comisiones y otros
+  regímenes. El modelo de "período con tipo" los admite, pero no se
+  implementan hasta que alguna empresa los necesite.
+
+## Diagnósticos
+
+- `DIAGNOSTICO_OLGUIN_MARCADORES.sql`: los marcadores que hubo antes de cada
+  fichaje de una persona.
+- `DIAGNOSTICO_CAMPANA_REBOTE.sql`: cuántas salidas a campaña se perdían por
+  mes.
+- `DIAGNOSTICO_CAMPANA_REBOTE_DETALLE.sql`: los casos perdidos uno por uno,
+  con los datos que definieron la regla nueva.

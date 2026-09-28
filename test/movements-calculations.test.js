@@ -7,6 +7,7 @@ const {
   closeOpenEventsAtScheduleExit,
   openOrphanReturnsAtScheduleEntrance,
   computeCampanaDias,
+  diasInterioresDeCampana,
   isFirstRealCheckinOfDay,
   filterEventsOpenedByFirstCheckinOfDay
 } = require('../motor-laboral/services/movementsCalculations');
@@ -189,6 +190,136 @@ test('detectMovements: dos lecturas propias mas alla de la ventana de rebote SI 
 
   assert.equal(openEvents.size, 1);
   assert.deepEqual(openEvents.get('2446'), { category: 'CAMPANA', timeOut: dt2('13:37:25'), salidaMarkerUserId: 8 });
+});
+
+// ============================================================================
+// Rebote refinado (opcion reboteRefinado) -- ver el comentario en
+// movementsCalculations.js. Casos reales de AVP, medidos con
+// DIAGNOSTICO_CAMPANA_REBOTE_DETALLE.sql (79 de 582 salidas a campaña perdidas).
+// ============================================================================
+
+const CAMPANA_MARKERS = {
+  7: { category: 'CAMPANA', direction: 'REGRESO' },
+  8: { category: 'CAMPANA', direction: 'SALIDA' },
+};
+const IP = '172.155.0.33';
+const lect = (iso, userId, employeeId) => ({ checktime: new Date(iso), userId, employeeId, machineIp: IP });
+
+// OLGUIN, legajo 2555 (USERID 159), agosto 2026, tal cual esta en Checkins.
+const OLGUIN_AGOSTO = [
+  lect('2026-08-01T19:23:03', 7, null), lect('2026-08-01T19:23:06', 159, '2555'),
+  lect('2026-08-03T07:58:13', 159, '2555'), lect('2026-08-03T07:58:19', 8, null), lect('2026-08-03T07:58:22', 159, '2555'),
+  lect('2026-08-15T20:33:37', 7, null), lect('2026-08-15T20:33:40', 159, '2555'),
+  lect('2026-08-17T08:01:07', 159, '2555'), lect('2026-08-17T08:01:15', 8, null), lect('2026-08-17T08:01:19', 159, '2555'),
+  lect('2026-08-29T12:48:58', 7, null), lect('2026-08-29T12:49:01', 159, '2555'),
+  lect('2026-08-31T07:56:59', 159, '2555'), lect('2026-08-31T07:57:05', 8, null), lect('2026-08-31T07:57:07', 159, '2555'),
+];
+
+test('rebote refinado: sin la opcion, OLGUIN sigue sin campañas (el comportamiento de siempre no cambia)', () => {
+  const { closedEvents, openEvents } = detectMovements(OLGUIN_AGOSTO, CAMPANA_MARKERS, { maxMarkerGapMs: 6000 });
+  assert.equal(closedEvents.length, 0);
+  assert.equal(openEvents.size, 0);
+});
+
+test('rebote refinado: caso OLGUIN (lectura, marcador, lectura) -- detecta las dos campañas de agosto y la abierta del 31', () => {
+  const { closedEvents, openEvents } = detectMovements(OLGUIN_AGOSTO, CAMPANA_MARKERS, { maxMarkerGapMs: 6000, reboteRefinado: true });
+
+  assert.deepEqual(
+    closedEvents.map(e => [e.timeOut.getTime(), e.timeIn.getTime()]),
+    [
+      [new Date('2026-08-03T07:58:22').getTime(), new Date('2026-08-15T20:33:40').getTime()],
+      [new Date('2026-08-17T08:01:19').getTime(), new Date('2026-08-29T12:49:01').getTime()],
+    ]
+  );
+  assert.equal(closedEvents[0].salidaMarkerUserId, 8);
+  assert.equal(closedEvents[0].regresoMarkerUserId, 7);
+  assert.equal(openEvents.get('2555').timeOut.getTime(), new Date('2026-08-31T07:57:07').getTime());
+});
+
+test('rebote refinado: forma A (marcador, lectura, lectura) -- el rebote no cierra la campaña que acaba de abrirse', () => {
+  // Legajo 9448, 05/01/2026: 07:05:31 marcador 8, 07:05:34 y 07:05:37 lecturas.
+  // Volvio a fichar 107 horas despues. Sin la opcion quedaba una campaña de 3 s.
+  const checkins = [
+    lect('2026-01-05T07:05:31', 8, null),
+    lect('2026-01-05T07:05:34', 9448, '9448'),
+    lect('2026-01-05T07:05:37', 9448, '9448'),
+    lect('2026-01-09T18:10:00', 9448, '9448'),
+  ];
+
+  const antes = detectMovements(checkins, CAMPANA_MARKERS, { maxMarkerGapMs: 6000 });
+  assert.equal(antes.closedEvents[0].timeIn.getTime(), new Date('2026-01-05T07:05:37').getTime(), 'documenta el bug: se cerraba a los 3 s');
+
+  const { closedEvents } = detectMovements(checkins, CAMPANA_MARKERS, { maxMarkerGapMs: 6000, reboteRefinado: true });
+  assert.equal(closedEvents.length, 1);
+  assert.equal(closedEvents[0].timeOut.getTime(), new Date('2026-01-05T07:05:34').getTime());
+  assert.equal(closedEvents[0].timeIn.getTime(), new Date('2026-01-09T18:10:00').getTime());
+});
+
+test('rebote refinado: caso SANTIBAÑEZ sigue protegido aun con la ventana default de 30 s', () => {
+  // Datos reales (con reloj): 13:37:29 ficha, 13:37:34 marcador 8, 13:37:41
+  // ficha. El marcador esta a 5 s de la 1ra y a 7 s de la 2da: no es de la 2da.
+  const checkins = [
+    lect('2026-08-18T13:37:29', 2446, '2446'),
+    lect('2026-08-18T13:37:34', 8, null),
+    lect('2026-08-18T13:37:41', 2446, '2446'),
+    lect('2026-08-18T16:49:07', 2446, '2446'),
+  ];
+  const { closedEvents, openEvents, orphanReturns } = detectMovements(checkins, CAMPANA_MARKERS, { reboteRefinado: true });
+  assert.equal(closedEvents.length, 0);
+  assert.equal(openEvents.size, 0);
+  assert.equal(orphanReturns.length, 0);
+});
+
+test('rebote refinado: marcador a la misma distancia de las dos lecturas es de la segunda', () => {
+  // Legajo 9404, 11/05/2026: 07:38:48 ficha, 07:38:54 marcador, 07:39:00 ficha
+  // (6 s y 6 s). Volvio a fichar 778 horas despues.
+  const checkins = [
+    lect('2026-05-11T07:38:48', 9404, '9404'),
+    lect('2026-05-11T07:38:54', 8, null),
+    lect('2026-05-11T07:39:00', 9404, '9404'),
+  ];
+  const { openEvents } = detectMovements(checkins, CAMPANA_MARKERS, { maxMarkerGapMs: 6000, reboteRefinado: true });
+  assert.equal(openEvents.get('9404').timeOut.getTime(), new Date('2026-05-11T07:39:00').getTime());
+});
+
+test('rebote refinado: la doble lectura con un marcador nuevo en el medio sigue cerrando (mismo resultado que sin la opcion)', () => {
+  const checkins = [
+    { checktime: dt('14:34:00'), userId: 4, employeeId: null },
+    { checktime: dt('14:34:02'), userId: 2609, employeeId: '2609' },
+    { checktime: dt('14:34:06'), userId: 4, employeeId: null },
+    { checktime: dt('14:34:08'), userId: 2609, employeeId: '2609' },
+  ];
+  const markers = { 4: { category: 'OFICIAL', direction: 'SALIDA' } };
+  assert.deepEqual(
+    detectMovements(checkins, markers, { reboteRefinado: true }),
+    detectMovements(checkins, markers)
+  );
+});
+
+test('diasInterioresDeCampana: OLGUIN 03/08 -> 15/08 son del 04 al 14 (los extremos ya cuentan por sus fichajes)', () => {
+  const dias = diasInterioresDeCampana(new Date('2026-08-03T07:58:22'), new Date('2026-08-15T20:33:40'), '2026-08-01', '2026-08-31');
+  assert.equal(dias.length, 11);
+  assert.equal(dias[0], '2026-08-04');
+  assert.equal(dias[dias.length - 1], '2026-08-14');
+});
+
+test('diasInterioresDeCampana: campaña abierta llega hasta la fecha consultada, sin inventar un regreso', () => {
+  assert.deepEqual(
+    diasInterioresDeCampana(new Date('2026-08-31T07:57:07'), null, '2026-08-01', '2026-09-03'),
+    ['2026-09-01', '2026-09-02', '2026-09-03']
+  );
+});
+
+test('diasInterioresDeCampana: se recorta al rango pedido (campaña que empezo el mes anterior)', () => {
+  assert.deepEqual(
+    diasInterioresDeCampana(new Date('2026-07-20T08:00:00'), new Date('2026-08-03T19:00:00'), '2026-08-01', '2026-08-31'),
+    ['2026-08-01', '2026-08-02']
+  );
+});
+
+test('diasInterioresDeCampana: salida y regreso el mismo dia o al dia siguiente no dejan dias interiores', () => {
+  assert.deepEqual(diasInterioresDeCampana(new Date('2026-08-10T08:00:00'), new Date('2026-08-10T18:00:00'), '2026-08-01', '2026-08-31'), []);
+  assert.deepEqual(diasInterioresDeCampana(new Date('2026-08-10T08:00:00'), new Date('2026-08-11T09:00:00'), '2026-08-01', '2026-08-31'), []);
 });
 
 test('closeOpenEventsAtScheduleExit: cierra con el horario de salida resuelto', () => {

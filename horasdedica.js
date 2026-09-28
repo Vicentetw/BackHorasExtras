@@ -2823,7 +2823,7 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     // PASO 4B: Obtener licencias multi-día (vacaciones, enfermedad, etc.) vigentes ese día
     let leaveEvents = [];
     try {
-      leaveEvents = await employeeEventRepository.findByDate(date, db);
+      leaveEvents = await employeeEventRepository.findByDate(date, db, effectiveTenantId);
       console.log(`✓ Licencias vigentes: ${leaveEvents.length}`);
     } catch (e) {
       console.error(`⚠️ Error fetching employee events: ${e.message}`);
@@ -3365,7 +3365,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
     // Licencias multi-día (vacaciones, enfermedad, etc.) cargadas en employee_events:
     // se expanden día por día para que cualquier fecha dentro del rango de la licencia
     // cuente como excusada en vez de ausente, igual que una exclusión puntual.
-    const employeeEventRows = await employeeEventRepository.findByRange(from, formatLocalDate(effectiveEndDate), db);
+    const employeeEventRows = await employeeEventRepository.findByRange(from, formatLocalDate(effectiveEndDate), db, tenantId);
     const leaveEventMap = new Map();
     employeeEventRows.forEach(ev => {
       const evStart = ev.fecha_desde > from ? ev.fecha_desde : from;
@@ -3568,6 +3568,21 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       }
     }
 
+    // Dias "en campaña" (ver detectarCampanas y diasInterioresDeCampana).
+    // Solo se calcula si la empresa eligio como interpretarlos: con el modo
+    // 'ignorar' (el default) no se hace ni una consulta y el resultado es
+    // identico al de siempre. tenantId null es la vista cruzada de
+    // superadmin: ahi no hay UNA configuracion de empresa que aplicar.
+    const campanaModo = tenantId != null ? await fetchCampanaPresentismoModo(tenantId) : 'ignorar';
+    const campanaDayByEmployeeDate = new Set(); // `${employeeId}|${date}`
+    if (campanaModo !== 'ignorar') {
+      const hastaStr = formatLocalDate(effectiveEndDate);
+      for (const ev of await detectarCampanas(tenantId, from, hastaStr)) {
+        movementsCalc.diasInterioresDeCampana(ev.timeOut, ev.timeIn, from, hastaStr)
+          .forEach(date => campanaDayByEmployeeDate.add(`${ev.employeeId}|${date}`));
+      }
+    }
+
     const result = [];
 
     const overtimeSettings = await fetchOvertimeSettings(tenantId);
@@ -3607,6 +3622,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       let overtimeMinutes = 0;
       let personalLeaveMinutes = 0;
       let inactiveWarningDays = 0;
+      let campaignDays = 0;
       const days = detailEmployeeId ? [] : null;
       // Pedido real: un empleado inactivo (baja no cargada formalmente) no
       // debe contarse ni mostrarse como "ausente" solo por no fichar -- ver
@@ -3625,6 +3641,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         const holidayNonWorkApplies = matchingHolidays.some(h => isNonWorkHoliday(h));
         const holidayForcesWork = matchingHolidays.length > 0 && !holidayNonWorkApplies;
         const isWorkDay = matchingHolidays.length > 0 ? holidayForcesWork : schedule.isWorkDay == 1;
+        // Siempre false con el modo 'ignorar' (el Set queda vacio). Que el
+        // dia sea habil o no lo sigue decidiendo la plantilla de arriba: un
+        // sabado de campaña de alguien que trabaja lunes a viernes sigue
+        // siendo no laborable, solo se le agrega la marca para mostrarlo.
+        const enCampana = campanaDayByEmployeeDate.has(`${employeeId}|${date}`);
 
         if (!isWorkDay && !holidayNonWorkApplies) {
           // Dia libre normal segun el horario del empleado (fin de semana,
@@ -3655,6 +3676,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
               eventTypeCode: leaveEventNonWork ? (leaveEventNonWork.eventTypeCode || null) : undefined,
               eventTypeDescripcion: leaveEventNonWork ? (leaveEventNonWork.eventTypeDescripcion || null) : undefined,
               hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
+              inCampaign: enCampana || undefined,
             });
           }
           return;
@@ -3682,6 +3704,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
               totalCheckins: checks.length,
               overtimeManualMinutes: manualMinutesHoliday,
               hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
+              inCampaign: enCampana || undefined,
             });
           }
           return;
@@ -4069,6 +4092,27 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
               hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
             });
           }
+        } else if (enCampana) {
+          // Dia habil sin fichaje, dentro de una campaña. Va DESPUES de la
+          // licencia/excepcion a proposito: si alguien cargo una licencia a
+          // mano para este dia, esa decision humana gana sobre la deteccion
+          // automatica por marcador. Como cuenta lo decide la empresa
+          // (campanaPresentismoModo); la cantidad de horas no se inventa.
+          campaignDays++;
+          if (campanaModo === 'trabajado') daysWorked++;
+          else excused++;
+          const manualKeyCampaign = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesCampaign = manualKeyCampaign ? (manualMinutesByUserDate.get(manualKeyCampaign) || 0) : 0;
+          if (manualMinutesCampaign > 0) overtimeMinutes += manualMinutesCampaign;
+          if (days) {
+            days.push({
+              date,
+              status: 'Campaign',
+              campaignCountsAs: campanaModo,
+              overtimeManualMinutes: manualMinutesCampaign,
+              hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
+            });
+          }
         } else if (!employeeActivo) {
           // Inactivo y SIN fichaje -- no corresponde contarlo como ausente
           // (ya no trabaja acá, no es una ausencia real a revisar). No suma
@@ -4118,7 +4162,10 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         // Pedido real: empleado inactivo (baja no cargada) que igual fichó
         // en el período -- señal real a revisar, visible en el listado
         // general sin tener que abrir el detalle día por día de cada uno.
-        inactiveWarningDays
+        inactiveWarningDays,
+        // Dias habiles en campaña sin fichar. Ya estan sumados a daysWorked
+        // o a excused segun el modo; esto es para poder mostrarlos aparte.
+        campaignDays
       };
       if (days) {
         row.days = days;
@@ -4442,10 +4489,56 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
   }
 });
 
+// ============================================================================
+// Campañas de una empresa en un rango -- UNA sola fuente para todo el sistema
+// ============================================================================
+//
+// La usan el reporte de Campaña (/campana-range) y Presentismo
+// (/attendance-range). Antes la deteccion vivia solo dentro del reporte, y
+// Presentismo nunca se enteraba de las campañas: marcaba "Ausente" cada dia
+// que la persona estaba en el campo (OLGUIN, agosto 2026: 18 ausencias que
+// no eran). Con una sola funcion, los dos ven exactamente las mismas campañas.
+//
+// Devuelve las campañas que TOCAN el rango: las cerradas cuyo regreso cae en
+// o despues de `from`, y las que siguen abiertas. Una empresa sin marcadores
+// CAMPANA sale en la primera consulta sin tocar Checkins -- si no usa
+// campañas, esto no le cuesta nada.
+//
+// Usa `reboteRefinado` (ver movementsCalculations.js): sin eso se perdian 79
+// de 582 salidas a campaña reales en AVP.
+const CAMPANA_LOOKBACK_DAYS = 90;
+async function detectarCampanas(tenantId, from, to) {
+  const markerMap = await fetchMarkerMap('CAMPANA', tenantId);
+  if (Object.keys(markerMap).length === 0) return [];
+
+  // Una salida a campaña puede haber arrancado antes del "from" pedido --
+  // se busca hasta CAMPANA_LOOKBACK_DAYS atrás para no perder el
+  // emparejamiento con su regreso, que sí puede caer dentro del rango.
+  const [fy, fm, fd] = from.split('-').map(Number);
+  const lookbackFromStr = formatLocalDate(new Date(fy, fm - 1, fd - CAMPANA_LOOKBACK_DAYS));
+  const checkins = await fetchMovementCheckins(lookbackFromStr, nextDayStr(to), tenantId);
+  const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+  const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
+  const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, {
+    maxMarkerGapMs, todosLosMarcadores, reboteRefinado: true,
+  });
+
+  const fromDate = new Date(fy, fm - 1, fd);
+  return [
+    ...closedEvents.filter(e => e.timeIn >= fromDate).map(e => ({ ...e, hasReturn: true })),
+    ...Array.from(openEvents.entries()).map(([employeeId, ev]) => ({
+      employeeId, category: ev.category, timeOut: ev.timeOut, timeIn: null, hasReturn: false,
+      salidaMarkerUserId: ev.salidaMarkerUserId ?? null, regresoMarkerUserId: null,
+    })),
+  ].filter(e => e.category === 'CAMPANA');
+}
+
 // GET /campana-range?from=&to=&employeeId= -- a diferencia de Particular/Oficial,
 // una salida a Campaña puede durar varios días: no se cierra al fin del día,
 // y la "cantidad de días" se calcula con un horario de corte configurable.
-app.get('/campana-range', requirePermission('attendance', 'read'), async (req, res) => {
+// Lleva el mismo limite que los otros reportes pesados (F-06): mira hasta 90
+// dias hacia atras.
+app.get('/campana-range', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
   try {
     const { from, to } = req.query;
     if (!from || !to) {
@@ -4460,32 +4553,11 @@ app.get('/campana-range', requirePermission('attendance', 'read'), async (req, r
     }
     const employeeById = new Map(employees.map(e => [String(e.employeeId), e]));
 
-    const markerMap = await fetchMarkerMap('CAMPANA', tenantId);
-
-    // Una salida a campaña puede haber arrancado antes del "from" pedido --
-    // se busca hasta CAMPANA_LOOKBACK_DAYS atrás para no perder el
-    // emparejamiento con su regreso, que sí puede caer dentro del rango.
-    const CAMPANA_LOOKBACK_DAYS = 90;
-    const [fy, fm, fd] = from.split('-').map(Number);
-    const lookbackFromDate = new Date(fy, fm - 1, fd - CAMPANA_LOOKBACK_DAYS);
-    const lookbackFromStr = formatLocalDate(lookbackFromDate);
-    const exclusiveEnd = nextDayStr(to);
-
-    const checkins = await fetchMovementCheckins(lookbackFromStr, exclusiveEnd, tenantId);
-    const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
-    const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
-    const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs, todosLosMarcadores });
-
     const cutoffValue = await getAppSetting('campanaArrivalCutoffTime', tenantId, db);
     const cutoffTime = cutoffValue || '09:00';
-    const fromDate = new Date(fy, fm - 1, fd);
 
-    const events = [
-      ...closedEvents.filter(e => e.timeIn >= fromDate).map(e => ({ ...e, hasReturn: true })),
-      ...Array.from(openEvents.entries()).map(([employeeId, ev]) => ({
-        employeeId, category: ev.category, timeOut: ev.timeOut, timeIn: null, hasReturn: false
-      }))
-    ].filter(e => e.category === 'CAMPANA' && employeeById.has(e.employeeId));
+    const events = (await detectarCampanas(tenantId, from, to))
+      .filter(e => employeeById.has(e.employeeId));
 
     const rows = events.map(e => {
       const emp = employeeById.get(e.employeeId);
@@ -4536,6 +4608,45 @@ app.post('/config/campana-cutoff', requirePermission('schedules', 'update'), asy
   } catch (err) {
     console.error('ERROR saving campana cutoff:', err);
     res.status(500).json({ error: 'Error saving campana cutoff' });
+  }
+});
+
+// GET/POST /config/campana-presentismo-modo -- como cuenta Presentismo los
+// dias habiles que una persona pasa en campaña sin fichar.
+//
+//   'ignorar'   (default) -- como siempre: esos dias quedan "Ausente".
+//   'trabajado' -- suman a "Dias trabajados" y se muestran "En campaña".
+//   'excusado'  -- suman a "Excusado" y se muestran "En campaña".
+//
+// Es por empresa porque cada organizacion interpreta distinto su trabajo de
+// campo. El default es 'ignorar' a proposito: una empresa que no usa
+// campañas -- o que todavia no decidio -- no ve ningun cambio.
+const CAMPANA_PRESENTISMO_MODOS = ['ignorar', 'trabajado', 'excusado'];
+async function fetchCampanaPresentismoModo(tenantId) {
+  const value = await getAppSetting('campanaPresentismoModo', tenantId, db);
+  return CAMPANA_PRESENTISMO_MODOS.includes(value) ? value : 'ignorar';
+}
+
+app.get('/config/campana-presentismo-modo', requirePermission('schedules', 'read'), async (req, res) => {
+  try {
+    res.json({ campanaPresentismoModo: await fetchCampanaPresentismoModo(resolveTenantId(req)) });
+  } catch (err) {
+    console.error('ERROR fetching campana presentismo modo:', err);
+    res.status(500).json({ error: 'Error fetching campana presentismo modo' });
+  }
+});
+
+app.post('/config/campana-presentismo-modo', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const value = String(req.body.campanaPresentismoModo || '');
+    if (!CAMPANA_PRESENTISMO_MODOS.includes(value)) {
+      return res.status(400).json({ error: `campanaPresentismoModo debe ser uno de: ${CAMPANA_PRESENTISMO_MODOS.join(', ')}` });
+    }
+    await setAppSetting('campanaPresentismoModo', resolveTenantId(req), value, db);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving campana presentismo modo:', err);
+    res.status(500).json({ error: 'Error saving campana presentismo modo' });
   }
 });
 
