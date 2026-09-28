@@ -41,6 +41,17 @@ const employeeEventRepository = require('./motor-laboral/repositories/employeeEv
 const attendanceCalc = require('./motor-laboral/services/attendanceCalculations');
 const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const campanaService = require('./motor-laboral/services/campanaService');
+const cupoMotivoRepository = require('./motor-laboral/repositories/cupoMotivoRepository');
+
+// Cupo del motivo de una justificacion (migracion 20261005). Solo las de dia
+// completo gastan cupo: un permiso horario (type distinto de FULL_DAY) no.
+async function verificarCupoJustificacion({ tenantId, userId, eventTypeId, type, desde, hasta, excluirJustificacionIds = [] }) {
+  if (!eventTypeId || (type || 'FULL_DAY') !== 'FULL_DAY') return { bloquear: false, excesos: [], mensaje: null };
+  const employeeInternalId = await cupoMotivoRepository.empleadoDeUserId(db, tenantId, userId);
+  return cupoMotivoRepository.verificarCarga(db, {
+    employeeInternalId, eventTypeId, desde, hasta, excluirJustificacionIds,
+  });
+}
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
@@ -1889,6 +1900,11 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
+    const cupo = await verificarCupoJustificacion({
+      tenantId: user.tenant_id, userId, eventTypeId, type, desde: excDate, hasta: excDate,
+    });
+    if (cupo.bloquear) return res.status(409).json({ error: cupo.mensaje, excesos: cupo.excesos });
+
     try {
       // tenant_id sale del USUARIO CRUDO (users.tenant_id, migracion
       // 20260909) -- es el dato real, siempre presente aunque el userId
@@ -1910,7 +1926,7 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
         });
       });
 
-      res.json({ ok: true, message: 'Exclusión creada' });
+      res.json({ ok: true, message: 'Exclusión creada', avisoCupo: cupo.mensaje });
     } catch (err) {
       if (err.code === 'ER_DUP_ENTRY') {
         return res.status(409).json({ error: 'Este usuario ya tiene una exclusión para esta fecha' });
@@ -1964,6 +1980,11 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
       return res.status(400).json({ error: 'El rango no puede superar un año' });
     }
 
+    const cupo = await verificarCupoJustificacion({
+      tenantId: user.tenant_id, userId, eventTypeId, type, desde: dateFrom, hasta: dateTo,
+    });
+    if (cupo.bloquear) return res.status(409).json({ error: cupo.mensaje, excesos: cupo.excesos });
+
     let created = 0;
     const skipped = [];
     const performedBy = auditLog.actorId(req);
@@ -1999,7 +2020,7 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
       }
     }
 
-    res.json({ ok: true, totalDays: dates.length, created, skipped });
+    res.json({ ok: true, totalDays: dates.length, created, skipped, avisoCupo: cupo.mensaje });
   } catch (err) {
     console.error('ERROR creating exclusion range:', err);
     res.status(500).json({ error: 'Error creando el rango de exclusiones' });
@@ -2019,6 +2040,11 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
     if (!previous) {
       return res.status(404).json({ error: 'Exclusión no encontrada' });
     }
+    const cupo = await verificarCupoJustificacion({
+      tenantId: previous.tenant_id, userId: previous.userId, eventTypeId, type,
+      desde: previous.excDate, hasta: previous.excDate, excluirJustificacionIds: [previous.id],
+    });
+    if (cupo.bloquear) return res.status(409).json({ error: cupo.mensaje, excesos: cupo.excesos });
     const performedBy = auditLog.actorId(req);
 
     await auditLog.inTransaction(db, async (conn) => {
@@ -2039,7 +2065,7 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
       });
     });
 
-    res.json({ ok: true, message: 'Exclusión actualizada' });
+    res.json({ ok: true, message: 'Exclusión actualizada', avisoCupo: cupo.mensaje });
   } catch (err) {
     console.error('ERROR updating exclusion:', err);
     if (err.code === 'ECONNREFUSED') {

@@ -1,6 +1,7 @@
 const express = require('express');
-const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const { requirePermission, requireAnyPermission, resolveTenantId } = require('../appUserMiddleware');
 const eventTypeCountModeRepository = require('../motor-laboral/repositories/eventTypeCountModeRepository');
+const cupoMotivoRepository = require('../motor-laboral/repositories/cupoMotivoRepository');
 
 const MODOS_VALIDOS = ['corridos', 'habiles'];
 
@@ -185,6 +186,104 @@ module.exports = function (db) {
       }
       console.error('ERROR creating event type count mode:', err);
       res.status(500).json({ success: false, error: 'Error creating count mode' });
+    }
+  });
+
+  // ==========================
+  // 7. CUPO DEL MOTIVO ("Articulo 55: no mas de 6 por año")
+  // GET  /api/event-types/:id/cupos   historial de vigencias
+  // POST /api/event-types/:id/cupos   { maxDiasAnio, maxDiasMes, periodo, alExceder, vigenteDesde }
+  // Ver migracion 20261005 y motor-laboral/services/cupoMotivos.js. Cargar o
+  // cambiar un cupo es configuracion de la empresa (mismo permiso que la
+  // modalidad corridos/habiles).
+  // ==========================
+  router.get('/:id/cupos', requireAnyPermission([['exclusions', 'read'], ['leaves', 'read']]), async (req, res) => {
+    try {
+      const eventType = await findEventTypeOrNull(req.params.id, resolveTenantId(req));
+      if (!eventType) return res.status(404).json({ success: false, error: 'Motivo no encontrado' });
+      res.json({ success: true, cupos: await cupoMotivoRepository.findCupos(req.params.id, db) });
+    } catch (err) {
+      console.error('ERROR fetching event type cupos:', err);
+      res.status(500).json({ success: false, error: 'Error fetching cupos' });
+    }
+  });
+
+  router.post('/:id/cupos', requirePermission('settings', 'update'), async (req, res) => {
+    try {
+      const eventType = await findEventTypeOrNull(req.params.id, resolveTenantId(req));
+      if (!eventType) return res.status(404).json({ success: false, error: 'Motivo no encontrado' });
+
+      const aNumero = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+      const maxDiasAnio = aNumero(req.body.maxDiasAnio);
+      const maxDiasMes = aNumero(req.body.maxDiasMes);
+      const periodo = req.body.periodo || 'calendario';
+      const alExceder = req.body.alExceder || 'avisar';
+      const { vigenteDesde } = req.body;
+      for (const [nombre, v] of [['maxDiasAnio', maxDiasAnio], ['maxDiasMes', maxDiasMes]]) {
+        if (v !== null && (!Number.isInteger(v) || v < 0 || v > 366)) {
+          return res.status(400).json({ success: false, error: `${nombre} debe ser un número entero entre 0 y 366, o vacío` });
+        }
+      }
+      if (!cupoMotivoRepository.PERIODOS.includes(periodo)) {
+        return res.status(400).json({ success: false, error: `periodo debe ser uno de: ${cupoMotivoRepository.PERIODOS.join(', ')}` });
+      }
+      if (!cupoMotivoRepository.ACCIONES.includes(alExceder)) {
+        return res.status(400).json({ success: false, error: `alExceder debe ser uno de: ${cupoMotivoRepository.ACCIONES.join(', ')}` });
+      }
+      if (!vigenteDesde || !/^\d{4}-\d{2}-\d{2}$/.test(vigenteDesde)) {
+        return res.status(400).json({ success: false, error: 'vigenteDesde (AAAA-MM-DD) es requerido' });
+      }
+      // Los dos topes vacios = "desde esta fecha, sin cupo": sirve para quitar
+      // un cupo sin borrar el historial.
+      const id = await cupoMotivoRepository.createCupo({
+        tenantId: eventType.tenant_id, eventTypeId: eventType.id, maxDiasAnio, maxDiasMes,
+        periodo, alExceder, vigenteDesde, createdBy: req.appUser ? req.appUser.id : null,
+      }, db);
+      res.json({ success: true, id });
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ success: false, error: 'Ya hay un cupo cargado con esa misma fecha para este motivo' });
+      }
+      console.error('ERROR creating event type cupo:', err);
+      res.status(500).json({ success: false, error: 'Error creating cupo' });
+    }
+  });
+
+  // ==========================
+  // 8. CONSUMO DEL MOTIVO POR UN EMPLEADO (y preview de una carga nueva)
+  // GET /api/event-types/:id/consumo?employeeId=|userId=&fecha=&desde=&hasta=
+  //     &excluirLicenciaId=&excluirJustificacionId=
+  //   employeeId = id interno (licencias) | userId = USERID de reloj (justificaciones)
+  //   desde/hasta = lo que se esta por cargar (opcional)
+  //   excluir* = el registro que se esta editando, para no contarlo dos veces
+  // ==========================
+  router.get('/:id/consumo', requireAnyPermission([['exclusions', 'read'], ['leaves', 'read']]), async (req, res) => {
+    try {
+      const tenantId = resolveTenantId(req);
+      const eventType = await findEventTypeOrNull(req.params.id, tenantId);
+      if (!eventType) return res.status(404).json({ success: false, error: 'Motivo no encontrado' });
+      const empresa = eventType.tenant_id;
+
+      let employeeInternalId = req.query.employeeId ? Number(req.query.employeeId) : null;
+      if (!employeeInternalId && req.query.userId) {
+        employeeInternalId = await cupoMotivoRepository.empleadoDeUserId(db, empresa, Number(req.query.userId));
+      }
+      if (!employeeInternalId) return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
+
+      const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : new Date().toISOString().slice(0, 10);
+      const { desde, hasta } = req.query;
+      const nuevo = desde && hasta && /^\d{4}-\d{2}-\d{2}$/.test(desde) && /^\d{4}-\d{2}-\d{2}$/.test(hasta) && desde <= hasta
+        ? { desde, hasta } : null;
+      const resultado = await cupoMotivoRepository.consumoDeEmpleado(db, {
+        tenantId: empresa, employeeInternalId, eventTypeId: eventType.id, fecha, nuevo,
+        excluirLicenciaId: req.query.excluirLicenciaId || null,
+        excluirJustificacionIds: req.query.excluirJustificacionId ? [req.query.excluirJustificacionId] : [],
+      });
+      if (!resultado) return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
+      res.json({ success: true, ...resultado });
+    } catch (err) {
+      console.error('ERROR computing consumo:', err);
+      res.status(500).json({ success: false, error: 'Error calculando el consumo' });
     }
   });
 

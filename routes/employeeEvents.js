@@ -1,6 +1,7 @@
 const express = require('express');
 const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
 const eventTypeCountModeRepository = require('../motor-laboral/repositories/eventTypeCountModeRepository');
+const cupoMotivoRepository = require('../motor-laboral/repositories/cupoMotivoRepository');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -105,6 +106,13 @@ module.exports = function (db) {
         }
       }
 
+      // Cupo del motivo (migracion 20261005): 'bloquear' corta aca, 'avisar'
+      // guarda y devuelve el aviso.
+      const cupo = await cupoMotivoRepository.verificarCarga(db, {
+        employeeInternalId: employeeId, eventTypeId, desde: fechaDesde, hasta: fechaHasta,
+      });
+      if (cupo.bloquear) return res.status(409).json({ success: false, error: cupo.mensaje, excesos: cupo.excesos });
+
       const computedDias = dias !== undefined && dias !== null && dias !== ''
         ? Number(dias)
         : await eventTypeCountModeRepository.computeDiasLicencia(eventTypeId, fechaDesde, fechaHasta, db);
@@ -115,7 +123,7 @@ module.exports = function (db) {
         [employeeId, eventTypeId, fechaDesde, fechaHasta, computedDias, observaciones || null]
       );
 
-      res.json({ success: true, id: result.insertId, dias: computedDias });
+      res.json({ success: true, id: result.insertId, dias: computedDias, avisoCupo: cupo.mensaje });
     } catch (err) {
       console.error('ERROR creating employee event:', err);
       res.status(500).json({ success: false, error: 'Error creating employee event' });
@@ -145,6 +153,13 @@ module.exports = function (db) {
         }
       }
 
+      const [[actual]] = await db.query('SELECT employee_id FROM employee_events WHERE id = ?', [id]);
+      const cupo = await cupoMotivoRepository.verificarCarga(db, {
+        employeeInternalId: actual ? actual.employee_id : null, eventTypeId,
+        desde: fechaDesde, hasta: fechaHasta, excluirLicenciaId: id,
+      });
+      if (cupo.bloquear) return res.status(409).json({ success: false, error: cupo.mensaje, excesos: cupo.excesos });
+
       const computedDias = dias !== undefined && dias !== null && dias !== ''
         ? Number(dias)
         : await eventTypeCountModeRepository.computeDiasLicencia(eventTypeId, fechaDesde, fechaHasta, db);
@@ -160,7 +175,7 @@ module.exports = function (db) {
         return res.status(404).json({ success: false, error: 'Evento no encontrado' });
       }
 
-      res.json({ success: true, dias: computedDias });
+      res.json({ success: true, dias: computedDias, avisoCupo: cupo.mensaje });
     } catch (err) {
       console.error('ERROR updating employee event:', err);
       res.status(500).json({ success: false, error: 'Error updating employee event' });

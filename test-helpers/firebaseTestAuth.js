@@ -106,6 +106,7 @@ async function deleteTestUser(uid) {
     await db.query('UPDATE Checkins SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
     await db.query('UPDATE marker_corrections SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
     await db.query('UPDATE marker_corrections SET updated_by = NULL WHERE updated_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE event_type_quotas SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
   }
 
   await db.query('DELETE FROM app_users WHERE firebase_uid = ?', [uid]).catch(() => {});

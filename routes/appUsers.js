@@ -224,6 +224,7 @@ module.exports = function (db) {
     ['marker_corrections', 'created_by', 'marcadores corregidos'],
     ['marker_corrections', 'updated_by', 'correcciones de marcadores editadas'],
     ['marker_correction_log', 'performed_by', 'movimientos de correcciones de marcadores'],
+    ['event_type_quotas', 'created_by', 'cupos de motivos configurados'],
     ['payment_records', 'recorded_by', 'pagos registrados'],
     ['plan_requests', 'requested_by', 'pedidos de plan'],
     ['tenant_agent_keys', 'created_by', 'claves de agente creadas'],
