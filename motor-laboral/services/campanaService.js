@@ -41,15 +41,32 @@ async function fetchMovementCheckins(db, fromDate, toDateExclusive, tenantId) {
   // esto se viera en la respuesta, pero un legajo coincidente entre dos
   // empresas (ej. las dos usan "1000") podia igual atribuirle mal un
   // movimiento a la empresa equivocada antes de llegar a esta version.
+  //
+  // RENDIMIENTO (2026-09-28): este JOIN era
+  //     ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
+  // El OR entre dos columnas anula los indices de `users`: por CADA fichaje
+  // MySQL recorria los 499 usuarios de la empresa. Es el mismo problema que
+  // ya se habia resuelto el 2026-09-21 en /attendance-range (ver ahi y
+  // ESTADO_PROYECTO.md), pero esta copia habia quedado con el OR viejo.
+  // Medido con los fichajes de AVP (base local, 9 meses, 78.456 filas):
+  // 13.113 ms con el OR, 80 ms asi -- mismas filas, mismo empleado en cada
+  // una. Un reporte de Campaña de un mes pasaba 6,4 s solo en esta consulta.
+  //
+  // Son dos JOIN que si usan indice: primero por USERID (clave primaria
+  // tenant_id+USERID) y, SOLO si no hubo coincidencia, por Badgenumber
+  // (indice unico tenant_id+Badgenumber). Es la misma prioridad explicita que
+  // usa /attendance-range; con el OR, un numero que coincidia con el USERID
+  // de uno y el Badgenumber de otro devolvia dos filas y el fichaje se
+  // duplicaba (en AVP no pasa: 0 casos).
   const params = [fromDate, toDateExclusive];
   let query = `
     SELECT c.CHECKTIME AS checktime, c.USERID AS rawUserId, e.employee_id AS employeeId,
            c.MACHINE_IP AS machineIp
     FROM Checkins c
-    LEFT JOIN users u
-      ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
-      AND u.tenant_id = c.tenant_id
-    LEFT JOIN user_employee_map uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
+    LEFT JOIN users u ON u.tenant_id = c.tenant_id AND u.USERID = c.USERID
+    LEFT JOIN users ub ON u.USERID IS NULL AND ub.tenant_id = c.tenant_id
+      AND ub.Badgenumber = CAST(c.USERID AS CHAR)
+    LEFT JOIN user_employee_map uem ON uem.tenant_id = c.tenant_id AND uem.USERID = COALESCE(u.USERID, ub.USERID)
     LEFT JOIN employees e ON e.id = uem.employee_id
     WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?`;
   if (tenantId !== undefined && tenantId !== null) {

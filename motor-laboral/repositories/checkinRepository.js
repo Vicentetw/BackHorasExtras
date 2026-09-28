@@ -14,12 +14,20 @@ async function findByDate(date, tenantId, db) {
   // devolveria filas de ambas mezcladas (o la fila de la empresa
   // equivocada) antes de que el filtro final por tenant pueda separarlas.
   const params = [date, nextDayStr(date)];
-  let query = `SELECT c.*, u.USERID, u.Badgenumber, u.Name, e.employee_id AS employeeId
+  //
+  // Sin el OR de antes (u.USERID = c.USERID OR Badgenumber = c.USERID), que
+  // anulaba los indices: ver el comentario de RENDIMIENTO en
+  // campanaService.fetchMovementCheckins. Primero por USERID y, solo si no
+  // hubo coincidencia, por Badgenumber -- la misma prioridad que
+  // /attendance-range.
+  let query = `SELECT c.*, COALESCE(u.USERID, ub.USERID) AS USERID,
+            COALESCE(u.Badgenumber, ub.Badgenumber) AS Badgenumber,
+            COALESCE(u.Name, ub.Name) AS Name, e.employee_id AS employeeId
      FROM Checkins c
-     LEFT JOIN users u
-       ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))
-       AND u.tenant_id = c.tenant_id
-     LEFT JOIN user_employee_map ue ON ue.USERID = u.USERID AND ue.tenant_id = u.tenant_id
+     LEFT JOIN users u ON u.tenant_id = c.tenant_id AND u.USERID = c.USERID
+     LEFT JOIN users ub ON u.USERID IS NULL AND ub.tenant_id = c.tenant_id
+       AND ub.Badgenumber = CAST(c.USERID AS CHAR)
+     LEFT JOIN user_employee_map ue ON ue.tenant_id = c.tenant_id AND ue.USERID = COALESCE(u.USERID, ub.USERID)
      LEFT JOIN employees e ON e.id = ue.employee_id
      WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?
        AND e.employee_id IS NOT NULL`;
