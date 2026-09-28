@@ -3621,6 +3621,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       let personalLeaveMinutes = 0;
       let inactiveWarningDays = 0;
       let campaignDays = 0;
+      let leaveConflictDays = 0;
       const days = detailEmployeeId ? [] : null;
       // Pedido real: un empleado inactivo (baja no cargada formalmente) no
       // debe contarse ni mostrarse como "ausente" solo por no fichar -- ver
@@ -3742,6 +3743,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         } else if (checks.length > 0) {
           daysWorked++;
           if (!employeeActivo) inactiveWarningDays++;
+          if (leaveEvent) leaveConflictDays++;
           const first = checks[0];
           const last = checks[checks.length - 1];
           const firstMin = timeToMinutes(extractTime(first));
@@ -4084,6 +4086,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
               // credencial por error?) -- se mantiene el status normal
               // calculado arriba, solo se agrega el aviso.
               inactiveWarning: !employeeActivo,
+              // Fichó teniendo una licencia cargada -- ver leaveConflict en
+              // attendanceService.js (mismo criterio en la vista diaria).
+              leaveConflict: leaveEvent
+                ? { descripcion: leaveEvent.eventTypeDescripcion || leaveEvent.observaciones || 'Licencia' }
+                : null,
               lateMinutes: isLate ? lateMinutes : 0,
               reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
               eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,
@@ -4191,7 +4198,10 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         inactiveWarningDays,
         // Dias habiles en campaña sin fichar. Ya estan sumados a daysWorked
         // o a excused segun el modo; esto es para poder mostrarlos aparte.
-        campaignDays
+        campaignDays,
+        // Dias en que fichó teniendo una licencia cargada -- a revisar, igual
+        // que inactiveWarningDays: visible en el listado sin abrir el detalle.
+        leaveConflictDays
       };
       if (days) {
         row.days = days;

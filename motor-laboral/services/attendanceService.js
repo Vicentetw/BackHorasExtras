@@ -245,6 +245,17 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       campaignCountsAs: status === 'Campaign' ? campana.modo : undefined,
       campaignMoment: esRegresoDeCampana ? 'regreso' : undefined,
       inactiveWarning,
+      // Pedido real: alguien con una licencia cargada (vacaciones, enfermedad,
+      // comision...) que igual ficho. El fichaje es un hecho y manda: el dia
+      // sigue siendo presente/tarde como siempre. Pero una de las dos cosas
+      // esta mal -- la licencia o el fichaje -- y alguien tiene que
+      // corregirla: se avisa, no se decide solo. Mismo criterio que
+      // inactiveWarning. Solo licencias (employee_events): una excepcion
+      // (userexclusions) con fichaje es normal, se usa para justificar una
+      // tardanza.
+      leaveConflict: checkinsSorted.length > 0 && leaveEvent
+        ? { descripcion: leaveEvent.eventTypeDescripcion || leaveEvent.observaciones || 'Licencia' }
+        : null,
       firstCheckin,
       lastCheckin,
       totalCheckins: checkinsSorted.length,
@@ -278,6 +289,8 @@ function buildSummary(attendance) {
     // queda en `campaign`.
     excused: attendance.filter(a => a.status === 'Excused' || (a.status === 'Campaign' && a.campaignCountsAs === 'excusado')).length,
     campaign: attendance.filter(a => a.status === 'Campaign').length,
+    // Fichó teniendo una licencia cargada -- a revisar (ver leaveConflict).
+    leaveConflicts: attendance.filter(a => a.leaveConflict).length,
     // Solo aplica a empleados con turno partido (mas de un bloque WORK por
     // dia) -- faltó marcar entrada y/o salida de alguna de sus visitas, pero
     // no de todas (si no, ya cuenta como Absent). Ver evaluateMultiVisitDay.
