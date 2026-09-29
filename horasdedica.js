@@ -3837,7 +3837,10 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
           const effectiveCapMinutes = overtimeCalc.resolveOvertimeCapMinutes(schedule, overtimeSettings.capMinutes);
           const overtimeResult = overtimeCalc.resolveDailyOvertime(heInterval, overtimeChecks, {
             cutoffMinutes: effectiveCutoffMinutes,
-            capMinutes: effectiveCapMinutes
+            capMinutes: effectiveCapMinutes,
+            // Solo el corte CARGADO en la plantilla recorta las HE por marcador
+            // (ver resolveDailyOvertime).
+            explicitCutoffMinutes: schedule && schedule.overtimeCutoffTime ? timeToMinutes(schedule.overtimeCutoffTime) : null
           });
           // "Autorizado a hacer horas extras" (employees.overtime_authorized):
           // existia la columna desde hacia tiempo pero ningun motor la
@@ -4133,6 +4136,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
               visits: multiVisit ? multiVisit.visits : null,
               overtimeMinutes: dayOvertimeMinutes,
               overtimeStartTime: dayOvertimeStartTime,
+              // El corte HE de la plantilla recorto el inicio marcado: desde
+              // cuando marco realmente y cuantos minutos no se computaron.
+              overtimeMarkerStart: (!useEngineAsOfficial && dayOvertimeStartTime && overtimeResult && overtimeResult.markerStart)
+                ? formatLocalTime(overtimeResult.markerStart) : null,
+              overtimeMinutesBeforeCutoff: (!useEngineAsOfficial && dayOvertimeStartTime && overtimeResult && overtimeResult.minutosAntesDelCorte) || 0,
               overtimeNeedsVerification: dayOvertimeNeedsVerification,
               overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
               // Pedido real: "el tope es una opcion solo para que salte un

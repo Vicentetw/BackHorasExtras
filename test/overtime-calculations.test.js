@@ -240,3 +240,43 @@ test('resolveDailyOvertime: el intervalo de marcador se respeta si NO coincide c
   assert.equal(result.source, 'marker');
   assert.equal(result.minutes, 403); // 6h43, real esta vez
 });
+
+// ---------------------------------------------------------------------------
+// Corte HE cargado en la plantilla: tambien recorta las HE por marcador
+// (caso real MARTENSEN, 2026-09-29: descanso 14-15, corte 15:00, marcador 9
+// a las 14:42 -> antes contaba desde 14:42)
+// ---------------------------------------------------------------------------
+{
+  const { resolveDailyOvertime } = require('../motor-laboral/services/overtimeCalculations');
+  const d = (h) => new Date(`2026-09-01T${h}`);
+  const fichajes = [d('06:49:00'), d('14:42:00'), d('18:01:00')];
+  const intervalo = { timeOut: d('14:42:00'), timeIn: d('18:01:00') };
+  const CORTE_15 = 15 * 60;
+
+  test('con corte cargado, la HE por marcador empieza en el corte si el marcador fue antes', () => {
+    const r = resolveDailyOvertime(intervalo, fichajes, { cutoffMinutes: CORTE_15, capMinutes: 360, explicitCutoffMinutes: CORTE_15 });
+    assert.equal(r.source, 'marker');
+    assert.equal(r.minutes, 181, '15:00 a 18:01');
+    assert.equal(r.start.getHours(), 15);
+    assert.equal(r.minutosAntesDelCorte, 18);
+    assert.equal(r.markerStart.getTime(), d('14:42:00').getTime());
+  });
+
+  test('sin corte cargado, no cambia nada (desde el marcador, como siempre)', () => {
+    const r = resolveDailyOvertime(intervalo, fichajes, { cutoffMinutes: CORTE_15, capMinutes: 360 });
+    assert.equal(r.minutes, 199, '14:42 a 18:01');
+    assert.equal(r.minutosAntesDelCorte, 0);
+    assert.equal(r.markerStart, null);
+  });
+
+  test('un marcador despues del corte no se toca', () => {
+    const r = resolveDailyOvertime({ timeOut: d('15:10:00'), timeIn: d('18:00:00') }, fichajes, { capMinutes: 360, explicitCutoffMinutes: CORTE_15 });
+    assert.equal(r.minutes, 170);
+    assert.equal(r.minutosAntesDelCorte, 0);
+  });
+
+  test('si todo el intervalo marcado fue antes del corte, ese dia no hay HE (no se inventa con el estimado)', () => {
+    const r = resolveDailyOvertime({ timeOut: d('14:05:00'), timeIn: d('14:50:00') }, fichajes, { cutoffMinutes: CORTE_15, capMinutes: 360, explicitCutoffMinutes: CORTE_15 });
+    assert.equal(r, null);
+  });
+}

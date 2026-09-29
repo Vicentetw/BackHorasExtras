@@ -172,7 +172,29 @@ function resolveDailyOvertime(heInterval, fallbackChecks, options = {}) {
   const heIntervalIsSuspicious = !!(heInterval && heInterval.timeOut && isFirstCheckinOfDay(heInterval.timeOut, fallbackChecks));
 
   if (!heIntervalIsSuspicious && heInterval && heInterval.timeIn && heInterval.timeOut) {
-    const minutes = Math.round((heInterval.timeIn - heInterval.timeOut) / 60000);
+    // "Corte HE" de la plantilla, cargado a mano (options.explicitCutoffMinutes).
+    // La pantalla de plantillas lo promete asi: "hora a partir de la cual el
+    // tiempo trabajado empieza a contar como HE". Hasta el 2026-09-29 solo lo
+    // respetaba el calculo estimado (sin marcador): con marcador, la HE
+    // arrancaba en el marcador 9 aunque fuera antes del corte (caso real:
+    // MARTENSEN, plantilla con descanso 14-15 y corte 15:00, marcador a las
+    // 14:42 -> contaba 18 min del descanso). Ahora el inicio es el mas tardio
+    // entre el marcador y el corte.
+    //
+    // Solo con un corte CARGADO en la plantilla: sin corte, la ayuda dice que
+    // se usa el horario de salida, pero aplicarlo moveria las HE de todos los
+    // que aprietan el 9 antes de su salida -- eso se decide aparte, midiendo.
+    let start = heInterval.timeOut;
+    let minutosAntesDelCorte = 0;
+    const corte = options.explicitCutoffMinutes;
+    if (corte !== null && corte !== undefined) {
+      const inicioCorte = new Date(start.getFullYear(), start.getMonth(), start.getDate(), Math.floor(corte / 60), corte % 60, 0);
+      if (inicioCorte > start) {
+        minutosAntesDelCorte = Math.round((Math.min(inicioCorte, heInterval.timeIn) - start) / 60000);
+        start = inicioCorte;
+      }
+    }
+    const minutes = Math.round((heInterval.timeIn - start) / 60000);
     if (minutes > 0) {
       return {
         source: 'marker',
@@ -183,10 +205,17 @@ function resolveDailyOvertime(heInterval, fallbackChecks, options = {}) {
         // start/end -- igual que ya devuelve el fallback de abajo, para que
         // el listado "Horas Extra por Regimen" pueda mostrar la hora exacta
         // en la que empezo la HE sin importar de que fuente salio.
-        start: heInterval.timeOut,
-        end: heInterval.timeIn
+        start,
+        end: heInterval.timeIn,
+        // Cuando el corte recorto: desde cuando marco realmente y cuanto no
+        // se computo, para mostrarlo en el detalle.
+        markerStart: minutosAntesDelCorte > 0 ? heInterval.timeOut : null,
+        minutosAntesDelCorte
       };
     }
+    // Todo el intervalo marcado cayo antes del corte: no hay HE ese dia (no
+    // se cae al estimado: el marcador dijo cuando fue, y fue antes del corte).
+    if (minutosAntesDelCorte > 0) return null;
   }
 
   const fallback = computeDailyOvertime(fallbackChecks, options);
