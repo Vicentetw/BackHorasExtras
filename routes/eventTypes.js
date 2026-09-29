@@ -2,6 +2,7 @@ const express = require('express');
 const { requirePermission, requireAnyPermission, resolveTenantId } = require('../appUserMiddleware');
 const eventTypeCountModeRepository = require('../motor-laboral/repositories/eventTypeCountModeRepository');
 const cupoMotivoRepository = require('../motor-laboral/repositories/cupoMotivoRepository');
+const { hoyDeEmpresa } = require('../motor-laboral/services/hoyEmpresa');
 
 const MODOS_VALIDOS = ['corridos', 'habiles'];
 
@@ -259,7 +260,7 @@ module.exports = function (db) {
     try {
       const tenantId = resolveTenantId(req);
       if (tenantId == null) return res.json({ success: true, filas: [] });
-      const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : new Date().toISOString().slice(0, 10);
+      const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : await hoyDeEmpresa(db, tenantId);
       const pct = req.query.porcentaje === undefined ? 80 : (req.query.porcentaje === '' ? null : Number(req.query.porcentaje));
       const filas = await cupoMotivoRepository.estadoCuposEmpresa(db, tenantId, fecha, pct === null || Number.isFinite(pct) ? pct : 80);
       res.json({ success: true, fecha, filas });
@@ -290,7 +291,7 @@ module.exports = function (db) {
       }
       if (!employeeInternalId) return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
 
-      const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : new Date().toISOString().slice(0, 10);
+      const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : await hoyDeEmpresa(db, empresa);
       const { desde, hasta } = req.query;
       const nuevo = desde && hasta && /^\d{4}-\d{2}-\d{2}$/.test(desde) && /^\d{4}-\d{2}-\d{2}$/.test(hasta) && desde <= hasta
         ? { desde, hasta } : null;
