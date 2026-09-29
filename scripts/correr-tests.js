@@ -32,9 +32,19 @@ function limpiar(momento) {
 
 limpiar('antes');
 
+// Lista EXPLICITA de archivos (test/*.test.js), no la busqueda automatica de
+// `node --test`: esa busqueda cambia entre versiones de Node (Node 20 levanta
+// cualquier .js dentro de una carpeta "test", incluidas librerias de Python
+// en descarga-fichaje-py/.venv). Si se pasan archivos por linea de comandos,
+// se usan esos.
+const fs = require('fs');
+const archivos = process.argv.slice(2).length
+  ? process.argv.slice(2)
+  : fs.readdirSync(path.join(RAIZ, 'test')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join('test', f));
+
 const tests = spawnSync(
   process.execPath,
-  ['--test', '--test-force-exit', '--test-concurrency=1', ...process.argv.slice(2)],
+  ['--test', '--test-force-exit', '--test-concurrency=1', ...archivos],
   { cwd: RAIZ, stdio: 'inherit' }
 );
 

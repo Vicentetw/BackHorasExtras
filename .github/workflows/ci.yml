@@ -52,7 +52,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 24, igual que en desarrollo. Node 20 ya no tiene soporte (GitHub lo
+          # avisa en cada corrida).
+          node-version: 24
 
       - name: Instalar dependencias
         run: npm ci
@@ -100,16 +102,39 @@ jobs:
             esac
           done
 
+      # Hasta el 2026-09-29 este paso esperaba 30 s y seguia igual aunque el
+      # backend no hubiera arrancado: la suite fallaba despues sin decir por
+      # que. Ahora, si no arranca, falla ACA y publica su log como anotacion
+      # (las anotaciones se ven sin iniciar sesion en GitHub).
       - name: Levantar el backend
         run: |
           node horasdedica.js > server.log 2>&1 &
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:3000/ -o /dev/null && break
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000/health -o /dev/null && { echo "Backend arriba en ${i}s"; exit 0; }
             sleep 1
           done
+          echo "::error title=El backend no arranco en 60 s::$(tail -n 40 server.log | awk 'BEGIN{ORS="%0A"; cr=sprintf("%c",13)} {gsub(/%/,"%25"); gsub(cr,""); print}')"
+          exit 1
 
+      # La salida queda en test-output.log para poder resumir las fallas en
+      # una anotacion publica (el log completo de Actions pide iniciar sesion).
       - name: Correr la suite completa
-        run: npm test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.log
+
+      - name: Resumir las fallas como anotaciones
+        if: failure()
+        run: |
+          esc() { awk 'BEGIN{ORS="%0A"; cr=sprintf("%c",13)} {gsub(/%/,"%25"); gsub(cr,""); print}'; }
+          if [ -f test-output.log ]; then
+            echo "::error title=Resumen de la suite::$(grep -aE '^ℹ (tests|pass|fail|skipped)' test-output.log | esc)"
+            echo "::error title=Tests que fallaron::$(grep -aE '^✖' test-output.log | sort -u | head -60 | esc)"
+            echo "::error title=Primeros errores::$(grep -aE -A6 '^✖' test-output.log | grep -aE 'Error|expected|actual|ECONN|ER_' | head -40 | esc)"
+          fi
+          if [ -f server.log ]; then
+            echo "::error title=Ultimas lineas del log del backend::$(tail -n 40 server.log | esc)"
+          fi
 
       - name: Mostrar el log del servidor si algo fallo
         if: failure()
