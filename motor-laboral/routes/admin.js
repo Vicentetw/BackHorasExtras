@@ -819,6 +819,96 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
+  // --- Regimenes dentro de un convenio (labor_convention_regimes) ---
+  // Migracion 20261007. Un convenio (ej. camioneros) puede tener variantes
+  // ("con horas extra", "solo se registra"...). Cada regimen hereda todo del
+  // convenio y cambia solo lo que se cargue a su nivel.
+
+  async function convenioPropio(req, conventionId) {
+    const effectiveTenantId = resolveTenantId(req);
+    const [[c]] = await db.query('SELECT id, tenant_id FROM labor_conventions WHERE id = ?', [conventionId]);
+    if (!c || (effectiveTenantId !== null && c.tenant_id !== effectiveTenantId)) return null;
+    return c;
+  }
+
+  // Valida que el regimen pertenezca a ESE convenio. null = ok.
+  async function regimenDelConvenio(regimeId, conventionId) {
+    if (regimeId == null) return null;
+    if (conventionId == null) return 'Un régimen siempre va dentro de un convenio';
+    const [[r]] = await db.query('SELECT id FROM labor_convention_regimes WHERE id = ? AND convention_id = ?', [regimeId, conventionId]);
+    return r ? null : 'El régimen no pertenece a ese convenio';
+  }
+
+  router.get('/conventions/:id/regimes', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const c = await convenioPropio(req, req.params.id);
+      if (!c) return res.status(404).json({ error: 'Convenio no encontrado' });
+      const [rows] = await db.query(
+        `SELECT r.*, (SELECT COUNT(DISTINCT a.employee_id) FROM employee_convention_assignments a
+                      WHERE a.regime_id = r.id AND (a.valid_to IS NULL OR a.valid_to >= CURDATE())) AS personas
+         FROM labor_convention_regimes r WHERE r.convention_id = ? ORDER BY r.name`, [c.id]);
+      res.json(rows);
+    } catch (err) {
+      if (err.code === 'ER_NO_SUCH_TABLE') return res.json([]);
+      console.error('Motor Laboral admin regimes error:', err);
+      res.status(500).json({ error: 'Error al leer regímenes' });
+    }
+  });
+
+  router.post('/conventions/:id/regimes', requirePermission('schedules', 'create'), async (req, res) => {
+    try {
+      const c = await convenioPropio(req, req.params.id);
+      if (!c) return res.status(404).json({ error: 'Convenio no encontrado' });
+      const name = String(req.body.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'name es requerido' });
+      const [r] = await db.query(
+        'INSERT INTO labor_convention_regimes (tenant_id, convention_id, name, description, active) VALUES (?, ?, ?, ?, ?)',
+        [c.tenant_id, c.id, name, req.body.description || null, req.body.active === undefined || req.body.active ? 1 : 0]);
+      res.status(201).json({ ok: true, id: r.insertId });
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Ya hay un régimen con ese nombre en este convenio' });
+      console.error('Motor Laboral admin create regime error:', err);
+      res.status(500).json({ error: 'Error al crear régimen' });
+    }
+  });
+
+  router.put('/regimes/:id', requirePermission('schedules', 'update'), async (req, res) => {
+    try {
+      const [[r]] = await db.query('SELECT * FROM labor_convention_regimes WHERE id = ?', [req.params.id]);
+      if (!r || !(await convenioPropio(req, r.convention_id))) return res.status(404).json({ error: 'Régimen no encontrado' });
+      const name = String(req.body.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'name es requerido' });
+      await db.query('UPDATE labor_convention_regimes SET name = ?, description = ?, active = ? WHERE id = ?',
+        [name, req.body.description || null, req.body.active === undefined || req.body.active ? 1 : 0, r.id]);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Ya hay un régimen con ese nombre en este convenio' });
+      console.error('Motor Laboral admin update regime error:', err);
+      res.status(500).json({ error: 'Error al actualizar régimen' });
+    }
+  });
+
+  // Solo si nadie lo usa: borrarlo cambiaria en silencio como se liquida a
+  // las personas encuadradas (y el historial dejaria de explicar el calculo).
+  router.delete('/regimes/:id', requirePermission('schedules', 'delete'), async (req, res) => {
+    try {
+      const [[r]] = await db.query('SELECT * FROM labor_convention_regimes WHERE id = ?', [req.params.id]);
+      if (!r || !(await convenioPropio(req, r.convention_id))) return res.status(404).json({ error: 'Régimen no encontrado' });
+      const [[uso]] = await db.query(
+        `SELECT (SELECT COUNT(*) FROM employee_convention_assignments WHERE regime_id = ?)
+              + (SELECT COUNT(*) FROM day_type_overtime_rules WHERE regime_id = ?)
+              + (SELECT COUNT(*) FROM overtime_regime_policies WHERE regime_id = ?) AS n`, [r.id, r.id, r.id]);
+      if (Number(uso.n) > 0) {
+        return res.status(409).json({ error: 'No se puede eliminar: tiene personas, reglas o topes. Desactivalo en su lugar.' });
+      }
+      await db.query('DELETE FROM labor_convention_regimes WHERE id = ?', [r.id]);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('Motor Laboral admin delete regime error:', err);
+      res.status(500).json({ error: 'Error al eliminar régimen' });
+    }
+  });
+
   // --- Reglas de horas extra por tipo de dia (day_type_overtime_rules) ---
 
   router.get('/day-type-rules', requirePermission('schedules', 'read'), async (req, res) => {
@@ -871,9 +961,12 @@ function createMotorLaboralAdminRoutes(db) {
       const effectiveTenantId = resolveTenantId(req);
       const { day_type, trigger_type, classification_type, rate, requires_authorization, active } = req.body;
       let { tenant_id, template_id, convention_id } = req.body;
+      const regime_id = req.body.regime_id ?? null;
       if (!DAY_TYPES.includes(day_type) || !['BEFORE_SCHEDULE', 'AFTER_SCHEDULE', 'ALL_DAY'].includes(trigger_type)) {
         return res.status(400).json({ error: `day_type/trigger_type invalidos` });
       }
+      const regimeError = await regimenDelConvenio(regime_id, convention_id ?? null);
+      if (regimeError) return res.status(400).json({ error: regimeError });
       // Un usuario normal siempre crea a nivel de SU tenant salvo que
       // apunte a una plantilla/convenio propios -- nunca una regla global.
       if (effectiveTenantId !== null && tenant_id == null && template_id == null && convention_id == null) {
@@ -884,10 +977,10 @@ function createMotorLaboralAdminRoutes(db) {
 
       const [result] = await db.query(
         `INSERT INTO day_type_overtime_rules
-           (tenant_id, convention_id, template_id, day_type, trigger_type, classification_type, rate, requires_authorization, active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (tenant_id, convention_id, regime_id, template_id, day_type, trigger_type, classification_type, rate, requires_authorization, active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          tenant_id ?? null, convention_id ?? null, template_id ?? null, day_type, trigger_type,
+          tenant_id ?? null, convention_id ?? null, regime_id, template_id ?? null, day_type, trigger_type,
           classification_type || 'OVERTIME', rate ?? null,
           requires_authorization === undefined || requires_authorization ? 1 : 0,
           active === undefined || active ? 1 : 0
@@ -967,7 +1060,7 @@ function createMotorLaboralAdminRoutes(db) {
         }
       }
       const [rows] = await db.query(
-        `SELECT id, employee_id, tenant_id, convention_id, category_id, valid_from, valid_to, created_at
+        `SELECT id, employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to, created_at
          FROM employee_convention_assignments WHERE employee_id = ? ORDER BY valid_from DESC`,
         [employeeId]
       );
@@ -982,6 +1075,7 @@ function createMotorLaboralAdminRoutes(db) {
     try {
       const { employeeId } = req.params;
       const { convention_id, category_id, valid_from, valid_to } = req.body;
+      const regime_id = req.body.regime_id || null;
       if (!convention_id || !valid_from) {
         return res.status(400).json({ error: 'convention_id y valid_from son requeridos' });
       }
@@ -996,6 +1090,8 @@ function createMotorLaboralAdminRoutes(db) {
       if (!convention || convention.tenant_id !== emp.tenant_id) {
         return res.status(400).json({ error: 'El convenio no pertenece a la misma empresa que el empleado' });
       }
+      const regimeError = await regimenDelConvenio(regime_id, convention_id);
+      if (regimeError) return res.status(400).json({ error: regimeError });
 
       // Mismo criterio que employee_work_calendars: cerrar cualquier
       // encuadramiento abierto anterior antes de que empiece el nuevo.
@@ -1007,11 +1103,11 @@ function createMotorLaboralAdminRoutes(db) {
       );
 
       const [result] = await db.query(
-        `INSERT INTO employee_convention_assignments (employee_id, tenant_id, convention_id, category_id, valid_from, valid_to)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [employeeId, emp.tenant_id, convention_id, category_id ?? null, valid_from, valid_to || null]
+        `INSERT INTO employee_convention_assignments (employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [employeeId, emp.tenant_id, convention_id, regime_id, category_id ?? null, valid_from, valid_to || null]
       );
-      res.status(201).json({ id: result.insertId, employee_id: employeeId, convention_id, category_id: category_id ?? null, valid_from, valid_to: valid_to || null });
+      res.status(201).json({ id: result.insertId, employee_id: employeeId, convention_id, regime_id, category_id: category_id ?? null, valid_from, valid_to: valid_to || null });
     } catch (err) {
       console.error('Motor Laboral admin save convention-assignment error:', err);
       res.status(500).json({ error: 'Error al guardar encuadramiento del empleado' });

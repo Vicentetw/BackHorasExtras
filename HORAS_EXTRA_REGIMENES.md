@@ -121,7 +121,22 @@ Reales 62 h  →  Computables 40 h (32 h al 50 % · 8 h al 100 %)
 | B2 ✅ | Funciones puras (`horasExtraRegimen.js`): recorte por plantilla, mínimo/redondeo, clasificación por tipo de día, topes cronológicos, política de excedente | `test/horas-extra-regimen.test.js` (20 casos, con MARTENSEN, CHINELI y RAMÍREZ) |
 | B3 ✅ | Integración en `/attendance-range`: solo los días cubiertos por una política (del régimen de la persona o de la empresa) pasan por el régimen; el resto queda como hoy. Reemplaza solo la parte automática (las cargas manuales quedan igual). Fines de semana y feriados con fichajes se clasifican por tipo de día. Fila: `regimenHorasExtra`; día: `regimen` | Septiembre de la copia de producción (479 empleados, 13.891 días): sin régimen, 0 diferencias; con un régimen para 3, los otros 476 sin diferencias y los 3 con los mismos minutos reales día por día. `test/regimen-horas-extra-mensual.test.js` |
 | B4 ✅ | Pantallas: régimen (con modelos por país), asignación por persona, autorización individual, Presentismo (reales / computables / excedente / sin pago), aprobación de excedente | Recorrido completo probado en navegador |
+| B4b ✅ | Regímenes **dentro** del convenio (migración `20261007`, tabla `labor_convention_regimes`). Ver la sección de abajo | `test/regimenes-dentro-del-convenio.test.js`; copia de producción sin regímenes: 0 diferencias en 479 empleados |
 | B5 | Informe para liquidación: por persona, por recargo, exportable | Coincide con Presentismo al minuto |
+
+## Empresa → convenios → regímenes → persona
+
+Una empresa puede tener **varios convenios**, por ejemplo camioneros y comercio. En Vialidad hay uno solo: al ser parte del Estado, todos están bajo el mismo convenio, pero eso no vale para cualquier empresa ni para cualquier país. Dentro de cada convenio puede haber **regímenes**, que son variantes como "con horas extra" o "solo se registra". Cada persona se encuadra en un convenio y, opcionalmente, en uno de sus regímenes.
+
+Cada regla vale en el nivel **más específico** en que esté cargada: **persona > régimen > convenio > empresa**. La idea es cargar lo común una sola vez, en el convenio, y que el régimen cambie solo lo que es distinto.
+
+- **Topes y excedente** (`overtime_regime_policies.regime_id`): se busca la política del régimen; si no hay, la del convenio; si tampoco, la de la empresa. La autorización individual de una persona reemplaza los topes.
+- **Reglas por tipo de día** (`day_type_overtime_rules.regime_id`): se resuelven **por cada tipo de día**. Por ejemplo, un régimen puede cambiar solo el sábado y heredar del convenio el domingo y los feriados.
+- **Motor anterior** (`dayTypeRuleResolver`): los pesos son binarios (plantilla 8, convenio 4, régimen 2, empresa 1). Así, la regla de un régimen le gana a la de su convenio sin cambiar el orden entre las reglas que ya existían. Además, la regla de un régimen se aplica solo a quien está en ese régimen.
+- Un régimen que está en uso no se borra, se desactiva: borrarlo cambiaría en silencio cómo se liquida a su gente.
+- No hay que confundirlo con `employee_convention_assignments.category_id`, que es la **categoría** laboral (el escalafón), otro concepto.
+
+Arreglo encontrado al hacer esto: las reglas de convenio que se cargan desde la pantalla se guardan con `tenant_id` NULL, porque el convenio ya pertenece a la empresa. Por eso el cálculo del régimen (B3) no las leía. Ahora las lee por el convenio.
 
 ## Preguntas ya respondidas por el dueño del producto
 

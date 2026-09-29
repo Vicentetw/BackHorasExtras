@@ -3725,7 +3725,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       // hubo; si no, del primer al ultimo fichaje.
       const juntarDiaFueraDeJornada = (date, checks, tipoDeDia, schedule) => {
         if (!diasRegimen || checks.length < 2) return;
-        if (!regimenCfg.politicaPara(regimenCfg.regimenDe(u.internalEmployeeId, date), date)) return;
+        const enc = regimenCfg.encuadreDe(u.internalEmployeeId, date);
+        if (!regimenCfg.politicaPara(enc.conventionId, date, enc.regimeId)) return;
         const he = heIntervalsByEmployeeDate.get(`${employeeId}|${date}`);
         const ini = he && he.timeOut ? he.timeOut : new Date(String(checks[0]).replace(' ', 'T'));
         const fin = he && he.timeIn ? he.timeIn : new Date(String(checks[checks.length - 1]).replace(' ', 'T'));
@@ -3943,6 +3944,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
                 (r) => r.valid_from <= date && (r.valid_to === null || r.valid_to >= date)
               );
               const activeConventionId = activeConventionAssignment ? activeConventionAssignment.convention_id : null;
+              const activeRegimeId = activeConventionAssignment ? activeConventionAssignment.regime_id ?? null : null;
               // Un candidato aplica si NO esta restringido a otro
               // tenant/plantilla/convenio -- null en cualquiera de los 3
               // significa "sin restriccion a ese nivel" (regla global en
@@ -3958,6 +3960,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
                 (r.tenant_id == null || r.tenant_id === u.tenantId)
                 && (r.template_id == null || r.template_id === schedule.templateId)
                 && (r.convention_id == null || r.convention_id === activeConventionId)
+                // Regla de un regimen: solo para quien esta en ese regimen.
+                && (r.regime_id == null || r.regime_id === activeRegimeId)
               );
               // Etapa 14 (hallazgo #3): la config de tolerancia que regia
               // ESE DIA, no la actual de la plantilla -- sin snapshots
@@ -4040,8 +4044,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
           // Solo si una politica cubre a esta persona ese dia (la de su regimen
           // o la de la empresa): configurar un regimen para algunos NO cambia
           // a los demas. Sin politica, el dia queda exactamente como hoy.
-          const regimenIdDelDia = diasRegimen ? regimenCfg.regimenDe(u.internalEmployeeId, date) : null;
-          const politicaDelDia = diasRegimen ? regimenCfg.politicaPara(regimenIdDelDia, date) : null;
+          const encuadreDelDia = diasRegimen ? regimenCfg.encuadreDe(u.internalEmployeeId, date) : null;
+          const politicaDelDia = diasRegimen ? regimenCfg.politicaPara(encuadreDelDia.conventionId, date, encuadreDelDia.regimeId) : null;
           if (diasRegimen && politicaDelDia) {
             autoLegacyMinutes += isManuallyOmitted ? 0 : computedOvertimeMinutes;
             // Fuente segun el regimen: solo marcadores, solo fichajes, o
@@ -4334,11 +4338,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       let regimenHorasExtra = null;
       if (diasRegimen && diasRegimen.length) {
         const internalId = u.internalEmployeeId;
-        const regimenEn = (f) => regimenCfg.regimenDe(internalId, f);
+        const enc = (f) => regimenCfg.encuadreDe(internalId, f);
         const r = horasExtraRegimen.calcularPeriodo({
           dias: diasRegimen,
-          politicaDe: (f) => regimenCfg.politicaPara(regimenEn(f), f),
-          reglasDe: (f) => regimenCfg.reglasDe(regimenEn(f)),
+          politicaDe: (f) => { const e = enc(f); return regimenCfg.politicaPara(e.conventionId, f, e.regimeId); },
+          reglasDe: (f) => { const e = enc(f); return regimenCfg.reglasDe(e.conventionId, e.regimeId); },
           autorizacionDe: (f) => regimenCfg.autorizacionPara(internalId, f),
           aprobadosDe: (periodo) => regimenCfg.aprobadosEn(internalId, periodo),
           autorizado: overtimeAuthorizationMode !== 'custom'

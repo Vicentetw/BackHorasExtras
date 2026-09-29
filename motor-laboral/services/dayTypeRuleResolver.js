@@ -8,13 +8,16 @@ const DAY_TYPES = ['WORKDAY', 'SATURDAY', 'SUNDAY', 'REST_DAY', 'HOLIDAY', 'SPEC
 const TRIGGER_TYPES = ['BEFORE_SCHEDULE', 'AFTER_SCHEDULE', 'ALL_DAY'];
 
 // Cuando varias reglas candidatas matchean el mismo dia+trigger, gana la
-// mas especifica: template > convenio > tenant > global. No es una regla
+// mas especifica: template > regimen del convenio > convenio > tenant >
+// global (pesos binarios: cada nivel pesa mas que todos los de abajo juntos,
+// asi el orden entre reglas existentes no cambia al sumar el regimen). No es una regla
 // de negocio hardcodeada -- es solo el criterio de desempate entre datos
 // que el propio usuario cargo a distintos niveles.
 function specificityScore(rule) {
   let score = 0;
-  if (rule.template_id != null) score += 4;
-  if (rule.convention_id != null) score += 2;
+  if (rule.template_id != null) score += 8;
+  if (rule.convention_id != null) score += 4;
+  if (rule.regime_id != null) score += 2;
   if (rule.tenant_id != null) score += 1;
   return score;
 }

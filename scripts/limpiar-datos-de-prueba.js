@@ -84,7 +84,7 @@ async function main() {
     'overtime_excess_approvals', 'employee_overtime_authorizations', 'overtime_regime_policies',
     'rule_engine_shadow_diffs', 'work_schedule_template_config_history',
     'employee_convention_assignments', 'employee_work_calendars',
-    'day_type_overtime_rules', 'labor_conventions',
+    'day_type_overtime_rules', 'labor_convention_regimes', 'labor_conventions',
     'ManualEntries', 'userexclusions', 'specialusers', 'dailyattendance',
     'dayassignments', 'attendance_calculation_results',
     'attendance_calculation_runs',

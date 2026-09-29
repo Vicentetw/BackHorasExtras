@@ -50,9 +50,10 @@ module.exports = function (db) {
     const tenantId = tenantONada(req, res); if (tenantId == null) return;
     try {
       const [rows] = await db.query(
-        `SELECT p.*, c.name AS regimen, au.email AS created_by_email
+        `SELECT p.*, c.name AS regimen, rg.name AS regimen_interno, au.email AS created_by_email
          FROM overtime_regime_policies p
          LEFT JOIN labor_conventions c ON c.id = p.convention_id
+         LEFT JOIN labor_convention_regimes rg ON rg.id = p.regime_id
          LEFT JOIN app_users au ON au.id = p.created_by
          WHERE p.tenant_id = ? ORDER BY p.convention_key, p.vigente_desde DESC`, [tenantId]);
       res.json({ politicas: rows });
@@ -69,7 +70,14 @@ module.exports = function (db) {
       const conventionId = b.conventionId == null || b.conventionId === '' ? null : Number(b.conventionId);
       if (conventionId != null) {
         const [[c]] = await db.query('SELECT id FROM labor_conventions WHERE id = ? AND tenant_id = ?', [conventionId, tenantId]);
-        if (!c) return res.status(404).json({ error: 'Régimen no encontrado' });
+        if (!c) return res.status(404).json({ error: 'Convenio no encontrado' });
+      }
+      // Regimen dentro del convenio (migracion 20261007): opcional.
+      const regimeId = b.regimeId == null || b.regimeId === '' ? null : Number(b.regimeId);
+      if (regimeId != null) {
+        const [[rg]] = conventionId == null ? [[null]] : await db.query(
+          'SELECT id FROM labor_convention_regimes WHERE id = ? AND convention_id = ? AND tenant_id = ?', [regimeId, conventionId, tenantId]);
+        if (!rg) return res.status(404).json({ error: 'Régimen no encontrado en ese convenio' });
       }
       if (!FECHA.test(b.vigenteDesde || '')) return res.status(400).json({ error: 'vigenteDesde (AAAA-MM-DD) es requerido' });
       const topes = {
@@ -89,10 +97,10 @@ module.exports = function (db) {
       }
       const [r] = await db.query(
         `INSERT INTO overtime_regime_policies
-           (tenant_id, convention_id, vigente_desde, tope_dia_minutos, tope_mes_minutos, tope_anio_minutos,
+           (tenant_id, convention_id, regime_id, vigente_desde, tope_dia_minutos, tope_mes_minutos, tope_anio_minutos,
             politica_excedente, fuente, minimo_minutos, redondeo_minutos, redondeo_modo, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [tenantId, conventionId, b.vigenteDesde, topes.dia, topes.mes, topes.anio, politica, fuente, topes.minimo, topes.redondeo, modo, autor(req)]
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [tenantId, conventionId, regimeId, b.vigenteDesde, topes.dia, topes.mes, topes.anio, politica, fuente, topes.minimo, topes.redondeo, modo, autor(req)]
       );
       res.status(201).json({ ok: true, id: r.insertId });
     } catch (err) {

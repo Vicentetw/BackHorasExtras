@@ -15,7 +15,7 @@
 // que la FK de la tabla). date: 'YYYY-MM-DD'.
 async function findActiveAssignment(employeeId, date, db) {
   const [rows] = await db.query(
-    `SELECT id, employee_id, tenant_id, convention_id, category_id, valid_from, valid_to
+    `SELECT id, employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to
      FROM employee_convention_assignments
      WHERE employee_id = ?
        AND valid_from <= ?
@@ -37,7 +37,7 @@ async function findActiveAssignmentsForEmployees(employeeIds, date, db) {
   if (safeIds.length === 0) return map;
 
   const [rows] = await db.query(
-    `SELECT id, employee_id, tenant_id, convention_id, category_id, valid_from, valid_to
+    `SELECT id, employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to
      FROM employee_convention_assignments
      WHERE employee_id IN (?)
        AND valid_from <= ?
@@ -62,7 +62,7 @@ async function findAssignmentRowsForRange(fromDate, toDate, employeeIds, db) {
   if (safeIds.length === 0) return {};
 
   const [rows] = await db.query(
-    `SELECT id, employee_id, tenant_id, convention_id, category_id, valid_from, valid_to
+    `SELECT id, employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to
      FROM employee_convention_assignments
      WHERE employee_id IN (?)
        AND valid_from <= ?

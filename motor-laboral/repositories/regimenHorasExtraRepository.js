@@ -31,7 +31,7 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
   ).catch(ignorarTablaFaltante);
 
   const [asignaciones] = ids.length ? await db.query(
-    `SELECT employee_id, convention_id, valid_from, valid_to FROM employee_convention_assignments
+    `SELECT employee_id, convention_id, regime_id, valid_from, valid_to FROM employee_convention_assignments
      WHERE tenant_id = ? AND employee_id IN (?) AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
      ORDER BY valid_from`,
     [tenantId, ids, hasta, desde]
@@ -55,10 +55,14 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
   ).catch(ignorarTablaFaltante) : [[]];
 
   const convenciones = [...new Set(asignaciones.map((a) => a.convention_id))];
+  // Las reglas de un convenio se guardan con tenant_id NULL (el convenio ya
+  // es de la empresa: ver POST /day-type-rules); las de la empresa, con
+  // tenant_id y sin convenio. Los convenios vienen de asignaciones ya
+  // filtradas por tenant, asi que no se mezclan empresas.
   const [reglas] = await db.query(
     `SELECT * FROM day_type_overtime_rules
-     WHERE tenant_id = ? AND active = 1 AND template_id IS NULL
-       AND (convention_id IS NULL ${convenciones.length ? 'OR convention_id IN (?)' : ''})`,
+     WHERE active = 1 AND template_id IS NULL
+       AND ((tenant_id = ? AND convention_id IS NULL) ${convenciones.length ? 'OR convention_id IN (?)' : ''})`,
     convenciones.length ? [tenantId, convenciones] : [tenantId]
   );
 
@@ -75,18 +79,25 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
     // Hay algo configurado para la empresa: si no, el calculo sigue como hoy.
     hayConfiguracion: politicas.length > 0,
 
+    // Convenio de la persona en esa fecha (se mantiene por compatibilidad).
     regimenDe(employeeId, fecha) {
-      const a = vigenteA(asignaciones.filter((x) => x.employee_id === employeeId), fecha, 'valid_from', 'valid_to');
-      return a ? a.convention_id : null;
+      return this.encuadreDe(employeeId, fecha).conventionId;
     },
 
-    // La politica del regimen, o si el regimen no tiene, la de la empresa
-    // (convention_id NULL). null si no hay ninguna vigente.
-    politicaPara(conventionId, fecha) {
-      const propia = conventionId != null
-        ? vigenteA(politicas.filter((p) => p.convention_id === conventionId), fecha, 'vigente_desde')
-        : null;
-      const p = propia || vigenteA(politicas.filter((x) => x.convention_id == null), fecha, 'vigente_desde');
+    // Convenio Y regimen dentro del convenio (migracion 20261007).
+    encuadreDe(employeeId, fecha) {
+      const a = vigenteA(asignaciones.filter((x) => x.employee_id === employeeId), fecha, 'valid_from', 'valid_to');
+      return { conventionId: a ? a.convention_id : null, regimeId: a ? a.regime_id ?? null : null };
+    },
+
+    // La politica mas especifica vigente: regimen > convenio > empresa.
+    // null si no hay ninguna.
+    politicaPara(conventionId, fecha, regimeId = null) {
+      const deNivel = (conv, reg) => vigenteA(
+        politicas.filter((p) => (p.convention_id ?? null) === conv && (p.regime_id ?? null) === reg), fecha, 'vigente_desde');
+      const p = (conventionId != null && regimeId != null ? deNivel(conventionId, regimeId) : null)
+        || (conventionId != null ? deNivel(conventionId, null) : null)
+        || deNivel(null, null);
       if (!p) return null;
       return {
         topes: { dia: p.tope_dia_minutos, mes: p.tope_mes_minutos, anio: p.tope_anio_minutos },
@@ -108,11 +119,24 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
       return a ? Number(a.minutos) : 0;
     },
 
-    // Reglas por tipo de dia del regimen; si el regimen no tiene propias, las
-    // de la empresa (convention_id NULL).
-    reglasDe(conventionId) {
-      const propias = conventionId != null ? reglas.filter((r) => r.convention_id === conventionId) : [];
-      return propias.length ? propias : reglas.filter((r) => r.convention_id == null);
+    // Reglas por tipo de dia, la mas especifica POR CADA tipo de dia:
+    // regimen > convenio > empresa. Asi un regimen puede cambiar solo el
+    // sabado y heredar el resto del convenio.
+    reglasDe(conventionId, regimeId = null) {
+      const nivel = (r) => {
+        if (regimeId != null && r.convention_id === conventionId && (r.regime_id ?? null) === regimeId) return 3;
+        if (conventionId != null && r.convention_id === conventionId && (r.regime_id ?? null) == null) return 2;
+        if (r.convention_id == null && (r.regime_id ?? null) == null) return 1;
+        return 0;
+      };
+      const mejorPorDia = new Map();
+      for (const r of reglas) {
+        const n = nivel(r);
+        if (!n) continue;
+        const actual = mejorPorDia.get(r.day_type);
+        if (!actual || n > actual.n) mejorPorDia.set(r.day_type, { n, r });
+      }
+      return [...mejorPorDia.values()].map((x) => x.r);
     },
   };
 }
