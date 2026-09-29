@@ -1,6 +1,7 @@
 const express = require('express');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../../appUserMiddleware');
 const { getAppSetting, setAppSetting } = require('../repositories/appSettingsRepository');
+const { consultarConRegimeId } = require('../repositories/regimeIdOpcional');
 const { parseList } = require('../services/countryFirewallService');
 const {
   invalidateCache: invalidateFirewallCache,
@@ -976,14 +977,16 @@ function createMotorLaboralAdminRoutes(db) {
       if (scopeError) return res.status(400).json({ error: scopeError });
 
       const [result] = await db.query(
+        // Sin regimen no se nombra la columna (migracion 20261007 pendiente).
         `INSERT INTO day_type_overtime_rules
-           (tenant_id, convention_id, regime_id, template_id, day_type, trigger_type, classification_type, rate, requires_authorization, active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (tenant_id, convention_id, template_id, day_type, trigger_type, classification_type, rate, requires_authorization, active${regime_id == null ? '' : ', regime_id'})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${regime_id == null ? '' : ', ?'})`,
         [
-          tenant_id ?? null, convention_id ?? null, regime_id, template_id ?? null, day_type, trigger_type,
+          tenant_id ?? null, convention_id ?? null, template_id ?? null, day_type, trigger_type,
           classification_type || 'OVERTIME', rate ?? null,
           requires_authorization === undefined || requires_authorization ? 1 : 0,
-          active === undefined || active ? 1 : 0
+          active === undefined || active ? 1 : 0,
+          ...(regime_id == null ? [] : [regime_id])
         ]
       );
       res.status(201).json({ ok: true, id: result.insertId });
@@ -1059,7 +1062,7 @@ function createMotorLaboralAdminRoutes(db) {
           return res.status(404).json({ error: 'Empleado no encontrado' });
         }
       }
-      const [rows] = await db.query(
+      const [rows] = await consultarConRegimeId(db,
         `SELECT id, employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to, created_at
          FROM employee_convention_assignments WHERE employee_id = ? ORDER BY valid_from DESC`,
         [employeeId]
@@ -1103,9 +1106,13 @@ function createMotorLaboralAdminRoutes(db) {
       );
 
       const [result] = await db.query(
-        `INSERT INTO employee_convention_assignments (employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [employeeId, emp.tenant_id, convention_id, regime_id, category_id ?? null, valid_from, valid_to || null]
+        // Sin regimen no se nombra la columna: funciona antes y despues de la migracion 20261007.
+        regime_id == null
+          ? `INSERT INTO employee_convention_assignments (employee_id, tenant_id, convention_id, category_id, valid_from, valid_to)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          : `INSERT INTO employee_convention_assignments (employee_id, tenant_id, convention_id, category_id, valid_from, valid_to, regime_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [employeeId, emp.tenant_id, convention_id, category_id ?? null, valid_from, valid_to || null, ...(regime_id == null ? [] : [regime_id])]
       );
       res.status(201).json({ id: result.insertId, employee_id: employeeId, convention_id, regime_id, category_id: category_id ?? null, valid_from, valid_to: valid_to || null });
     } catch (err) {

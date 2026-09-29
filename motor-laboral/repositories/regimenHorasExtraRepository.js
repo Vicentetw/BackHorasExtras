@@ -7,6 +7,8 @@
 // responde en memoria para cada persona/fecha. Con 5000 empleados, una
 // consulta por persona y por dia seria inviable.
 
+const { consultarConRegimeId } = require('./regimeIdOpcional');
+
 function fechaStr(v) {
   if (v == null) return null;
   return String(v).slice(0, 10);
@@ -30,7 +32,7 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
     [tenantId, hasta]
   ).catch(ignorarTablaFaltante);
 
-  const [asignaciones] = ids.length ? await db.query(
+  const [asignaciones] = ids.length ? await consultarConRegimeId(db,
     `SELECT employee_id, convention_id, regime_id, valid_from, valid_to FROM employee_convention_assignments
      WHERE tenant_id = ? AND employee_id IN (?) AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
      ORDER BY valid_from`,

@@ -144,3 +144,22 @@ test('un regimen en uso no se borra (se desactiva); uno sin uso si', async () =>
   assert.equal((await pedir('PUT', `${ADMIN}/regimes/${r.id}`, { name: 'Temporal 2', active: false })).status, 200);
   assert.equal((await pedir('DELETE', `${ADMIN}/regimes/${r.id}`)).status, 200);
 });
+
+test('antes de la migracion 20261007 (sin columna regime_id) se lee como hoy: nadie tiene regimen', async () => {
+  const { consultarConRegimeId } = require('../motor-laboral/repositories/regimeIdOpcional');
+  const vistas = [];
+  const dbFalsa = {
+    async query(sql) {
+      vistas.push(sql);
+      if (/\bregime_id\b/.test(sql.replace('NULL AS regime_id', ''))) {
+        throw Object.assign(new Error("Unknown column 'regime_id' in 'field list'"), { code: 'ER_BAD_FIELD_ERROR' });
+      }
+      return [[{ employee_id: 1, convention_id: 2, regime_id: null }]];
+    },
+  };
+  const [filas] = await consultarConRegimeId(dbFalsa, 'SELECT employee_id, convention_id, regime_id FROM x', []);
+  assert.equal(filas[0].regime_id, null);
+  assert.match(vistas[1], /NULL AS regime_id/);
+  // Cualquier otro error se propaga tal cual.
+  await assert.rejects(consultarConRegimeId({ query: async () => { throw Object.assign(new Error('otro'), { code: 'ER_PARSE_ERROR' }); } }, 'x', []), /otro/);
+});

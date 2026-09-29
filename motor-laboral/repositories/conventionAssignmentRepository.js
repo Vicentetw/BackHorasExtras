@@ -11,10 +11,12 @@
 // valid_to: pedir la fecha de un mes ya cerrado devuelve el convenio que
 // estaba vigente ESE dia, no el actual.
 
+const { consultarConRegimeId } = require('./regimeIdOpcional');
+
 // employeeId: employees.id (PK interno, no el legajo -- mismo criterio
 // que la FK de la tabla). date: 'YYYY-MM-DD'.
 async function findActiveAssignment(employeeId, date, db) {
-  const [rows] = await db.query(
+  const [rows] = await consultarConRegimeId(db,
     `SELECT id, employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to
      FROM employee_convention_assignments
      WHERE employee_id = ?
@@ -36,7 +38,7 @@ async function findActiveAssignmentsForEmployees(employeeIds, date, db) {
   const safeIds = (employeeIds || []).filter((id) => typeof id === 'number' && !Number.isNaN(id));
   if (safeIds.length === 0) return map;
 
-  const [rows] = await db.query(
+  const [rows] = await consultarConRegimeId(db,
     `SELECT id, employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to
      FROM employee_convention_assignments
      WHERE employee_id IN (?)
@@ -61,7 +63,7 @@ async function findAssignmentRowsForRange(fromDate, toDate, employeeIds, db) {
   const safeIds = (employeeIds || []).filter((id) => typeof id === 'number' && !Number.isNaN(id));
   if (safeIds.length === 0) return {};
 
-  const [rows] = await db.query(
+  const [rows] = await consultarConRegimeId(db,
     `SELECT id, employee_id, tenant_id, convention_id, regime_id, category_id, valid_from, valid_to
      FROM employee_convention_assignments
      WHERE employee_id IN (?)
