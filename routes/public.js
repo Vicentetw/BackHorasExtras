@@ -6,6 +6,7 @@ const { computeFreeTrialPeriod } = require('../motor-laboral/services/billingCal
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const { verifyTurnstileToken } = require('../motor-laboral/services/turnstileService');
 const { askSalesChat } = require('../motor-laboral/services/salesChatService');
+const { enviarEmailDeContrasena } = require('../motor-laboral/services/firebaseEmail');
 const { createCountryFirewallMiddleware } = require('../motor-laboral/middleware/countryFirewallMiddleware');
 
 // Fase 11: landing publica + alta de cliente autoservicio + chatbot de
@@ -120,13 +121,27 @@ module.exports = function (db) {
       // tiene cuenta (createInvitedUser tambien lo valida, pero mas tarde,
       // despues de ya haber creado tenant+suscripcion).
       const [[existingUser]] = await db.query('SELECT id FROM app_users WHERE email = ?', [email]);
-      if (existingUser) {
-        return res.status(409).json({ error: 'Ese email ya tiene una cuenta en el sistema.' });
-      }
 
       // El token del chat se crea junto con el lead y se devuelve UNA sola
       // vez, mas abajo. En la base queda solo el hash.
       const chat = generarChatToken();
+
+      // F-04: un email que YA tiene cuenta recibe la MISMA respuesta que uno
+      // nuevo. Antes devolvia 409 "ese email ya tiene cuenta", y eso dejaba
+      // averiguar que emails estan registrados probando de a uno. Ahora no
+      // se crea nada: a su dueño le llega el email para recuperar la clave
+      // (si fue el, le sirve; si no fue el, no pasa nada), y el intento queda
+      // como lead 'failed' con el motivo, para que se vea en el panel.
+      if (existingUser) {
+        const [dup] = await db.query(
+          `INSERT INTO signup_leads (name, company_name, email, phone, status, error_message, chat_token_hash)
+           VALUES (?, ?, ?, ?, 'failed', ?, ?)`,
+          [name, companyName, email, phone || null,
+           'El email ya tenia una cuenta: no se creo nada y se le mando el email para recuperar la contraseña.', chat.hash]
+        );
+        await enviarEmailDeContrasena(email);
+        return res.status(201).json({ ok: true, leadId: dup.insertId, chatToken: chat.token, emailEnviado: true });
+      }
 
       const [leadResult] = await db.query(
         `INSERT INTO signup_leads (name, company_name, email, phone, contact_preference, employee_count, clock_count, schedule_type, status, chat_token_hash)
@@ -160,11 +175,20 @@ module.exports = function (db) {
           db
         );
 
-        const created = await appUserRepository.createInvitedUser({ email, tenantId, isSuperadmin: false }, db);
+        await appUserRepository.createInvitedUser({ email, tenantId, isSuperadmin: false }, db);
 
         await db.query(`UPDATE signup_leads SET tenant_id = ?, status = 'provisioned' WHERE id = ?`, [tenantId, leadId]);
 
-        res.status(201).json({ ok: true, leadId, chatToken: chat.token, resetLink: created.resetLink });
+        // F-04: el link para poner la contraseña ya NO viaja en la respuesta
+        // (cualquiera que se registrara con un email ajeno se lo quedaba). Lo
+        // manda Firebase al email, asi solo lo ve su dueño.
+        const envio = await enviarEmailDeContrasena(email);
+        if (!envio.enviado && envio.motivo !== 'dominio de prueba') {
+          console.warn(`[alta autoservicio] no se pudo mandar el email de contraseña a lead ${leadId}: ${envio.motivo}`);
+          await db.query('UPDATE signup_leads SET error_message = ? WHERE id = ?',
+            [`Cuenta creada, pero no se pudo mandar el email de contraseña: ${String(envio.motivo).slice(0, 500)}`, leadId]);
+        }
+        res.status(201).json({ ok: true, leadId, chatToken: chat.token, emailEnviado: true });
       } catch (err) {
         await db.query(`UPDATE signup_leads SET status = 'failed', error_message = ? WHERE id = ?`, [
           String(err.message).slice(0, 1000),

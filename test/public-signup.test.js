@@ -87,6 +87,10 @@ test('POST /api/public/signup: alta completa de punta a punta (tenant + suscripc
   assert.equal(res.status, 201, JSON.stringify(json));
   assert.ok(json.leadId);
   createdLeadIds.push(json.leadId);
+  // F-04: el link para poner la contraseña NO viaja en la respuesta (quien
+  // se registrara con un email ajeno se lo quedaba): lo manda Firebase al email.
+  assert.equal(json.resetLink, undefined, 'la respuesta no puede traer el link de contraseña');
+  assert.equal(json.emailEnviado, true);
 
   const [[lead]] = await db.query('SELECT tenant_id, status FROM signup_leads WHERE id = ?', [json.leadId]);
   assert.equal(lead.status, 'provisioned');
@@ -147,7 +151,7 @@ test('POST /api/public/signup: rechaza un captcha invalido sin crear nada', asyn
   assert.equal(row, undefined, 'no debe haberse creado ninguna cuenta');
 });
 
-test('POST /api/public/signup: rechaza email ya usado, sin crear un tenant huerfano', async () => {
+test('POST /api/public/signup: email ya usado -> MISMA respuesta que uno nuevo, sin crear nada', async () => {
   const email = `test-public-signup-dup-${Date.now()}@example.com`;
   createdUserEmails.push(email);
 
@@ -171,12 +175,24 @@ test('POST /api/public/signup: rechaza email ya usado, sin crear un tenant huerf
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ turnstileToken: TURNSTILE_DUMMY_TOKEN, name: 'A', companyName: 'Empresa Dup 2', email })
   });
-  assert.equal(second.status, 409);
+  // F-04: antes era 409 "ese email ya tiene cuenta", y eso permitia averiguar
+  // que emails estan registrados. Ahora la respuesta es igual a la de un alta
+  // nueva; a su dueño le llega el email para recuperar la clave.
+  const secondJson = await second.json();
+  assert.equal(second.status, 201, JSON.stringify(secondJson));
+  assert.deepEqual(Object.keys(secondJson).sort(), Object.keys(firstJson).sort(), 'misma forma de respuesta');
+  assert.equal(secondJson.resetLink, undefined);
+  createdLeadIds.push(secondJson.leadId);
 
   // No debe haber un segundo tenant "Empresa Dup 2" -- el chequeo de email
   // duplicado corta ANTES de crear nada.
   const [[dupTenant]] = await db.query('SELECT id FROM tenants WHERE name = ?', ['Empresa Dup 2']);
   assert.equal(dupTenant, undefined);
+  // El intento queda registrado para el panel, con el motivo.
+  const [[lead2]] = await db.query('SELECT status, tenant_id, error_message FROM signup_leads WHERE id = ?', [secondJson.leadId]);
+  assert.equal(lead2.status, 'failed');
+  assert.equal(lead2.tenant_id, null);
+  assert.match(lead2.error_message, /ya tenia una cuenta/);
 });
 
 // Crea un lead de prueba con su token de chat ya armado. Devuelve el token
