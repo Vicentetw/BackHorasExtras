@@ -219,6 +219,8 @@ const db = require('./db');
 // Registrar holidays después de db
 app.use('/api/holidays', holidaysRoutes(db));
 app.use('/api/event-types', eventTypesRoutes(db));
+// Regimen de horas extra: politicas, autorizaciones y aprobaciones (B4).
+app.use('/api/regimen-horas-extra', require('./routes/regimenHorasExtra')(db));
 app.use('/api/employee-events', employeeEventsRoutes(db));
 app.use('/api/leave-balances', leaveBalancesRoutes(db));
 app.use('/api/employee-categories', employeeCategoriesRoutes(db));
