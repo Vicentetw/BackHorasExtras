@@ -233,7 +233,100 @@ function aplicarTopesDelPeriodo(dias, topes, { politica = 'AVISAR', yaComputadoE
   };
 }
 
+// ---------------------------------------------------------------------------
+// 5. Todo el periodo de una persona
+// ---------------------------------------------------------------------------
+
+/**
+ * Junta las piezas para UNA persona en un periodo (uno o varios meses):
+ * recorte por plantilla -> minimo/redondeo -> clasificacion por tipo de dia
+ * -> topes por mes (en orden cronologico) -> politica de excedente.
+ *
+ * @param {object} p
+ * @param {{fecha:string, tipoDeDia:string, intervalo:{inicio:number,fin:number}|null,
+ *          plantilla:{bloques:object[], cuentanDesde:number|null}, omitido?:boolean}[]} p.dias
+ *        un elemento por dia con tiempo candidato a hora extra (intervalo en
+ *        minutos del dia). `omitido`: el administrador tildo "Omitir" ese dia.
+ * @param {(fecha:string)=>object|null} p.politicaDe   politica del regimen vigente ese dia
+ * @param {(fecha:string)=>object[]} p.reglasDe         reglas por tipo de dia vigentes ese dia
+ * @param {(fecha:string)=>object|null} p.autorizacionDe autorizacion individual vigente
+ * @param {(periodo:string)=>number} p.aprobadosDe      minutos de excedente aprobados en 'AAAA-MM'
+ * @param {boolean} [p.autorizado]  si la persona esta autorizada a hacer HE (modo 'custom')
+ */
+function calcularPeriodo({ dias, politicaDe, reglasDe, autorizacionDe, aprobadosDe, autorizado = true }) {
+  const porDia = [];
+  const extrasPorMes = new Map();
+  let registradas = 0;
+  let noComputadas = 0;
+
+  for (const d of [...dias].sort((a, b) => (a.fecha < b.fecha ? -1 : 1))) {
+    if (d.omitido || !d.intervalo) continue;
+    const politica = politicaDe(d.fecha) || {};
+    const recorteExacto = recortarPorPlantilla(d.intervalo, d.plantilla || {});
+    // El intervalo puede venir con fraccion de segundos: se redondea una sola
+    // vez, al final, igual que el calculo de siempre.
+    // toFixed(6) antes de redondear: con fracciones de segundo (ej. 30/60) la
+    // resta en coma flotante da 195.4999999 en vez de 195.5, y redondeaba
+    // para abajo (1 min menos que el calculo de siempre, que trabaja con
+    // milisegundos enteros). Caso real: CHINELI 07/09.
+    const redondear = (x) => Math.round(Number(x.toFixed(6)));
+    const recorte = {
+      ...recorteExacto,
+      minutos: redondear(recorteExacto.minutos),
+      recortes: recorteExacto.recortes.map((x) => ({ ...x, minutos: redondear(x.minutos) })),
+    };
+    const ajuste = aplicarMinimoYRedondeo(recorte.minutos, { minimo: politica.minimo, redondeo: politica.redondeo, modo: politica.modo });
+    let clase = clasificarPorTipoDeDia(d.tipoDeDia, reglasDe(d.fecha), { autorizado });
+    // Modo "solo autorizados" de la empresa: quien no esta autorizado no cobra
+    // horas extra aunque su regimen diga EXTRA (igual que hoy); se registra.
+    if (!autorizado && clase.clase === 'EXTRA') {
+      clase = { clase: 'REGISTRAR', recargo: null, motivo: 'no está autorizado a hacer horas extra: se registra sin pagar' };
+    }
+    const fila = {
+      fecha: d.fecha, tipoDeDia: d.tipoDeDia, minutosFuera: recorte.minutos, minutos: ajuste.minutos,
+      clase: clase.clase, recargo: clase.recargo, recortes: recorte.recortes,
+      motivos: [ajuste.motivo, clase.motivo].filter(Boolean),
+    };
+    porDia.push(fila);
+    if (fila.minutos <= 0) continue;
+    if (clase.clase === 'REGISTRAR') registradas += fila.minutos;
+    else if (clase.clase === 'NO_COMPUTAR') noComputadas += fila.minutos;
+    else {
+      const mes = d.fecha.slice(0, 7);
+      if (!extrasPorMes.has(mes)) extrasPorMes.set(mes, []);
+      extrasPorMes.get(mes).push({ fecha: d.fecha, minutos: fila.minutos, recargo: clase.recargo });
+    }
+  }
+
+  // Topes y politica, mes por mes (el tope anual se acumula dentro del
+  // periodo consultado; ver HORAS_EXTRA_REGIMENES.md, "tope anual").
+  const total = { reales: 0, computables: 0, excedente: 0, pendiente: 0, porRecargo: {} };
+  const meses = [];
+  let yaComputadoEnElAnio = 0;
+  let anioActual = null;
+  for (const mes of [...extrasPorMes.keys()].sort()) {
+    const primerDia = `${mes}-01`;
+    if (mes.slice(0, 4) !== anioActual) { anioActual = mes.slice(0, 4); yaComputadoEnElAnio = 0; }
+    const politica = politicaDe(extrasPorMes.get(mes)[0].fecha) || politicaDe(primerDia) || {};
+    const topes = resolverTopes(politica.topes, autorizacionDe(primerDia) || autorizacionDe(extrasPorMes.get(mes)[0].fecha));
+    const r = aplicarTopesDelPeriodo(extrasPorMes.get(mes), topes, {
+      politica: politica.politica || 'AVISAR', yaComputadoEnElAnio, aprobados: aprobadosDe(mes),
+    });
+    yaComputadoEnElAnio += r.computables;
+    meses.push({ mes, topes, ...r });
+    for (const k of ['reales', 'computables', 'excedente', 'pendiente']) total[k] += r[k];
+    for (const [k, v] of Object.entries(r.porRecargo)) total.porRecargo[k] = (total.porRecargo[k] || 0) + v;
+    // Llevar el reparto de cada dia al detalle diario.
+    for (const x of r.detalle) {
+      const f = porDia.find((p) => p.fecha === x.fecha);
+      if (f) Object.assign(f, { computables: x.computables, excedente: x.excedente, pendiente: x.pendiente, motivosTope: x.motivos });
+    }
+  }
+  return { ...total, registradas, noComputadas, aviso: total.excedente > 0, meses, dias: porDia };
+}
+
 module.exports = {
+  calcularPeriodo,
   recortarPorPlantilla,
   aplicarMinimoYRedondeo,
   clasificarPorTipoDeDia,

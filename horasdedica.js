@@ -43,6 +43,8 @@ const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const campanaService = require('./motor-laboral/services/campanaService');
 const cupoMotivoRepository = require('./motor-laboral/repositories/cupoMotivoRepository');
 const tiposDeFichaje = require('./motor-laboral/services/tiposDeFichaje');
+const regimenHorasExtraRepository = require('./motor-laboral/repositories/regimenHorasExtraRepository');
+const horasExtraRegimen = require('./motor-laboral/services/horasExtraRegimen');
 
 // Cupo del motivo de una justificacion (migracion 20261005). Solo las de dia
 // completo gastan cupo: un permiso horario (type distinto de FULL_DAY) no.
@@ -3617,6 +3619,40 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
     const authModeValue = await getAppSetting('overtimeAuthorizationMode', tenantId, db);
     const overtimeAuthorizationMode = authModeValue || 'all';
 
+    // Regimen de horas extra (bloque B3, ver HORAS_EXTRA_REGIMENES.md): OPT-IN
+    // por empresa. Si la empresa no configuro ninguna politica, usaRegimen es
+    // false y TODO lo de abajo sigue exactamente como siempre. Se carga EN
+    // LOTE para todos los empleados del periodo (unas pocas consultas).
+    const regimenCfg = tenantId != null
+      ? await regimenHorasExtraRepository.cargarConfiguracion(db, tenantId, {
+          empleados: employees.map((e) => e.internalEmployeeId).filter((x) => Number.isInteger(x)),
+          desde: from, hasta: formatLocalDate(effectiveEndDate),
+        })
+      : null;
+    const usaRegimen = !!(regimenCfg && regimenCfg.hayConfiguracion);
+    // Minutos del dia de un Date, relativo a `date` (si el fin cae al dia
+    // siguiente, suma 1440). CON fraccion de segundos: el redondeo se hace
+    // una sola vez al final del dia, igual que el calculo de siempre
+    // (Math.round((fin - inicio) / 60000)); redondear cada extremo por
+    // separado daba minutos de diferencia en el mes.
+    const minutosDelDia = (d, date) => {
+      const m = d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+      return formatLocalDate(d) > date ? m + 1440 : m;
+    };
+    const plantillaParaRegimen = (schedule) => ({
+      bloques: ((schedule && schedule.blocks) || []).map((b) => {
+        const desde = timeToMinutes(String(b.start_time).slice(0, 5));
+        let hasta = timeToMinutes(String(b.end_time).slice(0, 5));
+        if (b.crosses_midnight || hasta <= desde) hasta += 1440;
+        return { tipo: b.block_type, desde, hasta };
+      }),
+      cuentanDesde: schedule && schedule.overtimeCutoffTime ? timeToMinutes(String(schedule.overtimeCutoffTime).slice(0, 5)) : null,
+    });
+    const tipoDeDiaFinDeSemana = (date) => {
+      const dow = scheduleRepository.getLocalDayOfWeek(date);
+      return dow === 6 ? 'SATURDAY' : dow === 0 ? 'SUNDAY' : 'REST_DAY';
+    };
+
     employees.forEach(u => {
       const employeeId = String(u.employeeId);
       // Turnos que cruzan medianoche ("sereno"): antes de calcular nada,
@@ -3676,6 +3712,23 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         antesDelDia = null;
       };
       const days = detailEmployeeId ? [] : null;
+      // Regimen (B3): dias con tiempo candidato a hora extra, y cuanto de la
+      // HE automatica de siempre se sumo (para reemplazar SOLO esa parte; las
+      // cargas manuales quedan exactamente como hoy).
+      const diasRegimen = usaRegimen ? [] : null;
+      let autoLegacyMinutes = 0;
+      // Dia no laborable o feriado con fichajes: con un regimen configurado
+      // ese tiempo se clasifica por tipo de dia (sin regimen, como siempre,
+      // no genera HE automatica). El intervalo es el marcado (9 -> 10) si lo
+      // hubo; si no, del primer al ultimo fichaje.
+      const juntarDiaFueraDeJornada = (date, checks, tipoDeDia, schedule) => {
+        if (!diasRegimen || checks.length < 2) return;
+        if (!regimenCfg.politicaPara(regimenCfg.regimenDe(u.internalEmployeeId, date), date)) return;
+        const he = heIntervalsByEmployeeDate.get(`${employeeId}|${date}`);
+        const ini = he && he.timeOut ? he.timeOut : new Date(String(checks[0]).replace(' ', 'T'));
+        const fin = he && he.timeIn ? he.timeIn : new Date(String(checks[checks.length - 1]).replace(' ', 'T'));
+        diasRegimen.push({ fecha: date, tipoDeDia, intervalo: { inicio: minutosDelDia(ini, date), fin: minutosDelDia(fin, date) }, plantilla: plantillaParaRegimen(schedule) });
+      };
       // Pedido real: un empleado inactivo (baja no cargada formalmente) no
       // debe contarse ni mostrarse como "ausente" solo por no fichar -- ver
       // el mismo criterio aplicado en attendanceService.js (motor diario).
@@ -3733,10 +3786,12 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
               inCampaign: enCampana || undefined,
             });
           }
+          juntarDiaFueraDeJornada(date, checks, tipoDeDiaFinDeSemana(date), schedule);
           return;
         }
 
         if (holidayNonWorkApplies) {
+          juntarDiaFueraDeJornada(date, checks, 'HOLIDAY', schedule);
           // Bug real (Fase 21): un feriado que aplicaba a este empleado
           // caia siempre en "NonWorkDay" generico -- el calendario
           // mensual/anual nunca distinguia "trabajo el feriado" de "no fue",
@@ -3980,6 +4035,29 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
           const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
           const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
           const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
+          // Solo si una politica cubre a esta persona ese dia (la de su regimen
+          // o la de la empresa): configurar un regimen para algunos NO cambia
+          // a los demas. Sin politica, el dia queda exactamente como hoy.
+          const regimenIdDelDia = diasRegimen ? regimenCfg.regimenDe(u.internalEmployeeId, date) : null;
+          const politicaDelDia = diasRegimen ? regimenCfg.politicaPara(regimenIdDelDia, date) : null;
+          if (diasRegimen && politicaDelDia) {
+            autoLegacyMinutes += isManuallyOmitted ? 0 : computedOvertimeMinutes;
+            // Fuente segun el regimen: solo marcadores, solo fichajes, o
+            // marcadores y si faltan el estimado (lo de siempre).
+            const fuente = politicaDelDia.fuente || 'MARCADORES_O_ESTIMADO';
+            let candidato = overtimeResult;
+            if (fuente === 'MARCADORES' && candidato && candidato.source !== 'marker') candidato = null;
+            if (fuente === 'FICHAJES') candidato = overtimeCalc.computeDailyOvertime(overtimeChecks, { cutoffMinutes: effectiveCutoffMinutes, capMinutes: effectiveCapMinutes });
+            const inicio = candidato && (candidato.markerStart || candidato.start);
+            const dow = scheduleRepository.getLocalDayOfWeek(date);
+            diasRegimen.push({
+              fecha: date,
+              tipoDeDia: dow === 6 ? 'SATURDAY' : dow === 0 ? 'SUNDAY' : 'WORKDAY',
+              intervalo: candidato && inicio && candidato.end ? { inicio: minutosDelDia(inicio, date), fin: minutosDelDia(candidato.end, date) } : null,
+              plantilla: plantillaParaRegimen(schedule),
+              omitido: isManuallyOmitted,
+            });
+          }
           // Pedido real: "el tope es una opcion solo para que salte un aviso
           // en el detalle, superó límite diario" -- se compara el TOTAL final
           // del dia (automatico + manual, ya sin el omitido) contra el tope
@@ -4249,6 +4327,31 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
       // cambio a mitad del rango, aunque en la practica es constante por
       // empleado) -- para el filtro "solo autorizados" del listado alcanza
       // con el mismo criterio que ya usa el modo 'all'/'custom' de arriba.
+      // Regimen (B3): computables segun topes/politica/recargos en lugar de la
+      // HE automatica de siempre. Las cargas manuales quedan como estaban.
+      let regimenHorasExtra = null;
+      if (diasRegimen && diasRegimen.length) {
+        const internalId = u.internalEmployeeId;
+        const regimenEn = (f) => regimenCfg.regimenDe(internalId, f);
+        const r = horasExtraRegimen.calcularPeriodo({
+          dias: diasRegimen,
+          politicaDe: (f) => regimenCfg.politicaPara(regimenEn(f), f),
+          reglasDe: (f) => regimenCfg.reglasDe(regimenEn(f)),
+          autorizacionDe: (f) => regimenCfg.autorizacionPara(internalId, f),
+          aprobadosDe: (periodo) => regimenCfg.aprobadosEn(internalId, periodo),
+          autorizado: overtimeAuthorizationMode !== 'custom'
+            ? true
+            : (u.overtimeAuthorized === undefined || u.overtimeAuthorized === null ? true : !!Number(u.overtimeAuthorized)),
+        });
+        const manualesMinutos = overtimeMinutes - autoLegacyMinutes;
+        overtimeMinutes = manualesMinutos + r.computables;
+        regimenHorasExtra = { ...r, manuales: manualesMinutos, dias: undefined };
+        if (days) {
+          const porFecha = new Map(r.dias.map((d) => [d.fecha, d]));
+          for (const d of days) if (porFecha.has(d.date)) d.regimen = porFecha.get(d.date);
+        }
+      }
+
       const rowIsOvertimeAuthorized = overtimeAuthorizationMode !== 'custom'
         ? true
         : (u.overtimeAuthorized === undefined || u.overtimeAuthorized === null ? true : !!Number(u.overtimeAuthorized));
@@ -4283,7 +4386,10 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
         // sigue abierta al ultimo dia (la que pide actuar YA). Ver
         // rachaFaltas arriba.
         faltasSeguidasMax: rachaFaltasMax,
-        faltasSeguidasAlFinal: rachaFaltas
+        faltasSeguidasAlFinal: rachaFaltas,
+        // Solo con un regimen de horas extra configurado (B3): reales /
+        // computables / excedente / pendiente / registradas / por recargo.
+        ...(regimenHorasExtra ? { regimenHorasExtra } : {})
       };
       if (days) {
         row.days = days;

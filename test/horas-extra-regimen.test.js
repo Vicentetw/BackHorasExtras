@@ -170,3 +170,78 @@ test('liquidacion por recargo: las horas del domingo al 100 % y las del habil al
   assert.deepEqual(r.porRecargo, { '50%': H(4), '100%': H(4) }, 'el tope corta el ultimo dia (08/09, al 50 %)');
   assert.equal(r.excedente, H(2));
 });
+
+// ---------------------------------------------------------------------------
+// 5. Todo el periodo de una persona (calcularPeriodo)
+// ---------------------------------------------------------------------------
+{
+  const { calcularPeriodo } = require('../motor-laboral/services/horasExtraRegimen');
+  const PLANTILLA = { bloques: [{ tipo: 'WORK', desde: hm('07:00'), hasta: hm('14:00') }, { tipo: 'BREAK', desde: hm('14:00'), hasta: hm('15:00') }], cuentanDesde: null };
+  const habil = (fecha, desde = '14:42', hasta = '18:01') => ({ fecha, tipoDeDia: 'WORKDAY', intervalo: { inicio: hm(desde), fin: hm(hasta) }, plantilla: PLANTILLA });
+  const base = (politica, reglas = REGIMEN_HE) => ({
+    politicaDe: () => politica, reglasDe: () => reglas, autorizacionDe: () => null, aprobadosDe: () => 0,
+  });
+
+  test('periodo: descanso recortado, domingo al 100 %, tope mensual y liquidacion por recargo', () => {
+    const dias = [
+      habil('2026-09-01'), habil('2026-09-02'),
+      { fecha: '2026-09-06', tipoDeDia: 'SUNDAY', intervalo: { inicio: hm('08:00'), fin: hm('12:00') }, plantilla: { bloques: [] } },
+      habil('2026-09-07'),
+    ];
+    const r = calcularPeriodo({ dias, ...base({ topes: { mes: H(10) }, politica: 'NO_COMPUTAR' }) });
+    // 181 + 181 (desde 15:00) + 240 domingo + 181 = 783 reales; tope 600
+    assert.equal(r.reales, 783);
+    assert.equal(r.computables, 600);
+    assert.equal(r.excedente, 183);
+    // Orden cronologico: 01 y 02 suman 362; el tope (600) se alcanza DURANTE el
+    // domingo 06 (entran 238 de sus 240 min, al 100 %) y el 07 queda entero
+    // como excedente.
+    assert.deepEqual(r.porRecargo, { '50%': 362, '100%': 238 });
+    assert.equal(r.dias.find((d) => d.fecha === '2026-09-07').excedente, 181);
+    assert.deepEqual(r.dias[0].recortes, [{ motivo: 'dentro del descanso', minutos: 18 }]);
+  });
+
+  test('periodo: el administrativo que ficha un sabado queda registrado, no pagado', () => {
+    const dias = [{ fecha: '2026-09-05', tipoDeDia: 'SATURDAY', intervalo: { inicio: hm('09:00'), fin: hm('12:00') }, plantilla: { bloques: [] } }];
+    const r = calcularPeriodo({ dias, ...base({ politica: 'AVISAR' }, REGIMEN_ADMIN) });
+    assert.equal(r.computables, 0);
+    assert.equal(r.registradas, 180);
+    assert.equal(r.dias[0].clase, 'REGISTRAR');
+  });
+
+  test('periodo: un dia tildado "Omitir" no cuenta; sin autorizacion (modo custom) se registra', () => {
+    const dias = [habil('2026-09-01'), { ...habil('2026-09-02'), omitido: true }];
+    assert.equal(calcularPeriodo({ dias, ...base({ politica: 'AVISAR' }) }).reales, 181);
+    const sinAut = calcularPeriodo({ dias: [habil('2026-09-01')], ...base({ politica: 'AVISAR' }, [{ day_type: 'WORKDAY', classification_type: 'EXTRA_SI_AUTORIZADO', rate: 50 }]), autorizado: false });
+    assert.equal(sinAut.computables, 0);
+    assert.equal(sinAut.registradas, 181);
+    const sinAutExtra = calcularPeriodo({ dias: [habil('2026-09-01')], ...base({ politica: 'AVISAR' }), autorizado: false });
+    assert.equal(sinAutExtra.computables, 0, 'con regimen EXTRA tambien: el modo "solo autorizados" se respeta');
+    assert.equal(sinAutExtra.registradas, 181);
+  });
+
+  test('periodo: cada mes tiene su propio tope mensual', () => {
+    const dias = [habil('2026-08-31', '15:00', '19:00'), habil('2026-09-01', '15:00', '19:00')];
+    const r = calcularPeriodo({ dias, ...base({ topes: { mes: H(3) }, politica: 'NO_COMPUTAR' }) });
+    assert.equal(r.computables, H(6), '3 h en agosto + 3 h en septiembre');
+    assert.deepEqual(r.meses.map((m) => [m.mes, m.computables, m.excedente]), [['2026-08', H(3), H(1)], ['2026-09', H(3), H(1)]]);
+  });
+
+  test('periodo: el minimo de la politica saca las "horas extra" de 9 minutos (RAMIREZ 22/09)', () => {
+    const dias = [habil('2026-09-22', '14:00', '15:09')];
+    const r = calcularPeriodo({ dias, ...base({ politica: 'AVISAR', minimo: 30 }) });
+    assert.equal(r.reales, 0);
+    assert.deepEqual(r.dias[0].motivos, ['menos del mínimo de 30 min']);
+  });
+}
+
+test('periodo: con segundos, redondea igual que el calculo de siempre (CHINELI 07/09: 195,5 min = 196)', () => {
+  const { calcularPeriodo } = require('../motor-laboral/services/horasExtraRegimen');
+  // 14:44:30 a 18:00:00 = 195,5 min exactos; en coma flotante 1080 - (884 + 30/60).
+  const inicio = 14 * 60 + 44 + 30 / 60;
+  const r = calcularPeriodo({
+    dias: [{ fecha: '2026-09-07', tipoDeDia: 'WORKDAY', intervalo: { inicio, fin: 18 * 60 }, plantilla: { bloques: [] } }],
+    politicaDe: () => ({ politica: 'AVISAR' }), reglasDe: () => [], autorizacionDe: () => null, aprobadosDe: () => 0,
+  });
+  assert.equal(r.reales, Math.round((new Date('2026-09-07T18:00:00') - new Date('2026-09-07T14:44:30')) / 60000));
+});

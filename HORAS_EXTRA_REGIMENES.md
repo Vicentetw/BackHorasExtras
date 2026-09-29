@@ -119,7 +119,7 @@ Reales 62 h  →  Computables 40 h (32 h al 50 % · 8 h al 100 %)
 |---|---|---|
 | B1 ✅ | Modelo de datos (migración `20261006`): `overtime_regime_policies` (no `overtime_policies`: esa ya existía, vacía y sin uso), `employee_overtime_authorizations`, `overtime_excess_approvals`. Lectura en lote: `regimenHorasExtraRepository.js` | Migración idempotente + `test/regimen-horas-extra-repo.test.js` |
 | B2 ✅ | Funciones puras (`horasExtraRegimen.js`): recorte por plantilla, mínimo/redondeo, clasificación por tipo de día, topes cronológicos, política de excedente | `test/horas-extra-regimen.test.js` (20 casos, con MARTENSEN, CHINELI y RAMÍREZ) |
-| B3 | Integración en el cálculo mensual: opt-in por empresa; sin régimen, idéntico a hoy (comparado contra toda AVP) | Resultado idéntico sin configuración; comparación en sombra de septiembre |
+| B3 ✅ | Integración en `/attendance-range`: solo los días cubiertos por una política (del régimen de la persona o de la empresa) pasan por el régimen; el resto queda como hoy. Reemplaza solo la parte automática (las cargas manuales quedan igual). Fines de semana y feriados con fichajes se clasifican por tipo de día. Fila: `regimenHorasExtra`; día: `regimen` | Septiembre de la copia de producción (479 empleados, 13.891 días): sin régimen, 0 diferencias; con un régimen para 3, los otros 476 sin diferencias y los 3 con los mismos minutos reales día por día. `test/regimen-horas-extra-mensual.test.js` |
 | B4 | Pantallas: régimen (con modelos por país), asignación por persona, autorización individual, Presentismo (reales / computables / excedente / sin pago), aprobación de excedente | Recorrido completo probado en navegador |
 | B5 | Informe para liquidación: por persona, por recargo, exportable | Coincide con Presentismo al minuto |
 
@@ -131,3 +131,10 @@ Reales 62 h  →  Computables 40 h (32 h al 50 % · 8 h al 100 %)
 - Hay regímenes donde sábados y domingos van al 50 % y feriados/domingos al
   100 %, y otros donde lo fuera de horario **no se paga pero se registra**
   (posible "hora de dedicación" a futuro).
+
+## Limitaciones conocidas (a resolver en B5, cierre de mes)
+
+- **Tope anual**: hoy se acumula dentro del período consultado. Para que
+  cuente los meses anteriores hace falta guardar el resultado de cada mes
+  cerrado (cierre de mes), que es parte del informe de liquidación.
+
