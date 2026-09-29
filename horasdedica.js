@@ -42,6 +42,7 @@ const attendanceCalc = require('./motor-laboral/services/attendanceCalculations'
 const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const campanaService = require('./motor-laboral/services/campanaService');
 const cupoMotivoRepository = require('./motor-laboral/repositories/cupoMotivoRepository');
+const tiposDeFichaje = require('./motor-laboral/services/tiposDeFichaje');
 
 // Cupo del motivo de una justificacion (migracion 20261005). Solo las de dia
 // completo gastan cupo: un permiso horario (type distinto de FULL_DAY) no.
@@ -4675,6 +4676,97 @@ app.post('/config/campana-presentismo-modo', requirePermission('schedules', 'upd
   } catch (err) {
     console.error('ERROR saving campana presentismo modo:', err);
     res.status(500).json({ error: 'Error saving campana presentismo modo' });
+  }
+});
+
+// ============================================================================
+// GET /api/fichajes-del-dia?fecha=AAAA-MM-DD[&employeeId=legajo]
+// ============================================================================
+//
+// Que es cada fichaje del dia, para todos los empleados de la empresa (o uno):
+// entrada, salida/regreso particular u oficial, inicio/fin de horas extra,
+// salida/regreso de campaña, repetido. Ver motor-laboral/services/tiposDeFichaje.js.
+//
+// Usa EXACTAMENTE las mismas detecciones que los reportes: detectMovements
+// por categoria, con la ventana de la empresa, "gana el ultimo" y las
+// correcciones manuales de marcadores; y para campaña, detectarCampanas. Lo
+// que el reporte de Salidas descarta (regla AVILA: el marcador coincide con
+// el primer fichaje del dia) se muestra marcado como descartado, con el
+// motivo, en vez de esconderlo.
+//
+// Un solo pedido para todo el dia (no uno por empleado): la deteccion ya
+// recorre todos los fichajes del dia de una vez, asi que es barato aunque
+// la empresa tenga miles de empleados.
+app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const fecha = String(req.query.fecha || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ error: 'fecha (AAAA-MM-DD) es requerida' });
+    const soloLegajo = req.query.employeeId ? String(req.query.employeeId) : null;
+
+    const siguiente = nextDayStr(fecha);
+    const checkins = await fetchMovementCheckins(fecha, siguiente, tenantId);
+    const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+    const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
+    const correccionesMarcadores = await campanaService.fetchCorreccionesMarcadores(db, fecha, siguiente, tenantId);
+    const fmt = movementsCalc.fechaHoraLocal;
+
+    const badgeDe = (userId) => (userId != null && todosLosMarcadores[userId]) ? todosLosMarcadores[userId].badgeNumber : null;
+    const marcadorDe = (ev, rol) => {
+      const d = campanaService.datosDeMarcadores(ev, correccionesMarcadores);
+      const userId = rol === 'salida' ? d.salidaMarkerUserId : d.regresoMarkerUserId;
+      if (userId == null) return null;
+      return {
+        userId,
+        badge: badgeDe(userId),
+        at: rol === 'salida' ? d.salidaMarkerAt : d.regresoMarkerAt,
+        correccion: rol === 'salida' ? d.salidaCorreccion : d.regresoCorreccion,
+      };
+    };
+
+    const legajos = [...new Set(checkins.filter(c => c.employeeId).map(c => c.employeeId))]
+      .filter(l => !soloLegajo || l === soloLegajo);
+    const marcasPorLegajo = new Map(legajos.map(l => [l, []]));
+    const DESCARTE_AVILA = 'coincide con su primer fichaje del día: el marcador probablemente era de otra persona, y el reporte de Salidas no lo cuenta';
+
+    for (const categoria of ['PARTICULAR', 'OFICIAL', 'HE']) {
+      const markerMap = await fetchMarkerMap(categoria, tenantId);
+      if (!Object.keys(markerMap).length) continue;
+      const r = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
+      // La regla AVILA solo la aplica el reporte de Particular/Oficial.
+      const descarte = categoria === 'HE'
+        ? () => null
+        : (ev) => (movementsCalc.filterEventsOpenedByFirstCheckinOfDay([ev], checkins).length ? null : DESCARTE_AVILA);
+      for (const legajo of legajos) {
+        marcasPorLegajo.get(legajo).push(...tiposDeFichaje.marcasDeEventos(categoria, r, legajo, fmt, marcadorDe, descarte));
+      }
+    }
+
+    // Campaña: su propia deteccion (varios dias, rebote refinado).
+    for (const ev of await detectarCampanas(tenantId, fecha, fecha)) {
+      if (!marcasPorLegajo.has(ev.employeeId)) continue;
+      const marcas = marcasPorLegajo.get(ev.employeeId);
+      const conMarcador = (userId, at, correccion) => (userId == null ? null : { userId, badge: badgeDe(userId), at, correccion });
+      if (ev.timeOut && formatLocalDate(ev.timeOut) === fecha) {
+        marcas.push({ categoria: 'CAMPANA', rol: 'salida', en: fmt(ev.timeOut), sinPar: !ev.hasReturn,
+          marcador: conMarcador(ev.salidaMarkerUserId, ev.salidaMarkerAt, ev.salidaCorreccion) });
+      }
+      if (ev.timeIn && formatLocalDate(ev.timeIn) === fecha) {
+        marcas.push({ categoria: 'CAMPANA', rol: 'regreso', en: fmt(ev.timeIn),
+          marcador: conMarcador(ev.regresoMarkerUserId, ev.regresoMarkerAt, ev.regresoCorreccion) });
+      }
+    }
+
+    const empleados = {};
+    for (const legajo of legajos) {
+      const propios = checkins.filter(c => c.employeeId === legajo).map(c => fmt(c.checktime));
+      empleados[legajo] = tiposDeFichaje.clasificarFichajesDelDia({ fichajes: propios, marcas: marcasPorLegajo.get(legajo) });
+    }
+    res.json({ fecha, empleados });
+  } catch (err) {
+    console.error('ERROR fetching fichajes del dia:', err);
+    res.status(500).json({ error: 'Error calculando los tipos de fichaje' });
   }
 });
 
