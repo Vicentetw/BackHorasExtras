@@ -46,6 +46,11 @@ jobs:
       # ANTHROPIC_API_KEY y MERCADOPAGO_ACCESS_TOKEN NO se configuran aca a
       # proposito -- los tests que los necesitan se saltan solos.
       FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      # La suite hace ~800 pedidos desde una sola IP en pocos minutos: con los
+      # limites de produccion (300/min, 60/min en reportes) el backend la
+      # frenaba con 429. Solo para el CI; ver limiteDesdeEnv en security.js.
+      RATE_LIMIT_POR_MINUTO: 100000
+      RATE_LIMIT_REPORTES_POR_MINUTO: 100000
 
     steps:
       - uses: actions/checkout@v4

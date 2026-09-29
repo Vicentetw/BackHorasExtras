@@ -10,9 +10,21 @@ const { appUserMiddleware } = require('./appUserMiddleware');
 // API publica de alto trafico. El objetivo es frenar un scaneo/ataque de
 // fuerza bruta, no molestar el uso normal (un dashboard puede disparar
 // varias decenas de requests en paralelo al cargar). 300/min por IP.
+//
+// Los dos limites se pueden cambiar por variable de entorno, con los MISMOS
+// valores de siempre por default (nada cambia en produccion si no se tocan).
+// Existe por el CI: la suite completa corre ~800 tests contra un backend,
+// todos desde la misma IP y en pocos minutos, y en la maquina rapida de
+// GitHub pasaba los 300/min -> 110 tests fallaban con 429 (2026-09-29). El
+// workflow sube estos limites solo para esa corrida.
+function limiteDesdeEnv(nombre, porDefecto) {
+  const n = Number(process.env[nombre]);
+  return Number.isInteger(n) && n > 0 ? n : porDefecto;
+}
+
 const apiRateLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 300,
+  limit: limiteDesdeEnv('RATE_LIMIT_POR_MINUTO', 300),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Demasiadas solicitudes, intenta de nuevo en un momento.' }
@@ -44,7 +56,7 @@ function claveDeReporte(req) {
 
 const reportesRateLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 60,
+  limit: limiteDesdeEnv('RATE_LIMIT_REPORTES_POR_MINUTO', 60),
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: claveDeReporte,
