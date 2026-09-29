@@ -32,7 +32,7 @@ otra no cobra nada fuera de su horario pero se lo tiene que registrar. Entonces:
 | **Plantilla** | `work_schedule_templates` + `shift_blocks` | ¿Cuándo trabaja? Jornada, descansos, ventana de horas extra. Nada de plata. |
 | **Régimen** (convenio) | `labor_conventions` + reglas | ¿Cómo se computa y se paga lo que excede la jornada? |
 | **Asignación** | `employee_convention_assignments` (con vigencia) | ¿Qué régimen tiene esta persona en esta fecha? Sin asignación: el régimen por defecto de la empresa. |
-| **Autorización individual** | nueva | "Esta persona puede hacer hasta N h/mes desde tal fecha" |
+| **Autorización individual** | `employee_overtime_authorizations` | "Esta persona puede hacer hasta N h/mes desde tal fecha". **Reemplaza** el tope del régimen para esa persona (existe justamente para dar más o menos horas que el régimen). |
 
 Nada de la ley va en el código: todo sale de datos. Para arrancar rápido se
 ofrecen **modelos por país** (ej. "Argentina — norma general: 3 h/día, 30 h/mes,
@@ -87,8 +87,9 @@ mismo recorte**: el resultado no depende de si usó el marcador o no.
 3. **Clasificación por tipo de día** con las reglas del régimen: `EXTRA` (con
    recargo), `REGISTRAR`, `NO_COMPUTAR`, `EXTRA_SI_AUTORIZADO`.
 4. **Mínimo y redondeo**.
-5. **Topes en capas** (empresa → régimen → persona; gana el más restrictivo),
-   consumidos **en orden cronológico** dentro del período: las primeras horas
+5. **Topes**: los de la persona si tiene una autorización individual (la
+   reemplaza, tope por tope); si no, los de su régimen; si su régimen no tiene,
+   los de la empresa. Se consumen **en orden cronológico** dentro del período: las primeras horas
    del mes son computables, el resto excedente. Así queda definido qué horas
    van al 50 % y cuáles al 100 %.
 6. **Política de excedente** y aprobaciones puntuales.
@@ -116,8 +117,8 @@ Reales 62 h  →  Computables 40 h (32 h al 50 % · 8 h al 100 %)
 
 | Paso | Qué | Terminado cuando… |
 |---|---|---|
-| B1 | Modelo de datos: topes y política de excedente por régimen (con vigencia), autorización individual, aprobaciones de excedente, fuente/mínimo/redondeo. Migración. | Migración idempotente + tests de repositorio |
-| B2 | Funciones puras: recorte por plantilla (descansos/ventana), clasificación por tipo de día, mínimo/redondeo, topes en capas cronológicos, política de excedente | Tests con los casos reales, incluidos los de este documento |
+| B1 ✅ | Modelo de datos (migración `20261006`): `overtime_regime_policies` (no `overtime_policies`: esa ya existía, vacía y sin uso), `employee_overtime_authorizations`, `overtime_excess_approvals`. Lectura en lote: `regimenHorasExtraRepository.js` | Migración idempotente + `test/regimen-horas-extra-repo.test.js` |
+| B2 ✅ | Funciones puras (`horasExtraRegimen.js`): recorte por plantilla, mínimo/redondeo, clasificación por tipo de día, topes cronológicos, política de excedente | `test/horas-extra-regimen.test.js` (20 casos, con MARTENSEN, CHINELI y RAMÍREZ) |
 | B3 | Integración en el cálculo mensual: opt-in por empresa; sin régimen, idéntico a hoy (comparado contra toda AVP) | Resultado idéntico sin configuración; comparación en sombra de septiembre |
 | B4 | Pantallas: régimen (con modelos por país), asignación por persona, autorización individual, Presentismo (reales / computables / excedente / sin pago), aprobación de excedente | Recorrido completo probado en navegador |
 | B5 | Informe para liquidación: por persona, por recargo, exportable | Coincide con Presentismo al minuto |
