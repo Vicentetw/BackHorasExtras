@@ -160,4 +160,12 @@ Pantalla: **Liquidación y cierre de mes**. API: `/api/liquidacion-horas-extra` 
 - No se cierra un mes que no terminó (según la zona horaria de la empresa). Dos administradores cerrando al mismo tiempo no pueden dejar dos fotos: se bloquea la fila de la empresa (`FOR UPDATE`).
 - El cierre es **mensual** porque los topes de los convenios son mensuales y anuales. La pantalla **Horas Extra por Régimen** agrupa por período de *pago* (semanal, quincenal o mensual), que es otro concepto, y sigue igual.
 
-Pendiente, a propósito: el cierre todavía no bloquea que se corrijan fichajes, licencias o cargas manuales de un mes cerrado. Esas correcciones se pueden hacer, pero no cambian lo liquidado, y "Comparar" las muestra. Bloquearlas es una decisión de negocio: hay empresas que corrigen y liquidan la diferencia el mes siguiente.
+**Corregir un mes cerrado y pagar la diferencia al mes siguiente** (decisión del dueño del producto, 2026-09-30; migración `20261009`). El cierre **no** bloquea las correcciones de fichajes, licencias ni cargas manuales. En cambio:
+
+- El informe de un mes abierto revisa los **3 meses anteriores** que estén cerrados (`MESES_AJUSTE`; medido en la copia de producción, cerca de 0,6 s por mes).
+- Para cada persona calcula **lo que da hoy ese mes − lo ya pagado por él** (la foto del cierre + los ajustes ya pagados). La diferencia es el **"Ajuste de meses anteriores"**, con su mes de origen: positiva se paga, negativa se descuenta.
+- Total a pagar = lo del mes + ajuste.
+- Al cerrar el mes, los ajustes quedan guardados como **pagados** (`overtime_period_adjustments`), así el mes siguiente no los vuelve a pagar. Si después la corrección se deshace, aparece el ajuste contrario.
+- "Comparar" usa exactamente la misma cuenta, así las dos cosas nunca se contradicen.
+- Un ajuste pagado vale mientras su mes de pago siga cerrado. No se puede reabrir un mes cuyo ajuste ya se pagó en otro mes cerrado: primero hay que reabrir ese.
+- La parte computable del ajuste suma al **tope anual del año de origen**, porque esas horas se trabajaron entonces.

@@ -81,7 +81,7 @@ async function main() {
   const enOrden = [
     'manual_entry_log', 'user_exclusion_log', 'manual_checkin_log',
     'marker_correction_log', 'marker_corrections', 'event_type_quotas',
-    'overtime_period_results', 'overtime_period_closings',
+    'overtime_period_adjustments', 'overtime_period_results', 'overtime_period_closings',
     'overtime_excess_approvals', 'employee_overtime_authorizations', 'overtime_regime_policies',
     'rule_engine_shadow_diffs', 'work_schedule_template_config_history',
     'employee_convention_assignments', 'employee_work_calendars',

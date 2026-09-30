@@ -70,6 +70,17 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
      WHERE r.tenant_id = ? AND r.employee_id IN (?) AND r.periodo < ?`,
     [tenantId, anios, tenantId, ids, desde.slice(0, 7)]
   ).catch(ignorarTablaFaltante) : [[]];
+  // Mas los ajustes de meses anteriores ya pagados (migracion 20261009):
+  // cuentan para el año del mes de ORIGEN, que es cuando se trabajaron.
+  const [ajustesCerrados] = ids.length && anios.length ? await db.query(
+    `SELECT a.employee_id, a.periodo_origen AS periodo, a.computables
+     FROM overtime_period_adjustments a
+     JOIN (SELECT periodo, MAX(id) AS ultimo FROM overtime_period_closings WHERE tenant_id = ? GROUP BY periodo) u ON u.ultimo = a.closing_id
+     JOIN overtime_period_closings c ON c.id = u.ultimo AND c.accion = 'CERRAR'
+     WHERE a.tenant_id = ? AND a.employee_id IN (?) AND LEFT(a.periodo_origen, 4) IN (?) AND a.periodo_origen < ?`,
+    [tenantId, tenantId, ids, anios, desde.slice(0, 7)]
+  ).catch(ignorarTablaFaltante) : [[]];
+  cerrados.push(...ajustesCerrados);
 
   const convenciones = [...new Set(asignaciones.map((a) => a.convention_id))];
   // Las reglas de un convenio se guardan con tenant_id NULL (el convenio ya

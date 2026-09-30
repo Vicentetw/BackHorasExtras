@@ -15,7 +15,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
-const { mesAnterior, ultimoDia } = require('../routes/liquidacionHorasExtra');
+const { mesAnterior, mesesAntes, ultimoDia } = require('../routes/liquidacionHorasExtra');
 const { calcularPeriodo } = require('../motor-laboral/services/horasExtraRegimen');
 
 const URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
@@ -44,6 +44,7 @@ const de = (informe, p) => informe.filas.find((f) => f.legajo === p.legajo);
 
 async function cleanup() {
   for (const t of [T, OTRA]) {
+    await db.query('DELETE FROM overtime_period_adjustments WHERE tenant_id = ?', [t]);
     await db.query('DELETE FROM overtime_period_results WHERE tenant_id = ?', [t]);
     await db.query('DELETE FROM overtime_period_closings WHERE tenant_id = ?', [t]);
     await db.query('DELETE FROM overtime_excess_approvals WHERE tenant_id = ?', [t]);
@@ -121,6 +122,7 @@ test('funciones puras: mes anterior, ultimo dia, y el tope anual arranca con lo 
   assert.equal(mesAnterior('2026-01'), null, 'enero no tiene anterior dentro del año');
   assert.equal(ultimoDia('2026-02'), '2026-02-28');
   assert.equal(ultimoDia('2028-02'), '2028-02-29');
+  assert.deepEqual(mesesAntes('2026-02', 3), ['2026-01', '2025-12', '2025-11'], 'en febrero se revisa hasta noviembre del año anterior');
   const plantilla = { bloques: [{ tipo: 'WORK', desde: 420, hasta: 840 }], cuentanDesde: null };
   const dias = ['2026-02-02', '2026-02-03'].map((fecha) => ({ fecha, tipoDeDia: 'WORKDAY', intervalo: { inicio: 900, fin: 1080 }, plantilla }));
   const base = {
@@ -178,11 +180,19 @@ test('cerrar enero: queda la foto, y febrero descuenta enero del tope anual', as
   assert.equal(de(await liq('2026-02'), SIN).aLiquidar, 900, 'sin regimen no cambia');
 });
 
-test('la foto no cambia si despues se corrige un fichaje; comparar muestra la diferencia', async () => {
-  await horasExtra(SIN, ['2026-01-12'], 1); // aparece un dia mas de HE en enero
+test('corregir un mes cerrado: la foto no cambia y la diferencia se paga al mes siguiente', async () => {
+  await horasExtra(SIN, ['2026-01-12'], 1); // aparece un dia mas de HE en enero (+3 h)
   const enero = await liq('2026-01', '&comparar=1');
   assert.equal(de(enero, SIN).aLiquidar, 900, 'lo cerrado queda como se liquido');
   assert.deepEqual(enero.diferencias, [{ legajo: SIN.legajo, nombre: `Liq ${SIN.legajo}`, cerrado: 900, hoy: 1080 }]);
+
+  const feb = await liq('2026-02');
+  assert.equal(de(feb, SIN).aLiquidar, 900, 'lo propio de febrero no cambia');
+  assert.equal(de(feb, SIN).ajuste, 180);
+  assert.deepEqual(de(feb, SIN).ajustes, [{ periodo: '2026-01', minutos: 180 }]);
+  assert.equal(de(feb, SIN).aPagar, 1080);
+  assert.equal(de(feb, CON).ajuste, 0, 'a quien no se le corrigio nada, sin ajuste');
+  assert.equal(feb.totales.ajuste, 180);
 });
 
 test('orden dentro del año: no se cierra marzo con febrero abierto, ni se reabre enero con febrero cerrado', async () => {
@@ -190,7 +200,9 @@ test('orden dentro del año: no se cierra marzo con febrero abierto, ni se reabr
   assert.equal(marzo.status, 409);
   assert.match((await marzo.json()).error, /2026-02/);
 
-  assert.equal((await post('/cierres', { periodo: '2026-02' })).status, 201);
+  const feb = await post('/cierres', { periodo: '2026-02' });
+  assert.equal(feb.status, 201);
+  assert.equal((await feb.json()).ajustes, 1, 'el ajuste de enero queda pagado en febrero');
   assert.equal((await post('/cierres/reabrir', { periodo: '2026-01', motivo: 'x' })).status, 409, 'febrero depende de enero');
   assert.equal((await post('/cierres/reabrir', { periodo: '2026-02' })).status, 400, 'sin motivo no');
 });
@@ -201,6 +213,22 @@ test('un mes cerrado no acepta aprobaciones de excedente', async () => {
     body: JSON.stringify({ employeeId: conInterno, periodo: '2026-02', minutos: 60, motivo: 'jefe de obra' }),
   });
   assert.equal(r.status, 409);
+});
+
+test('un ajuste pagado no se vuelve a pagar, y si la correccion se deshace se descuenta', async () => {
+  assert.deepEqual((await liq('2026-01', '&comparar=1')).diferencias, [], 'enero ya quedo saldado con el ajuste de febrero');
+  const febCerrado = await liq('2026-02');
+  assert.equal(febCerrado.estado, 'CERRADO');
+  assert.equal(de(febCerrado, SIN).ajuste, 180, 'el ajuste pagado queda en la foto de febrero');
+  assert.equal(de(febCerrado, SIN).aPagar, 1080);
+  assert.equal(de(await liq('2026-03'), SIN)?.ajuste ?? 0, 0, 'marzo no lo vuelve a pagar');
+
+  // Se descubre que el dia agregado estaba mal: se borra.
+  await db.query(`DELETE FROM Checkins WHERE tenant_id = ? AND CHECKTIME BETWEEN '2026-01-12 00:00:00' AND '2026-01-12 23:59:59'`, [T]);
+  const marzo = de(await liq('2026-03'), SIN);
+  assert.equal(marzo.ajuste, -180, 'se descuenta lo que se pago de mas');
+  assert.deepEqual(marzo.ajustes, [{ periodo: '2026-01', minutos: -180 }]);
+  assert.equal(marzo.aPagar, -180);
 });
 
 test('otra empresa no ve ni toca los cierres ajenos', async () => {
@@ -220,7 +248,7 @@ test('reabrir en orden inverso deja el historial completo y el mes vuelve al cal
   assert.equal((await post('/cierres/reabrir', { periodo: '2026-01', motivo: 'fichaje corregido' })).status, 201);
   const enero = await liq('2026-01');
   assert.equal(enero.estado, 'REABIERTO');
-  assert.equal(de(enero, SIN).aLiquidar, 1080, 'en vivo ya ve el dia agregado');
+  assert.equal(de(enero, SIN).aLiquidar, 900, 'en vivo: el dia agregado ya se borro');
   const { cierres } = await (await fetch(`${URL}/api/liquidacion-horas-extra/cierres?anio=2026&tenantId=${T}`, { headers: h })).json();
   assert.deepEqual(cierres.map((c) => `${c.periodo} ${c.accion}`), ['2026-01 REABRIR', '2026-02 REABRIR', '2026-02 CERRAR', '2026-01 CERRAR']);
   assert.equal(cierres[0].motivo, 'fichaje corregido');

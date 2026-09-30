@@ -9,6 +9,13 @@
 //   POST /cierres        { periodo }             cierra el mes (guarda la foto)
 //   POST /cierres/reabrir { periodo, motivo }    lo reabre (motivo obligatorio)
 //
+// AJUSTES DE MESES ANTERIORES (migracion 20261009): un mes cerrado se puede
+// seguir corrigiendo y la diferencia se paga (o descuenta) al mes siguiente.
+// El informe de un mes abierto revisa los MESES_AJUSTE meses anteriores que
+// esten cerrados: lo que da hoy cada uno MENOS lo ya pagado por el (foto +
+// ajustes ya pagados) = "ajuste". Al cerrar, esos ajustes quedan PAGADOS.
+// "Comparar" usa exactamente la misma cuenta, asi nunca se contradicen.
+//
 // LA REGLA DE ORO: el informe sale del MISMO calculo que Presentismo
 // (`calcularAsistencia`, que corre /attendance-range dentro del proceso).
 // No hay una segunda formula que pueda dar distinto.
@@ -22,6 +29,24 @@ const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
 const { hoyDeEmpresa } = require('../motor-laboral/services/hoyEmpresa');
 
 const PERIODO = /^\d{4}-(0[1-9]|1[0-2])$/;
+// Cuantos meses para atras se buscan correcciones. Medido en la copia de
+// produccion (479 personas): ~0,6 s por mes, asi que 3 meses suman ~2 s.
+const MESES_AJUSTE = 3;
+
+// Los `n` meses anteriores a `periodo`, del mas cercano al mas lejano,
+// cruzando de año si hace falta (en enero se revisa diciembre).
+function mesesAntes(periodo, n) {
+  let [a, m] = periodo.split('-').map(Number);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    m -= 1;
+    if (m === 0) { m = 12; a -= 1; }
+    out.push(`${a}-${String(m).padStart(2, '0')}`);
+  }
+  return out;
+}
+
+const jsonDe = (v) => (typeof v === 'string' ? JSON.parse(v) : (v || {}));
 
 function mesAnterior(periodo) {
   const [a, m] = periodo.split('-').map(Number);
@@ -60,9 +85,9 @@ function filaDeLiquidacion(row, encuadre) {
 const tieneAlgo = (f) => f.aLiquidar || f.reales || f.registradas || f.noComputadas || f.excedente || f.pendiente;
 
 function totales(filas) {
-  const t = { personas: filas.length, aLiquidar: 0, computables: 0, manuales: 0, excedente: 0, pendiente: 0, registradas: 0, porRecargo: {} };
+  const t = { personas: filas.length, aLiquidar: 0, ajuste: 0, aPagar: 0, computables: 0, manuales: 0, excedente: 0, pendiente: 0, registradas: 0, porRecargo: {} };
   for (const f of filas) {
-    for (const k of ['aLiquidar', 'computables', 'manuales', 'excedente', 'pendiente', 'registradas']) t[k] += f[k];
+    for (const k of ['aLiquidar', 'ajuste', 'aPagar', 'computables', 'manuales', 'excedente', 'pendiente', 'registradas']) t[k] += f[k] || 0;
     for (const [k, v] of Object.entries(f.porRecargo)) t.porRecargo[k] = (t.porRecargo[k] || 0) + v;
   }
   return t;
@@ -141,7 +166,84 @@ module.exports = function (db, { calcularAsistencia }) {
     }));
   }
 
-  const ordenar = (filas) => filas.sort((a, b) => b.aLiquidar - a.aLiquidar || String(a.nombre).localeCompare(String(b.nombre)));
+  // Ajustes ya PAGADOS por un mes de origen, que siguen valiendo: el mes en
+  // que se pagaron sigue cerrado (si se reabrio, dejan de contar).
+  async function ajustesPagadosDe(tenantId, origen, conn = db) {
+    const [rows] = await conn.query(
+      `SELECT a.* FROM overtime_period_adjustments a
+       JOIN (SELECT periodo, MAX(id) AS ultimo FROM overtime_period_closings WHERE tenant_id = ? GROUP BY periodo) u ON u.ultimo = a.closing_id
+       JOIN overtime_period_closings c ON c.id = u.ultimo AND c.accion = 'CERRAR'
+       WHERE a.tenant_id = ? AND a.periodo_origen = ?`, [tenantId, tenantId, origen]).catch((err) => {
+      if (err.code === 'ER_NO_SUCH_TABLE') return [[]]; // migracion 20261009 pendiente
+      throw err;
+    });
+    return rows;
+  }
+
+  // Diferencia de un mes CERRADO: lo que da hoy menos lo ya pagado por el.
+  // Solo las personas que cambian. `minutos` puede ser negativo (descuento).
+  async function diferenciasDe(req, tenantId, periodo, cierre) {
+    const pagado = new Map();
+    const sumar = (legajo, nombre, minutos, computables, porRecargo) => {
+      const p = pagado.get(legajo) || { nombre, minutos: 0, computables: 0, porRecargo: {} };
+      p.minutos += minutos; p.computables += computables;
+      for (const [k, v] of Object.entries(porRecargo || {})) p.porRecargo[k] = (p.porRecargo[k] || 0) + v;
+      pagado.set(legajo, p);
+    };
+    for (const f of await foto(cierre.id)) sumar(f.legajo, f.nombre, f.aLiquidar, f.computables, f.porRecargo);
+    for (const a of await ajustesPagadosDe(tenantId, periodo)) sumar(Number(a.legajo), a.nombre, a.minutos, a.computables, jsonDe(a.por_recargo));
+
+    const cero = { minutos: 0, computables: 0, porRecargo: {} };
+    const hoy = new Map((await calcularEnVivo(req, tenantId, periodo)).map((f) => [f.legajo, f]));
+    const out = [];
+    for (const legajo of new Set([...hoy.keys(), ...pagado.keys()])) {
+      const v = hoy.get(legajo);
+      const p = pagado.get(legajo) || cero;
+      const ahora = v ? { minutos: v.aLiquidar, computables: v.computables, porRecargo: v.porRecargo } : cero;
+      const porRecargo = {};
+      for (const k of new Set([...Object.keys(ahora.porRecargo), ...Object.keys(p.porRecargo)])) {
+        const d = (ahora.porRecargo[k] || 0) - (p.porRecargo[k] || 0);
+        if (d) porRecargo[k] = d;
+      }
+      const minutos = ahora.minutos - p.minutos;
+      const computables = ahora.computables - p.computables;
+      if (minutos || computables) {
+        out.push({ legajo, nombre: v ? v.nombre : p.nombre, periodoOrigen: periodo, pagado: p.minutos, hoy: ahora.minutos, minutos, computables, porRecargo });
+      }
+    }
+    return out;
+  }
+
+  // Ajustes a pagar en `periodo`: las diferencias de los meses anteriores
+  // que estan cerrados.
+  async function ajustesParaMes(req, tenantId, periodo) {
+    const origenes = mesesAntes(periodo, MESES_AJUSTE);
+    const e = await estados(tenantId, origenes);
+    const out = [];
+    for (const p of origenes) if (estaCerrado(e[p])) out.push(...await diferenciasDe(req, tenantId, p, e[p]));
+    return out;
+  }
+
+  // Suma a cada fila su ajuste (y agrega a quien solo tiene ajuste).
+  function aplicarAjustes(filas, ajustes) {
+    const porLegajo = new Map(filas.map((f) => [f.legajo, f]));
+    for (const f of filas) { f.ajuste = 0; f.ajustes = []; }
+    for (const a of ajustes) {
+      let f = porLegajo.get(a.legajo);
+      if (!f) {
+        f = { legajo: a.legajo, nombre: a.nombre, convenio: null, regimen: null, conRegimen: false, reales: 0, computables: 0, manuales: 0, aLiquidar: 0,
+          excedente: 0, pendiente: 0, registradas: 0, noComputadas: 0, porRecargo: {}, ajuste: 0, ajustes: [] };
+        porLegajo.set(a.legajo, f);
+        filas.push(f);
+      }
+      f.ajuste += a.minutos;
+      f.ajustes.push({ periodo: a.periodoOrigen, minutos: a.minutos });
+    }
+    for (const f of filas) f.aPagar = f.aLiquidar + f.ajuste;
+    return filas;
+  }
+
+  const ordenar = (filas) => filas.sort((a, b) => b.aPagar - a.aPagar || String(a.nombre).localeCompare(String(b.nombre)));
 
   router.get('/', requirePermission('attendance', 'read'), async (req, res) => {
     const tenantId = tenantONada(req, res); if (tenantId == null) return;
@@ -150,27 +252,26 @@ module.exports = function (db, { calcularAsistencia }) {
     try {
       const estado = (await estados(tenantId, [periodo]))[periodo] || null;
       if (estaCerrado(estado)) {
-        const filas = ordenar(await foto(estado.id));
+        const [pagados] = await db.query('SELECT * FROM overtime_period_adjustments WHERE closing_id = ?', [estado.id])
+          .catch((err) => (err.code === 'ER_NO_SUCH_TABLE' ? [[]] : Promise.reject(err)));
+        const filas = ordenar(aplicarAjustes(await foto(estado.id),
+          pagados.map((a) => ({ legajo: Number(a.legajo), nombre: a.nombre, periodoOrigen: a.periodo_origen, minutos: a.minutos }))));
         const respuesta = {
           periodo, estado: 'CERRADO',
           cierre: { id: estado.id, fecha: estado.created_at, por: estado.created_by_email },
           filas, totales: totales(filas),
         };
         if (req.query.comparar === '1') {
-          const vivo = new Map((await calcularEnVivo(req, tenantId, periodo)).map((f) => [f.legajo, f]));
-          const cambian = [];
-          for (const f of filas) {
-            const v = vivo.get(f.legajo);
-            if (!v || v.aLiquidar !== f.aLiquidar) cambian.push({ legajo: f.legajo, nombre: f.nombre, cerrado: f.aLiquidar, hoy: v ? v.aLiquidar : 0 });
-            vivo.delete(f.legajo);
-          }
-          for (const v of vivo.values()) cambian.push({ legajo: v.legajo, nombre: v.nombre, cerrado: 0, hoy: v.aLiquidar });
-          respuesta.diferencias = cambian;
+          // "cerrado" = lo ya pagado por este mes (foto + ajustes ya pagados
+          // en meses siguientes); lo que falte se paga el mes que viene.
+          respuesta.diferencias = (await diferenciasDe(req, tenantId, periodo, estado))
+            .filter((d) => d.minutos)
+            .map((d) => ({ legajo: d.legajo, nombre: d.nombre, cerrado: d.pagado, hoy: d.hoy }));
         }
         return res.json(respuesta);
       }
-      const filas = ordenar(await calcularEnVivo(req, tenantId, periodo));
-      res.json({ periodo, estado: estado ? 'REABIERTO' : 'ABIERTO', filas, totales: totales(filas) });
+      const filas = ordenar(aplicarAjustes(await calcularEnVivo(req, tenantId, periodo), await ajustesParaMes(req, tenantId, periodo)));
+      res.json({ periodo, estado: estado ? 'REABIERTO' : 'ABIERTO', mesesAjuste: MESES_AJUSTE, filas, totales: totales(filas) });
     } catch (err) {
       console.error('ERROR liquidacion horas extra:', err);
       res.status(err.status || 500).json({ error: err.status ? err.message : 'Error armando el informe' });
@@ -223,6 +324,8 @@ module.exports = function (db, { calcularAsistencia }) {
       if (antes) return res.status(antes.status).json({ error: antes.error });
 
       const filas = await calcularEnVivo(req, tenantId, periodo);
+      const ajustes = await ajustesParaMes(req, tenantId, periodo);
+      aplicarAjustes(filas, ajustes);
       const [emps] = await db.query('SELECT id, employee_id FROM employees WHERE tenant_id = ?', [tenantId]);
       const idDe = new Map(emps.map((e) => [Number(e.employee_id), e.id]));
 
@@ -237,7 +340,8 @@ module.exports = function (db, { calcularAsistencia }) {
         const [c] = await conn.query(
           `INSERT INTO overtime_period_closings (tenant_id, periodo, accion, created_by) VALUES (?, ?, 'CERRAR', ?)`,
           [tenantId, periodo, autor(req)]);
-        const valores = filas.filter((f) => idDe.has(f.legajo)).map((f) => [
+        // Solo la parte propia del mes (quien solo tiene ajuste no va a la foto).
+        const valores = filas.filter((f) => idDe.has(f.legajo) && tieneAlgo(f)).map((f) => [
           c.insertId, tenantId, periodo, idDe.get(f.legajo), f.legajo, f.nombre, f.convenio, f.regimen, f.conRegimen ? 1 : 0,
           f.reales, f.computables, f.manuales, f.aLiquidar, f.excedente, f.pendiente, f.registradas, f.noComputadas, JSON.stringify(f.porRecargo),
         ]);
@@ -248,8 +352,17 @@ module.exports = function (db, { calcularAsistencia }) {
                 reales, computables, manuales, a_liquidar, excedente, pendiente, registradas, no_computadas, por_recargo)
              VALUES ?`, [valores]);
         }
+        const valoresAjuste = ajustes.filter((a) => idDe.has(a.legajo)).map((a) => [
+          c.insertId, tenantId, periodo, a.periodoOrigen, idDe.get(a.legajo), a.legajo, a.nombre, a.minutos, a.computables, JSON.stringify(a.porRecargo),
+        ]);
+        if (valoresAjuste.length) {
+          await conn.query(
+            `INSERT INTO overtime_period_adjustments
+               (closing_id, tenant_id, periodo, periodo_origen, employee_id, legajo, nombre, minutos, computables, por_recargo)
+             VALUES ?`, [valoresAjuste]);
+        }
         await conn.commit();
-        res.status(201).json({ ok: true, id: c.insertId, personas: valores.length, totales: totales(filas) });
+        res.status(201).json({ ok: true, id: c.insertId, personas: valores.length, ajustes: valoresAjuste.length, totales: totales(filas) });
       } catch (err) {
         await conn.rollback();
         throw err;
@@ -281,6 +394,13 @@ module.exports = function (db, { calcularAsistencia }) {
         await conn.rollback();
         return res.status(409).json({ error: `Primero reabrí ${posteriores[posteriores.length - 1]}: su tope anual depende de este mes.` });
       }
+      // Si en otro mes cerrado ya se pago un ajuste de este, reabrirlo
+      // dejaria ese pago sin su origen (y al recerrar se pagaria dos veces).
+      const pagados = await ajustesPagadosDe(tenantId, periodo, conn);
+      if (pagados.length) {
+        await conn.rollback();
+        return res.status(409).json({ error: `Primero reabrí ${pagados[0].periodo}: ahí se pagó un ajuste de este mes.` });
+      }
       const [r] = await conn.query(
         `INSERT INTO overtime_period_closings (tenant_id, periodo, accion, motivo, created_by) VALUES (?, ?, 'REABRIR', ?, ?)`,
         [tenantId, periodo, motivo.slice(0, 255), autor(req)]);
@@ -300,4 +420,5 @@ module.exports = function (db, { calcularAsistencia }) {
 
 module.exports.filaDeLiquidacion = filaDeLiquidacion;
 module.exports.mesAnterior = mesAnterior;
+module.exports.mesesAntes = mesesAntes;
 module.exports.ultimoDia = ultimoDia;
