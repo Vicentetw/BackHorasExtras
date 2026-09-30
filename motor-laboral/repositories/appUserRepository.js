@@ -62,12 +62,17 @@ async function createInvitedUser({ email, tenantId, isSuperadmin, roleId, permis
 }
 
 async function findByFirebaseUid(firebaseUid, db) {
-  const [[user]] = await db.query(
-    `SELECT id, firebase_uid, email, tenant_id, role_id, is_superadmin, is_active
+  // employee_id (portal del empleado, migracion 20261010). Si la columna
+  // todavia no existe (backend publicado antes que la migracion), se lee
+  // NULL: nadie es cuenta de empleado, igual que antes.
+  const sql = (conEmpleado) => `SELECT id, firebase_uid, email, tenant_id, role_id, is_superadmin, is_active,
+            ${conEmpleado ? 'employee_id' : 'NULL AS employee_id'}
      FROM app_users
-     WHERE firebase_uid = ?`,
-    [firebaseUid]
-  );
+     WHERE firebase_uid = ?`;
+  const [[user]] = await db.query(sql(true), [firebaseUid]).catch((err) => {
+    if (err.code === 'ER_BAD_FIELD_ERROR') return db.query(sql(false), [firebaseUid]);
+    throw err;
+  });
   if (!user) return null;
 
   // Permisos efectivos = permisos del rol (si tiene uno asignado) UNION
@@ -88,15 +93,20 @@ async function findByFirebaseUid(firebaseUid, db) {
     rolePermRows.forEach(r => permissions.add(r.permission));
   }
 
+  // Cuenta de EMPLEADO: no hereda ningun permiso ni superadmin, aunque la
+  // fila los tuviera por error. Lo que puede hacer lo decide la lista blanca
+  // de appUserMiddleware.js, no los permisos.
+  const employeeId = user.employee_id == null ? null : Number(user.employee_id);
   return {
     id: user.id,
     firebaseUid: user.firebase_uid,
     email: user.email,
     tenantId: user.tenant_id,
     roleId: user.role_id,
-    isSuperadmin: Boolean(user.is_superadmin),
+    isSuperadmin: employeeId == null && Boolean(user.is_superadmin),
     isActive: Boolean(user.is_active),
-    permissions
+    employeeId,
+    permissions: employeeId == null ? permissions : new Set()
   };
 }
 

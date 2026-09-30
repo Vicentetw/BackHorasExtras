@@ -70,12 +70,26 @@ async function appUserMiddleware(req, res, next) {
       }
     }
 
+    // PORTAL DEL EMPLEADO: una cuenta de empleado solo entra a su perfil y a
+    // /api/mi/... . Es una LISTA BLANCA a proposito: si alguna ruta de
+    // administracion quedo protegida solo por "estar logueado" (paso con las
+    // de facturacion, que dejaban pedir la baja a cualquier usuario de la
+    // empresa), igual le queda cerrada a un empleado.
+    if (appUser.employeeId != null && !esRutaDelPortal(req.path)) {
+      return res.status(403).json({ error: 'Tu cuenta es de empleado: solo podés ver tu propia información.' });
+    }
+
     req.appUser = appUser;
     return next();
   } catch (err) {
     console.error('appUserMiddleware error:', err);
     return res.status(500).json({ error: 'Error resolviendo permisos del usuario' });
   }
+}
+
+// Rutas que puede usar una cuenta de empleado (portal).
+function esRutaDelPortal(ruta) {
+  return ruta === '/api/app-users/me' || ruta === '/api/mi' || ruta.startsWith('/api/mi/');
 }
 
 // Exige superadmin (crear/listar empresas, ver todos los tenants -- un
@@ -221,6 +235,7 @@ function requireActiveSubscription(req, res, next) {
 
 module.exports = {
   appUserMiddleware,
+  esRutaDelPortal,
   requirePermission,
   requireAnyPermission,
   requireSuperadmin,

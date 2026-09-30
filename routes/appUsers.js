@@ -62,6 +62,8 @@ module.exports = function (db) {
       roleId: req.appUser.roleId,
       isSuperadmin: req.appUser.isSuperadmin,
       permissions: Array.from(req.appUser.permissions),
+      // Portal del empleado: el frontend muestra SOLO "Mi asistencia".
+      employeeId: req.appUser.employeeId ?? null,
       subscriptionStatus
     });
   });

@@ -222,6 +222,8 @@ app.use('/api/event-types', eventTypesRoutes(db));
 // Regimen de horas extra: politicas, autorizaciones y aprobaciones (B4).
 app.use('/api/regimen-horas-extra', require('./routes/regimenHorasExtra')(db));
 app.use('/api/liquidacion-horas-extra', reportesRateLimiter, require('./routes/liquidacionHorasExtra')(db, { calcularAsistencia }));
+app.use('/api/mi', reportesRateLimiter, require('./routes/miPortal')(db, { calcularAsistencia }));
+app.use('/api/portal-empleados', require('./routes/portalAdmin')(db));
 app.use('/api/employee-events', employeeEventsRoutes(db));
 app.use('/api/leave-balances', leaveBalancesRoutes(db));
 app.use('/api/employee-categories', employeeCategoriesRoutes(db));
@@ -2983,11 +2985,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
 // pedido original (sus permisos y su empresa), para un rango y una empresa
 // dados. Devuelve el mismo cuerpo que veria Presentismo. Lo usa el informe de
 // liquidacion (B5): asi no existe una segunda formula que pueda dar distinto.
-function calcularAsistencia(req, from, to, tenantId) {
+function calcularAsistencia(req, from, to, tenantId, extra = {}) {
   return new Promise((resolve, reject) => {
     const pedido = Object.create(req);
     // En Express 5 req.query es un getter: asignarlo se ignora sin avisar.
-    Object.defineProperty(pedido, 'query', { value: { from, to, ...(tenantId != null ? { tenantId: String(tenantId) } : {}) } });
+    Object.defineProperty(pedido, 'query', { value: { ...extra, from, to, ...(tenantId != null ? { tenantId: String(tenantId) } : {}) } });
     const respuesta = {
       statusCode: 200,
       status(codigo) { this.statusCode = codigo; return this; },
