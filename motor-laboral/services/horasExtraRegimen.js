@@ -252,8 +252,11 @@ function aplicarTopesDelPeriodo(dias, topes, { politica = 'AVISAR', yaComputadoE
  * @param {(fecha:string)=>object|null} p.autorizacionDe autorizacion individual vigente
  * @param {(periodo:string)=>number} p.aprobadosDe      minutos de excedente aprobados en 'AAAA-MM'
  * @param {boolean} [p.autorizado]  si la persona esta autorizada a hacer HE (modo 'custom')
+ * @param {(mes:string)=>number} [p.computadoAntesDe]  minutos computables de los meses
+ *        CERRADOS del mismo año anteriores a 'AAAA-MM' (B5, cierre de mes). Con
+ *        esto el tope anual cuenta lo ya liquidado aunque no este en el rango.
  */
-function calcularPeriodo({ dias, politicaDe, reglasDe, autorizacionDe, aprobadosDe, autorizado = true }) {
+function calcularPeriodo({ dias, politicaDe, reglasDe, autorizacionDe, aprobadosDe, autorizado = true, computadoAntesDe = () => 0 }) {
   const porDia = [];
   const extrasPorMes = new Map();
   let registradas = 0;
@@ -298,15 +301,16 @@ function calcularPeriodo({ dias, politicaDe, reglasDe, autorizacionDe, aprobados
     }
   }
 
-  // Topes y politica, mes por mes (el tope anual se acumula dentro del
-  // periodo consultado; ver HORAS_EXTRA_REGIMENES.md, "tope anual").
+  // Topes y politica, mes por mes. El tope anual arranca con lo ya computado
+  // en los meses cerrados de ese año que quedan ANTES del rango consultado, y
+  // despues se acumula mes a mes dentro del rango.
   const total = { reales: 0, computables: 0, excedente: 0, pendiente: 0, porRecargo: {} };
   const meses = [];
   let yaComputadoEnElAnio = 0;
   let anioActual = null;
   for (const mes of [...extrasPorMes.keys()].sort()) {
     const primerDia = `${mes}-01`;
-    if (mes.slice(0, 4) !== anioActual) { anioActual = mes.slice(0, 4); yaComputadoEnElAnio = 0; }
+    if (mes.slice(0, 4) !== anioActual) { anioActual = mes.slice(0, 4); yaComputadoEnElAnio = Number(computadoAntesDe(mes)) || 0; }
     const politica = politicaDe(extrasPorMes.get(mes)[0].fecha) || politicaDe(primerDia) || {};
     const topes = resolverTopes(politica.topes, autorizacionDe(primerDia) || autorizacionDe(extrasPorMes.get(mes)[0].fecha));
     const r = aplicarTopesDelPeriodo(extrasPorMes.get(mes), topes, {

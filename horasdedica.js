@@ -221,6 +221,7 @@ app.use('/api/holidays', holidaysRoutes(db));
 app.use('/api/event-types', eventTypesRoutes(db));
 // Regimen de horas extra: politicas, autorizaciones y aprobaciones (B4).
 app.use('/api/regimen-horas-extra', require('./routes/regimenHorasExtra')(db));
+app.use('/api/liquidacion-horas-extra', reportesRateLimiter, require('./routes/liquidacionHorasExtra')(db, { calcularAsistencia }));
 app.use('/api/employee-events', employeeEventsRoutes(db));
 app.use('/api/leave-balances', leaveBalancesRoutes(db));
 app.use('/api/employee-categories', employeeCategoriesRoutes(db));
@@ -2974,7 +2975,33 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
 // empleados y corre el motor de calculo dia por dia -- es el mas caro del
 // sistema. Va DESPUES de requirePermission para que el limite se cuente por
 // usuario ya resuelto y no por IP (ver el comentario en security.js).
-app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
+// El calculo es una funcion con nombre para que el informe de liquidacion
+// (B5) use EXACTAMENTE el mismo resultado que ve Presentismo.
+app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRateLimiter, (req, res) => attendanceRangeHandler(req, res));
+
+// Corre el calculo de /attendance-range DENTRO del proceso, con el usuario del
+// pedido original (sus permisos y su empresa), para un rango y una empresa
+// dados. Devuelve el mismo cuerpo que veria Presentismo. Lo usa el informe de
+// liquidacion (B5): asi no existe una segunda formula que pueda dar distinto.
+function calcularAsistencia(req, from, to, tenantId) {
+  return new Promise((resolve, reject) => {
+    const pedido = Object.create(req);
+    // En Express 5 req.query es un getter: asignarlo se ignora sin avisar.
+    Object.defineProperty(pedido, 'query', { value: { from, to, ...(tenantId != null ? { tenantId: String(tenantId) } : {}) } });
+    const respuesta = {
+      statusCode: 200,
+      status(codigo) { this.statusCode = codigo; return this; },
+      json(cuerpo) {
+        if (this.statusCode >= 400) reject(Object.assign(new Error((cuerpo && cuerpo.error) || 'Error en rango'), { status: this.statusCode }));
+        else resolve(cuerpo);
+        return this;
+      },
+    };
+    attendanceRangeHandler(pedido, respuesta).catch(reject);
+  });
+}
+
+async function attendanceRangeHandler(req, res) {
   try {
     const { from, to } = req.query;
 
@@ -4345,6 +4372,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
           reglasDe: (f) => { const e = enc(f); return regimenCfg.reglasDe(e.conventionId, e.regimeId); },
           autorizacionDe: (f) => regimenCfg.autorizacionPara(internalId, f),
           aprobadosDe: (periodo) => regimenCfg.aprobadosEn(internalId, periodo),
+          computadoAntesDe: (mes) => regimenCfg.computadoCerradoAntes(internalId, mes),
           autorizado: overtimeAuthorizationMode !== 'custom'
             ? true
             : (u.overtimeAuthorized === undefined || u.overtimeAuthorized === null ? true : !!Number(u.overtimeAuthorized)),
@@ -4458,7 +4486,7 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
     }
     res.status(500).json({ error: 'Error en rango' });
   }
-});
+}
 
 //fin get rango de fechas
 

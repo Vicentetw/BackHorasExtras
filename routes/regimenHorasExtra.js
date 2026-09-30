@@ -185,6 +185,11 @@ module.exports = function (db) {
       if (!Number.isInteger(minutos) || minutos <= 0 || minutos > 44640) return res.status(400).json({ error: 'minutos tiene que ser un entero positivo' });
       const motivo = String(b.motivo || '').trim();
       if (!motivo) return res.status(400).json({ error: 'El motivo es obligatorio' });
+      // Un mes cerrado (B5) no se toca: su foto ya fue a liquidacion.
+      const [[ultimo]] = await db.query(
+        `SELECT accion FROM overtime_period_closings WHERE tenant_id = ? AND periodo = ? ORDER BY id DESC LIMIT 1`,
+        [tenantId, b.periodo]).catch((err) => (err.code === 'ER_NO_SUCH_TABLE' ? [[null]] : Promise.reject(err)));
+      if (ultimo && ultimo.accion === 'CERRAR') return res.status(409).json({ error: `${b.periodo} está cerrado: reabrilo para aprobar excedente.` });
       const [r] = await db.query(
         `INSERT INTO overtime_excess_approvals (tenant_id, employee_id, periodo, minutos, motivo, created_by) VALUES (?, ?, ?, ?, ?, ?)`,
         [tenantId, empId, b.periodo, minutos, motivo.slice(0, 255), autor(req)]

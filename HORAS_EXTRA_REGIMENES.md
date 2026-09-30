@@ -122,7 +122,7 @@ Reales 62 h  →  Computables 40 h (32 h al 50 % · 8 h al 100 %)
 | B3 ✅ | Integración en `/attendance-range`: solo los días cubiertos por una política (del régimen de la persona o de la empresa) pasan por el régimen; el resto queda como hoy. Reemplaza solo la parte automática (las cargas manuales quedan igual). Fines de semana y feriados con fichajes se clasifican por tipo de día. Fila: `regimenHorasExtra`; día: `regimen` | Septiembre de la copia de producción (479 empleados, 13.891 días): sin régimen, 0 diferencias; con un régimen para 3, los otros 476 sin diferencias y los 3 con los mismos minutos reales día por día. `test/regimen-horas-extra-mensual.test.js` |
 | B4 ✅ | Pantallas: régimen (con modelos por país), asignación por persona, autorización individual, Presentismo (reales / computables / excedente / sin pago), aprobación de excedente | Recorrido completo probado en navegador |
 | B4b ✅ | Regímenes **dentro** del convenio (migración `20261007`, tabla `labor_convention_regimes`). Ver la sección de abajo | `test/regimenes-dentro-del-convenio.test.js`; copia de producción sin regímenes: 0 diferencias en 479 empleados |
-| B5 | Informe para liquidación: por persona, por recargo, exportable | Coincide con Presentismo al minuto |
+| B5 ✅ | Informe para liquidación (por persona y por recargo, a Excel) y cierre de mes (migración `20261008`). Ver la sección de abajo | `test/liquidacion-horas-extra.test.js`: coincide con Presentismo al minuto, y el tope anual de febrero descuenta enero cerrado |
 
 ## Empresa → convenios → regímenes → persona
 
@@ -147,9 +147,17 @@ Arreglo encontrado al hacer esto: las reglas de convenio que se cargan desde la 
   100 %, y otros donde lo fuera de horario **no se paga pero se registra**
   (posible "hora de dedicación" a futuro).
 
-## Limitaciones conocidas (a resolver en B5, cierre de mes)
+## Informe para liquidación y cierre de mes (B5)
 
-- **Tope anual**: hoy se acumula dentro del período consultado. Para que
-  cuente los meses anteriores hace falta guardar el resultado de cada mes
-  cerrado (cierre de mes), que es parte del informe de liquidación.
+Pantalla: **Liquidación y cierre de mes**. API: `/api/liquidacion-horas-extra` (en `routes/liquidacionHorasExtra.js`).
 
+- **Un solo cálculo.** El informe no tiene fórmula propia: corre `/attendance-range` dentro del proceso (`calcularAsistencia` en `horasdedica.js`), con el mismo usuario y la misma empresa. "A liquidar" es exactamente lo que Presentismo muestra como horas extra. Si hubiera una segunda fórmula, tarde o temprano daría distinto.
+- **Cerrar un mes** guarda una **foto** del resultado de cada persona (`overtime_period_results`). A partir de ahí, el informe de ese mes sale de la foto. Si después se corrige un fichaje o se carga una licencia, lo liquidado no cambia. "Comparar con el cálculo de hoy" muestra quién daría distinto.
+- **El tope anual** arranca con la suma de lo computado en los meses **cerrados** del año que quedan antes del mes calculado (`computadoAntesDe` en `calcularPeriodo`). Así se resolvió la limitación que había: antes el tope anual solo veía el rango consultado.
+- **En orden dentro del año.** No se puede cerrar marzo con febrero abierto (si la empresa ya venía cerrando meses ese año), ni reabrir febrero con marzo cerrado: la foto de marzo quedaría calculada con un acumulado que ya no es real. La empresa que empieza a usar el sistema a mitad de año arranca de cero.
+- **Nada se borra.** Cada cierre y cada reapertura es una fila nueva (`overtime_period_closings`), con quién lo hizo y cuándo. La reapertura exige un motivo. Si el mes se vuelve a cerrar, queda una foto nueva y la vieja sigue guardada para auditoría.
+- **Un mes cerrado no acepta aprobaciones de excedente** (409). Hay que reabrirlo primero.
+- No se cierra un mes que no terminó (según la zona horaria de la empresa). Dos administradores cerrando al mismo tiempo no pueden dejar dos fotos: se bloquea la fila de la empresa (`FOR UPDATE`).
+- El cierre es **mensual** porque los topes de los convenios son mensuales y anuales. La pantalla **Horas Extra por Régimen** agrupa por período de *pago* (semanal, quincenal o mensual), que es otro concepto, y sigue igual.
+
+Pendiente, a propósito: el cierre todavía no bloquea que se corrijan fichajes, licencias o cargas manuales de un mes cerrado. Esas correcciones se pueden hacer, pero no cambian lo liquidado, y "Comparar" las muestra. Bloquearlas es una decisión de negocio: hay empresas que corrigen y liquidan la diferencia el mes siguiente.

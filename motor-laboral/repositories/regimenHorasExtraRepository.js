@@ -56,6 +56,21 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
     [tenantId, ids, periodos]
   ).catch(ignorarTablaFaltante) : [[]];
 
+  // Meses CERRADOS (B5, migracion 20261008) de los años del rango, anteriores
+  // al primer mes del rango: su foto alimenta el tope anual. Solo cuenta el
+  // ultimo cierre de cada mes, y solo si el mes sigue cerrado (su ultima
+  // accion es CERRAR, no REABRIR).
+  const anios = [...new Set(periodos.map((p) => p.slice(0, 4)))];
+  const [cerrados] = ids.length && anios.length ? await db.query(
+    `SELECT r.employee_id, r.periodo, r.computables
+     FROM overtime_period_results r
+     JOIN (SELECT periodo, MAX(id) AS ultimo FROM overtime_period_closings
+           WHERE tenant_id = ? AND LEFT(periodo, 4) IN (?) GROUP BY periodo) u ON u.ultimo = r.closing_id
+     JOIN overtime_period_closings c ON c.id = u.ultimo AND c.accion = 'CERRAR'
+     WHERE r.tenant_id = ? AND r.employee_id IN (?) AND r.periodo < ?`,
+    [tenantId, anios, tenantId, ids, desde.slice(0, 7)]
+  ).catch(ignorarTablaFaltante) : [[]];
+
   const convenciones = [...new Set(asignaciones.map((a) => a.convention_id))];
   // Las reglas de un convenio se guardan con tenant_id NULL (el convenio ya
   // es de la empresa: ver POST /day-type-rules); las de la empresa, con
@@ -114,6 +129,13 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
     autorizacionPara(employeeId, fecha) {
       const a = vigenteA(autorizaciones.filter((x) => x.employee_id === employeeId), fecha, 'vigente_desde', 'vigente_hasta');
       return a ? { dia: a.tope_dia_minutos, mes: a.tope_mes_minutos, anio: a.tope_anio_minutos, motivo: a.motivo } : null;
+    },
+
+    // Minutos computables de los meses cerrados del mismo año antes de 'mes'.
+    computadoCerradoAntes(employeeId, mes) {
+      return cerrados
+        .filter((x) => x.employee_id === employeeId && x.periodo.slice(0, 4) === mes.slice(0, 4) && x.periodo < mes)
+        .reduce((s, x) => s + Number(x.computables), 0);
     },
 
     aprobadosEn(employeeId, periodo) {
