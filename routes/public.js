@@ -162,7 +162,10 @@ module.exports = function (db) {
 
       try {
         const code = `${slugify(companyName)}-${randomSuffix()}`;
-        const [tenantResult] = await db.query(`INSERT INTO tenants (name, code) VALUES (?, ?)`, [companyName, code]);
+        // Quien se registra queda como TITULAR (el unico que puede pedir la
+        // baja, migracion 20261011). Sin la columna, se crea como antes.
+        const [tenantResult] = await db.query(`INSERT INTO tenants (name, code, titular_email) VALUES (?, ?, ?)`, [companyName, code, String(email).trim().toLowerCase()])
+          .catch((err) => (err.code === 'ER_BAD_FIELD_ERROR' ? db.query(`INSERT INTO tenants (name, code) VALUES (?, ?)`, [companyName, code]) : Promise.reject(err)));
         const tenantId = tenantResult.insertId;
 
         const plan = await billingRepository.getDefaultPlan(db);

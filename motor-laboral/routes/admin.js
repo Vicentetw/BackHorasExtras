@@ -149,6 +149,15 @@ function createMotorLaboralAdminRoutes(db) {
         `UPDATE tenants SET name = ?, code = ?, timezone = ? WHERE id = ?`,
         [name, code, timezone || 'America/Argentina/Buenos_Aires', id]
       );
+      // Titular (migracion 20261011): el unico de la empresa que puede pedir
+      // la baja. Solo se toca si viene en el pedido.
+      if (req.body.titular_email !== undefined) {
+        const titular = String(req.body.titular_email || '').trim().toLowerCase();
+        if (titular && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(titular)) {
+          return res.status(400).json({ error: 'El mail del titular no parece válido' });
+        }
+        await db.query('UPDATE tenants SET titular_email = ? WHERE id = ?', [titular || null, id]);
+      }
 
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {

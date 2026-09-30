@@ -21,6 +21,43 @@ module.exports = function (db) {
     return req.appUser?.tenantId === Number(tenantId);
   }
 
+  // TITULAR de la empresa (migracion 20261011): el UNICO usuario de la empresa
+  // que puede pedir la baja o retirar el pedido. Pedido del dueño del
+  // producto: "solo el administrador con el email registrado". Antes lo podia
+  // hacer cualquier usuario de la empresa. Si falta la columna o el titular
+  // no esta cargado, nadie de la empresa puede (falla cerrado): lo resuelve
+  // el superadmin cargando el mail en Empresas.
+  async function titularDe(tenantId) {
+    try {
+      const [[t]] = await db.query('SELECT titular_email FROM tenants WHERE id = ?', [tenantId]);
+      return t && t.titular_email ? String(t.titular_email).trim().toLowerCase() : null;
+    } catch (err) {
+      if (err.code === 'ER_BAD_FIELD_ERROR') return null;
+      throw err;
+    }
+  }
+  const esElTitular = (req, titular) => !!titular && String(req.appUser?.email || '').trim().toLowerCase() === titular;
+
+  // "j***@empresa.com": para decirle a un admin QUIEN es el titular sin
+  // mostrar el mail completo.
+  function enmascarar(email) {
+    if (!email) return null;
+    const [u, d] = email.split('@');
+    return `${u.slice(0, 1)}***@${d || ''}`;
+  }
+
+  async function exigirTitular(req, res, tenantId) {
+    if (req.appUser?.isSuperadmin) return true;
+    const titular = await titularDe(tenantId);
+    if (esElTitular(req, titular)) return true;
+    res.status(403).json({
+      error: titular
+        ? `Solo el titular de la cuenta (${enmascarar(titular)}) puede pedir o retirar la baja.`
+        : 'Tu empresa no tiene un titular registrado todavía: escribinos a soporte para cargarlo.',
+    });
+    return false;
+  }
+
   // --- La campanita -------------------------------------------------------
   // Lo que alimenta el contador de pendientes de la barra superior. Es solo
   // superadmin porque son pedidos dirigidos A el: un admin de empresa ve el
@@ -436,7 +473,13 @@ module.exports = function (db) {
         billingPeriod: subscription.billing_period
       });
 
-      res.json({ tenantId: Number(tenantId), subscription, employeeCount, effectiveStatus, invoicePreview });
+      const titular = await titularDe(tenantId);
+      res.json({
+        tenantId: Number(tenantId), subscription, employeeCount, effectiveStatus, invoicePreview,
+        // Para la pantalla de Pagos: si quien mira puede pedir la baja.
+        esTitular: !!req.appUser?.isSuperadmin || esElTitular(req, titular),
+        titular: enmascarar(titular),
+      });
     } catch (err) {
       console.error('ERROR fetching subscription:', err);
       res.status(500).json({ error: 'Error al leer la suscripción' });
@@ -748,6 +791,7 @@ module.exports = function (db) {
     try {
       const { tenantId } = req.params;
       if (!canViewTenant(req, tenantId)) return res.status(403).json({ error: 'No autorizado' });
+      if (!(await exigirTitular(req, res, tenantId))) return;
 
       const subscription = await billingRepo.getSubscriptionByTenant(tenantId, db);
       if (!subscription) return res.status(404).json({ error: 'La empresa no tiene una suscripción configurada' });
@@ -774,6 +818,7 @@ module.exports = function (db) {
     try {
       const { tenantId } = req.params;
       if (!canViewTenant(req, tenantId)) return res.status(403).json({ error: 'No autorizado' });
+      if (!(await exigirTitular(req, res, tenantId))) return;
       await billingRepo.clearCancellationRequest(tenantId, db);
       res.json({ ok: true });
     } catch (err) {

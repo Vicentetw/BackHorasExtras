@@ -23,10 +23,13 @@ const OTHER_TENANT = 999991; // descartable, para probar aislamiento
 const UID_TENANT = 'test-billing-panel-tenant';
 const UID_OTHER = 'test-billing-panel-other';
 const UID_SUPERADMIN = 'test-billing-panel-superadmin';
+// Otro administrador de la MISMA empresa que no es el titular (20261011).
+const UID_TENANT_ADMIN2 = 'test-billing-panel-admin2';
 
 let headersTenant;
 let headersOther;
 let headersSuperadmin;
+let headersAdmin2;
 let planId;
 
 async function setSubscriptionStatus(status) {
@@ -48,6 +51,8 @@ before(async () => {
   headersTenant = await getTestAuthHeaders(UID_TENANT, { isSuperadmin: false, tenantId: TENANT_C });
   headersOther = await getTestAuthHeaders(UID_OTHER, { isSuperadmin: false, tenantId: OTHER_TENANT });
   headersSuperadmin = await getTestAuthHeaders(UID_SUPERADMIN, { isSuperadmin: true });
+  headersAdmin2 = await getTestAuthHeaders(UID_TENANT_ADMIN2, { isSuperadmin: false, tenantId: TENANT_C });
+  await db.query('UPDATE tenants SET titular_email = NULL WHERE id = ?', [TENANT_C]);
 
   const planRes = await fetch(`${BASE_URL}/api/billing/plans`, {
     method: 'POST',
@@ -73,6 +78,7 @@ after(async () => {
   await deleteTestUser(UID_TENANT);
   await deleteTestUser(UID_OTHER);
   await deleteTestUser(UID_SUPERADMIN);
+  await deleteTestUser(UID_TENANT_ADMIN2);
   await db.query(`DELETE FROM tenants WHERE id IN (?, ?)`, [TENANT_C, OTHER_TENANT]);
   await closeDb();
 });
@@ -205,6 +211,33 @@ test('el cliente ve el historial de pagos de SU empresa, y ninguno ajeno', async
 test('el cliente no puede leer el historial de pagos de otra empresa (aislamiento canViewTenant)', async () => {
   const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${OTHER_TENANT}/payments`, { headers: headersTenant });
   assert.equal(res.status, 403);
+});
+
+test('sin titular registrado, nadie de la empresa puede pedir la baja', async () => {
+  const res = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/request-cancellation`, { method: 'POST', headers: headersTenant });
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).error, /titular registrado/);
+});
+
+test('el superadmin carga el titular, y solo el titular puede pedir o retirar la baja', async () => {
+  const put = await fetch(`${BASE_URL}/api/labor-engine/admin/tenants/${TENANT_C}`, {
+    method: 'PUT', headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Tenant Billing Panel (test)', code: 'tenant-billing-panel-test', titular_email: `  ${UID_TENANT.toUpperCase()}@test.local ` }),
+  });
+  assert.equal(put.status, 200, await put.clone().text());
+  const [[t]] = await db.query('SELECT titular_email FROM tenants WHERE id = ?', [TENANT_C]);
+  assert.equal(t.titular_email, `${UID_TENANT}@test.local`, 'se guarda normalizado');
+
+  // Otro admin de la MISMA empresa: no puede, y el mensaje dice quien si.
+  const otro = await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/request-cancellation`, { method: 'POST', headers: headersAdmin2 });
+  assert.equal(otro.status, 403);
+  assert.match((await otro.json()).error, /t\*\*\*@test\.local/);
+  assert.equal((await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}/cancellation-request`, { method: 'DELETE', headers: headersAdmin2 })).status, 403);
+
+  const vista = await (await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}`, { headers: headersAdmin2 })).json();
+  assert.equal(vista.esTitular, false);
+  assert.equal(vista.titular, 't***@test.local');
+  assert.equal((await (await fetch(`${BASE_URL}/api/billing/subscriptions/${TENANT_C}`, { headers: headersTenant })).json()).esTitular, true);
 });
 
 test('pedir la baja: queda pendiente, NO cambia el status todavia', async () => {
