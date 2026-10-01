@@ -47,12 +47,15 @@ async function contarPendientes(db) {
     'SELECT COUNT(*) k FROM tenant_subscriptions WHERE payment_requested_at IS NOT NULL');
   const [[bajas]] = await db.query(
     'SELECT COUNT(*) k FROM tenant_subscriptions WHERE cancellation_requested_at IS NOT NULL');
+  const [[altas]] = await db.query(
+    "SELECT COUNT(*) k FROM signup_leads WHERE status = 'pending'");
 
   return {
     pedidosDePlan: planes.k,
     pedidosDeLinkDePago: pagos.k,
     pedidosDeBaja: bajas.k,
-    total: planes.k + pagos.k + bajas.k,
+    solicitudesDeAlta: altas.k,
+    total: planes.k + pagos.k + bajas.k + altas.k,
   };
 }
 
@@ -78,15 +81,23 @@ async function listarPendientes(db) {
      FROM tenant_subscriptions s JOIN tenants t ON t.id = s.tenant_id
      WHERE s.cancellation_requested_at IS NOT NULL`);
 
+  // Solicitudes de alta de la pagina: todavia no son empresa (tenantId null).
+  const [altas] = await db.query(
+    `SELECT NULL AS tenantId, company_name AS empresa, created_at AS fecha, email AS pedidoPor, id AS leadId
+     FROM signup_leads WHERE status = 'pending'`);
+
   const item = (tipo, etiqueta) => (r) => ({
     tipo, etiqueta, tenantId: r.tenantId, empresa: r.empresa,
     fecha: r.fecha, pedidoPor: r.pedidoPor || null,
+    // Clave unica para la lista de la campanita (las altas no tienen empresa).
+    clave: `${tipo}-${r.leadId ?? r.tenantId}`,
   });
 
   return [
     ...planes.map(item('plan', 'pidió un plan')),
     ...pagos.map(item('pago', 'pidió el link de pago')),
     ...bajas.map(item('baja', 'pidió la baja')),
+    ...altas.map(item('alta', 'pidió el alta')),
   ].sort((a, b) => new Date(a.fecha) - new Date(b.fecha)); // lo más viejo primero
 }
 
@@ -194,6 +205,8 @@ async function enviarTelegram(texto, db, { fetchImpl = fetch } = {}) {
 const TEXTOS = {
   plan: (e) => `🆕 <b>${e}</b> pidió un plan.`,
   pago: (e) => `💳 <b>${e}</b> pidió el link de pago.`,
+  // Solicitud de alta desde la pagina: espera que el superadmin la apruebe.
+  alta: (e) => `🙋 Nueva solicitud de alta: <b>${e}</b>. Espera tu aprobación.`,
   baja: (e) => `⚠️ <b>${e}</b> pidió la baja.`,
   // Los de abajo NO son pedidos: son cosas que ya pasaron y de las que hay
   // que enterarse igual. Llegan por el webhook de MercadoPago, o sea sin que
@@ -221,9 +234,13 @@ async function avisar(tipo, { empresa, detalle } = {}, db) {
   try {
     const arma = TEXTOS[tipo];
     if (!arma) return;
-    let texto = arma(empresa || 'Una empresa');
-    if (detalle) texto += `\n${detalle}`;
-    texto += '\n\nhttps://horasdedicacionavp.web.app/facturacion';
+    // Se manda con parse_mode HTML: el nombre de la empresa y el detalle
+    // pueden venir del formulario publico (los escribe un desconocido), asi
+    // que se escapan para que no puedan meter etiquetas ni romper el mensaje.
+    const escapar = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let texto = arma(escapar(empresa || 'Una empresa'));
+    if (detalle) texto += `\n${escapar(detalle)}`;
+    texto += `\n\nhttps://horasdedicacionavp.web.app/${tipo === 'alta' ? 'solicitudes-alta' : 'facturacion'}`;
     await enviarTelegram(texto, db);
   } catch (err) {
     console.error('AVISO: fallo al notificar, el pedido igual quedo guardado:', err.message);

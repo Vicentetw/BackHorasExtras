@@ -79,6 +79,13 @@ after(async () => {
   await deleteTestUser(UID_OTHER);
   await deleteTestUser(UID_SUPERADMIN);
   await deleteTestUser(UID_TENANT_ADMIN2);
+  // La cuenta creada por "agregar un titular nuevo".
+  const [[nuevo]] = await db.query('SELECT id, firebase_uid FROM app_users WHERE email = ?', ['titular-nuevo-999992@example.com']);
+  if (nuevo) {
+    await db.query('DELETE FROM user_permissions WHERE user_id = ?', [nuevo.id]);
+    await db.query('DELETE FROM app_users WHERE id = ?', [nuevo.id]);
+    await require('firebase-admin').auth().deleteUser(nuevo.firebase_uid).catch(() => {});
+  }
   await db.query(`DELETE FROM tenants WHERE id IN (?, ?)`, [TENANT_C, OTHER_TENANT]);
   await closeDb();
 });
@@ -219,11 +226,30 @@ test('sin titular registrado, nadie de la empresa puede pedir la baja', async ()
   assert.match((await res.json()).error, /titular registrado/);
 });
 
-test('el superadmin carga el titular, y solo el titular puede pedir o retirar la baja', async () => {
-  const put = await fetch(`${BASE_URL}/api/labor-engine/admin/tenants/${TENANT_C}`, {
-    method: 'PUT', headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Tenant Billing Panel (test)', code: 'tenant-billing-panel-test', titular_email: `  ${UID_TENANT.toUpperCase()}@test.local ` }),
-  });
+const titularUrl = `${BASE_URL}/api/labor-engine/admin/tenants/${TENANT_C}/titular`;
+const nombrarTitular = (email, headers = headersSuperadmin) => fetch(titularUrl, {
+  method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ email }),
+});
+const EMAIL_NUEVO_TITULAR = 'titular-nuevo-999992@example.com';
+
+test('titular: solo el superadmin lo designa; no puede ser un usuario de otra empresa', async () => {
+  assert.equal((await nombrarTitular(`${UID_TENANT}@test.local`, headersTenant)).status, 403, 'un admin de la empresa no se nombra titular a si mismo');
+  assert.equal((await nombrarTitular(`${UID_OTHER}@test.local`)).status, 409, 'usuario de otra empresa');
+  assert.equal((await nombrarTitular('no-es-mail')).status, 400);
+  const usuarios = await (await fetch(`${BASE_URL}/api/labor-engine/admin/tenants/${TENANT_C}/usuarios`, { headers: headersSuperadmin })).json();
+  assert.ok(usuarios.usuarios.some((u) => u.email === `${UID_TENANT}@test.local`), 'lista los usuarios de la empresa para elegir');
+});
+
+test('titular: un mail que no es usuario no se nombra (se crea antes en Usuarios y Roles)', async () => {
+  const r = await nombrarTitular(EMAIL_NUEVO_TITULAR);
+  assert.equal(r.status, 404);
+  assert.match((await r.json()).error, /Usuarios y Roles/);
+  const [[u]] = await db.query('SELECT COUNT(*) AS n FROM app_users WHERE email = ?', [EMAIL_NUEVO_TITULAR]);
+  assert.equal(u.n, 0, 'no se crea ninguna cuenta por esta via');
+});
+
+test('titular: se elige uno de la empresa, y solo el titular puede pedir o retirar la baja', async () => {
+  const put = await nombrarTitular(`  ${UID_TENANT.toUpperCase()}@test.local `);
   assert.equal(put.status, 200, await put.clone().text());
   const [[t]] = await db.query('SELECT titular_email FROM tenants WHERE id = ?', [TENANT_C]);
   assert.equal(t.titular_email, `${UID_TENANT}@test.local`, 'se guarda normalizado');

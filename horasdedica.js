@@ -224,6 +224,7 @@ app.use('/api/regimen-horas-extra', require('./routes/regimenHorasExtra')(db));
 app.use('/api/liquidacion-horas-extra', reportesRateLimiter, require('./routes/liquidacionHorasExtra')(db, { calcularAsistencia }));
 app.use('/api/mi', reportesRateLimiter, require('./routes/miPortal')(db, { calcularAsistencia }));
 app.use('/api/portal-empleados', require('./routes/portalAdmin')(db));
+app.use('/api/solicitudes-alta', require('./routes/solicitudesAlta')(db));
 app.use('/api/employee-events', employeeEventsRoutes(db));
 app.use('/api/leave-balances', leaveBalancesRoutes(db));
 app.use('/api/employee-categories', employeeCategoriesRoutes(db));

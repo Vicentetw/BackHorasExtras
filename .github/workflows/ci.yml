@@ -51,6 +51,10 @@ jobs:
       # frenaba con 429. Solo para el CI; ver limiteDesdeEnv en security.js.
       RATE_LIMIT_POR_MINUTO: 100000
       RATE_LIMIT_REPORTES_POR_MINUTO: 100000
+      # Topes POR DIA del formulario y del chat de la pagina (routes/public.js):
+      # en produccion son bajos a proposito; aca la suite los alcanzaria.
+      SIGNUP_TOPE_DIARIO_POR_IP: 100000
+      CHAT_TOPE_DIARIO_POR_IP: 100000
 
     steps:
       - uses: actions/checkout@v4

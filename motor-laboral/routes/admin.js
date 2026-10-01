@@ -150,15 +150,6 @@ function createMotorLaboralAdminRoutes(db) {
         `UPDATE tenants SET name = ?, code = ?, timezone = ? WHERE id = ?`,
         [name, code, timezone || 'America/Argentina/Buenos_Aires', id]
       );
-      // Titular (migracion 20261011): el unico de la empresa que puede pedir
-      // la baja. Solo se toca si viene en el pedido.
-      if (req.body.titular_email !== undefined) {
-        const titular = String(req.body.titular_email || '').trim().toLowerCase();
-        if (titular && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(titular)) {
-          return res.status(400).json({ error: 'El mail del titular no parece válido' });
-        }
-        await db.query('UPDATE tenants SET titular_email = ? WHERE id = ?', [titular || null, id]);
-      }
 
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {
@@ -191,6 +182,61 @@ function createMotorLaboralAdminRoutes(db) {
     } catch (err) {
       console.error('Motor Laboral admin set modulos error:', err);
       res.status(500).json({ error: 'Error al guardar los módulos' });
+    }
+  });
+
+  // --- Titular de la empresa (migracion 20261011) ---
+  // Quien paga y el UNICO de la empresa que puede pedir la baja. Lo designa
+  // SOLO el superadmin (no el formulario publico, que no es confiable),
+  // eligiendo un usuario que ya existe en la empresa. Si todavia no existe,
+  // se crea como siempre en Usuarios y Roles (una sola forma de crear
+  // usuarios, no dos).
+
+  router.get('/tenants/:id/usuarios', requireSuperadmin, async (req, res) => {
+    try {
+      const [rows] = await db.query(
+        `SELECT u.id, u.email, u.is_active, r.name AS rol
+         FROM app_users u LEFT JOIN roles r ON r.id = u.role_id
+         WHERE u.tenant_id = ? AND u.is_superadmin = 0
+         ORDER BY u.email`, [req.params.id]);
+      res.json({ usuarios: rows.map((u) => ({ id: u.id, email: u.email, activo: !!u.is_active, rol: u.rol })) });
+    } catch (err) {
+      console.error('Motor Laboral admin tenant users error:', err);
+      res.status(500).json({ error: 'Error al leer los usuarios de la empresa' });
+    }
+  });
+
+  router.post('/tenants/:id/titular', requireSuperadmin, async (req, res) => {
+    const tenantId = Number(req.params.id);
+    const email = String((req.body || {}).email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'El mail no parece válido' });
+    try {
+      const [[t]] = await db.query('SELECT id FROM tenants WHERE id = ?', [tenantId]);
+      if (!t) return res.status(404).json({ error: 'Empresa no encontrada' });
+
+      const [[u]] = await db.query('SELECT id, tenant_id, is_active, is_superadmin FROM app_users WHERE LOWER(email) = ?', [email]);
+      if (!u) return res.status(404).json({ error: 'Ese mail no es un usuario del sistema: crealo primero en Usuarios y Roles.' });
+      if (u.is_superadmin || u.tenant_id !== tenantId) {
+        return res.status(409).json({ error: 'Ese mail es un usuario de otra empresa (o del superadmin).' });
+      }
+      if (!u.is_active) return res.status(409).json({ error: 'Ese usuario está desactivado: reactivalo antes de nombrarlo titular.' });
+      await db.query('UPDATE tenants SET titular_email = ? WHERE id = ?', [email, tenantId]);
+      res.json({ ok: true, titular: email });
+    } catch (err) {
+      if (err.code === 'ER_BAD_FIELD_ERROR') return res.status(503).json({ error: 'Falta correr la migración 20261011 (titular de la empresa).' });
+      console.error('Motor Laboral admin set titular error:', err);
+      res.status(500).json({ error: 'Error al guardar el titular' });
+    }
+  });
+
+  router.delete('/tenants/:id/titular', requireSuperadmin, async (req, res) => {
+    try {
+      await db.query('UPDATE tenants SET titular_email = NULL WHERE id = ?', [req.params.id]);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err.code === 'ER_BAD_FIELD_ERROR') return res.status(503).json({ error: 'Falta correr la migración 20261011 (titular de la empresa).' });
+      console.error('Motor Laboral admin clear titular error:', err);
+      res.status(500).json({ error: 'Error al quitar el titular' });
     }
   });
 

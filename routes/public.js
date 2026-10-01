@@ -2,11 +2,10 @@ const express = require('express');
 const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
-const { computeFreeTrialPeriod } = require('../motor-laboral/services/billingCalculations');
-const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
+const avisos = require('../avisos');
 const { verifyTurnstileToken } = require('../motor-laboral/services/turnstileService');
-const { askSalesChat } = require('../motor-laboral/services/salesChatService');
-const { enviarEmailDeContrasena } = require('../motor-laboral/services/firebaseEmail');
+const { askSalesChat, tratoInapropiado, RESPUESTA_SEGURA } = require('../motor-laboral/services/salesChatService');
+const { consumirMensaje } = require('../motor-laboral/services/presupuestoChat');
 const { createCountryFirewallMiddleware } = require('../motor-laboral/middleware/countryFirewallMiddleware');
 
 // Fase 11: landing publica + alta de cliente autoservicio + chatbot de
@@ -51,14 +50,36 @@ function tokenCoincide(recibido, hashGuardado) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// Mas estricto que el rate-limit global (300/min): esta es la unica ruta
-// del sistema que cualquiera en internet puede llamar sin ninguna cuenta.
+// ---------------------------------------------------------------------------
+// LIMITES PROPIOS de la parte publica
+// ---------------------------------------------------------------------------
+// Esta es la unica superficie del sistema que cualquiera en internet puede
+// llamar sin cuenta, y comparte servidor y base con los clientes que pagan.
+// Por eso tiene topes propios y mas duros que el resto: si alguien la
+// bombardea, se corta ELLA y no Presentismo.
+//   por minuto  -> frena rafagas
+//   por dia     -> frena al que insiste despacio
+// (los valores por dia se pueden subir por variable de entorno: los tests
+// corren muchas veces desde la misma maquina.)
+const numeroDeEntorno = (nombre, porDefecto) => {
+  const n = Number(process.env[nombre]);
+  return Number.isInteger(n) && n > 0 ? n : porDefecto;
+};
+const UN_DIA = 24 * 60 * 60 * 1000;
+
 const signupLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Demasiados intentos, esperá un momento y probá de nuevo.' }
+});
+const signupPorDia = rateLimit({
+  windowMs: UN_DIA,
+  limit: numeroDeEntorno('SIGNUP_TOPE_DIARIO_POR_IP', 30),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Ya recibimos varias solicitudes desde esta conexión. Escribinos por WhatsApp.' }
 });
 
 const chatLimiter = rateLimit({
@@ -68,24 +89,28 @@ const chatLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Demasiados mensajes, esperá un momento y probá de nuevo.' }
 });
+const chatPorDia = rateLimit({
+  windowMs: UN_DIA,
+  limit: numeroDeEntorno('CHAT_TOPE_DIARIO_POR_IP', 60),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Llegaste al límite de mensajes por hoy. Seguimos por WhatsApp.' }
+});
 
-// Reemplazo manual en vez de una regex de rango unicode para sacar acentos
-// (mas simple y sin ambiguedad de encoding que ̀-ͯ sobre NFD) --
-// alcanza y sobra para nombres de empresa en español.
-const ACCENTS = { á: 'a', é: 'e', í: 'i', ó: 'o', ú: 'u', ü: 'u', ñ: 'n' };
+const EMAIL_VALIDO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Todo lo que escribe un desconocido se recorta al largo de su columna.
+const recortar = (v, max) => String(v ?? '').trim().slice(0, max);
+const enteroPositivo = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 && n < 1000000 ? n : null;
+};
 
-function slugify(str) {
-  const noAccents = String(str)
-    .toLowerCase()
-    .split('')
-    .map((ch) => ACCENTS[ch] || ch)
-    .join('');
-  return noAccents.replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '').slice(0, 40) || 'empresa';
-}
+// Marca interna de "este mail ya tenia cuenta". NUNCA sale en la respuesta.
+const NOTA_YA_TIENE_CUENTA = 'Ya tiene cuenta: la solicitud no tiene efecto (no se creo nada ni se mando ningun mail).';
 
-function randomSuffix() {
-  return Math.random().toString(36).slice(2, 8);
-}
+// El cupo de preguntas se cuenta por MAIL, no por envio del formulario:
+// refrescar la pagina o reenviar el formulario no lo reinicia.
+const DIAS_DEL_CUPO = 30;
 
 module.exports = function (db) {
   const router = express.Router();
@@ -95,15 +120,38 @@ module.exports = function (db) {
   // Turnstile por un pedido que ya se va a rechazar igual.
   router.use(createCountryFirewallMiddleware(db));
 
-  // Alta autoservicio: arma tenant + suscripcion trial (plan por defecto,
-  // 1er mes gratis) + usuario admin, TODO de una, sin que un superadmin
-  // intervenga. Reusa upsertSubscription/getDefaultPlan/createInvitedUser
-  // -- no reimplementa nada de lo que ya existe para el alta manual.
-  router.post('/signup', signupLimiter, async (req, res) => {
-    const { turnstileToken, name, companyName, email, phone, contactPreference, employeeCount, clockCount, scheduleType } = req.body;
+  // ALTA: SOLO guarda la SOLICITUD y le avisa al superadmin (Telegram +
+  // campanita). Decision del dueño del producto (2026-10-01): nada se activa
+  // hasta que el superadmin la apruebe despues de hablar con la persona
+  // (routes/solicitudesAlta.js -> motor-laboral/services/altaEmpresa.js).
+  // Antes este endpoint creaba empresa, prueba y usuario al instante.
+  //
+  // Reglas de seguridad:
+  //   * la respuesta es IDENTICA para un mail nuevo y para uno que ya tiene
+  //     cuenta (F-04): el formulario no sirve para averiguar quien es cliente.
+  //     La landing le muestra a todos el mismo texto, que incluye "si ya
+  //     tenes cuenta, esta solicitud no tiene efecto";
+  //   * no se manda NINGUN mail automatico: antes se mandaba el de recuperar
+  //     contraseña, y eso dejaba que cualquiera le hiciera llegar mails
+  //     nuestros a un tercero;
+  //   * una sola solicitud "viva" por mail: reenviar el formulario actualiza
+  //     la que ya existe, no crea otra (ni otro aviso, ni otro cupo de chat).
+  router.post('/signup', signupPorDia, signupLimiter, async (req, res) => {
+    const b = req.body || {};
+    const name = recortar(b.name, 150);
+    const companyName = recortar(b.companyName, 150);
+    const email = recortar(b.email, 255).toLowerCase();
+    const phone = recortar(b.phone, 50) || null;
+    const contactPreference = ['whatsapp', 'llamada', 'email'].includes(b.contactPreference) ? b.contactPreference : 'whatsapp';
+    const employeeCount = enteroPositivo(b.employeeCount);
+    const clockCount = enteroPositivo(b.clockCount);
+    const scheduleType = recortar(b.scheduleType, 255) || null;
 
     if (!name || !companyName || !email) {
       return res.status(400).json({ error: 'name, companyName y email son requeridos' });
+    }
+    if (!EMAIL_VALIDO.test(email)) {
+      return res.status(400).json({ error: 'El mail no parece válido.' });
     }
 
     const secretKey = process.env.TURNSTILE_SECRET_KEY;
@@ -112,106 +160,106 @@ module.exports = function (db) {
     }
 
     try {
-      const captcha = await verifyTurnstileToken({ token: turnstileToken, remoteIp: req.ip, secretKey });
+      const captcha = await verifyTurnstileToken({ token: b.turnstileToken, remoteIp: req.ip, secretKey });
       if (!captcha.success) {
         return res.status(400).json({ error: 'Verificación anti-bot fallida, recargá la página e intentá de nuevo.' });
       }
 
-      // Chequeo temprano -- evita crear un tenant huerfano si el email ya
-      // tiene cuenta (createInvitedUser tambien lo valida, pero mas tarde,
-      // despues de ya haber creado tenant+suscripcion).
-      const [[existingUser]] = await db.query('SELECT id FROM app_users WHERE email = ?', [email]);
-
-      // El token del chat se crea junto con el lead y se devuelve UNA sola
-      // vez, mas abajo. En la base queda solo el hash.
+      // El token del chat se crea aca y se devuelve UNA sola vez. En la base
+      // queda solo el hash.
       const chat = generarChatToken();
 
-      // F-04: un email que YA tiene cuenta recibe la MISMA respuesta que uno
-      // nuevo. Antes devolvia 409 "ese email ya tiene cuenta", y eso dejaba
-      // averiguar que emails estan registrados probando de a uno. Ahora no
-      // se crea nada: a su dueño le llega el email para recuperar la clave
-      // (si fue el, le sirve; si no fue el, no pasa nada), y el intento queda
-      // como lead 'failed' con el motivo, para que se vea en el panel.
-      if (existingUser) {
-        const [dup] = await db.query(
-          `INSERT INTO signup_leads (name, company_name, email, phone, status, error_message, chat_token_hash)
-           VALUES (?, ?, ?, ?, 'failed', ?, ?)`,
-          [name, companyName, email, phone || null,
-           'El email ya tenia una cuenta: no se creo nada y se le mando el email para recuperar la contraseña.', chat.hash]
-        );
-        await enviarEmailDeContrasena(email);
-        return res.status(201).json({ ok: true, leadId: dup.insertId, chatToken: chat.token, emailEnviado: true });
-      }
+      const [[cuenta]] = await db.query('SELECT id FROM app_users WHERE LOWER(email) = ?', [email]);
+      const estado = cuenta ? 'failed' : 'pending';
+      const nota = cuenta ? NOTA_YA_TIENE_CUENTA : null;
 
-      const [leadResult] = await db.query(
-        `INSERT INTO signup_leads (name, company_name, email, phone, contact_preference, employee_count, clock_count, schedule_type, status, chat_token_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-        [
-          name,
-          companyName,
-          email,
-          phone || null,
-          contactPreference || 'whatsapp',
-          employeeCount || null,
-          clockCount || null,
-          scheduleType || null,
-          chat.hash
-        ]
-      );
-      const leadId = leadResult.insertId;
+      // Una sola fila "viva" por mail (y por tipo): si ya hay, se actualiza.
+      const [[previa]] = await db.query(
+        `SELECT id FROM signup_leads WHERE LOWER(email) = ? AND status = ? AND error_message <=> ? ORDER BY id DESC LIMIT 1`,
+        [email, estado, nota]);
 
-      try {
-        const code = `${slugify(companyName)}-${randomSuffix()}`;
-        // Quien se registra queda como TITULAR (el unico que puede pedir la
-        // baja, migracion 20261011). Sin la columna, se crea como antes.
-        const [tenantResult] = await db.query(`INSERT INTO tenants (name, code, titular_email) VALUES (?, ?, ?)`, [companyName, code, String(email).trim().toLowerCase()])
-          .catch((err) => (err.code === 'ER_BAD_FIELD_ERROR' ? db.query(`INSERT INTO tenants (name, code) VALUES (?, ?)`, [companyName, code]) : Promise.reject(err)));
-        const tenantId = tenantResult.insertId;
+      let leadId;
+      if (previa) {
+        leadId = previa.id;
+        await db.query(
+          `UPDATE signup_leads SET name = ?, company_name = ?, phone = ?, contact_preference = ?, employee_count = ?,
+                  clock_count = ?, schedule_type = ?, chat_token_hash = ? WHERE id = ?`,
+          [name, companyName, phone, contactPreference, employeeCount, clockCount, scheduleType, chat.hash, leadId]);
+      } else {
+        const [r] = await db.query(
+          `INSERT INTO signup_leads (name, company_name, email, phone, contact_preference, employee_count, clock_count, schedule_type, status, error_message, chat_token_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [name, companyName, email, phone, contactPreference, employeeCount, clockCount, scheduleType, estado, nota, chat.hash]);
+        leadId = r.insertId;
 
-        const plan = await billingRepository.getDefaultPlan(db);
-        if (!plan) throw new Error('No hay un plan por defecto configurado');
-
-        const { periodStart, periodEnd } = computeFreeTrialPeriod();
-        await billingRepository.upsertSubscription(
-          tenantId,
-          { plan_id: plan.id, status: 'trial', current_period_start: periodStart, current_period_end: periodEnd },
-          db
-        );
-
-        await appUserRepository.createInvitedUser({ email, tenantId, isSuperadmin: false }, db);
-
-        await db.query(`UPDATE signup_leads SET tenant_id = ?, status = 'provisioned' WHERE id = ?`, [tenantId, leadId]);
-
-        // F-04: el link para poner la contraseña ya NO viaja en la respuesta
-        // (cualquiera que se registrara con un email ajeno se lo quedaba). Lo
-        // manda Firebase al email, asi solo lo ve su dueño.
-        const envio = await enviarEmailDeContrasena(email);
-        if (!envio.enviado && envio.motivo !== 'dominio de prueba') {
-          console.warn(`[alta autoservicio] no se pudo mandar el email de contraseña a lead ${leadId}: ${envio.motivo}`);
-          await db.query('UPDATE signup_leads SET error_message = ? WHERE id = ?',
-            [`Cuenta creada, pero no se pudo mandar el email de contraseña: ${String(envio.motivo).slice(0, 500)}`, leadId]);
+        // Aviso al superadmin, solo por una solicitud NUEVA de alguien sin
+        // cuenta. Nunca rompe el alta (regla de oro de avisos.js).
+        if (!cuenta) {
+          const preferencia = { whatsapp: 'WhatsApp', llamada: 'llamada', email: 'email' }[contactPreference];
+          await avisos.avisar('alta', {
+            empresa: companyName,
+            detalle: [`${name} · ${email}${phone ? ' · ' + phone : ''}`, `Prefiere: ${preferencia}`,
+              employeeCount ? `${employeeCount} empleados` : null, clockCount ? `${clockCount} relojes` : null].filter(Boolean).join('\n'),
+          }, db);
         }
-        res.status(201).json({ ok: true, leadId, chatToken: chat.token, emailEnviado: true });
-      } catch (err) {
-        await db.query(`UPDATE signup_leads SET status = 'failed', error_message = ? WHERE id = ?`, [
-          String(err.message).slice(0, 1000),
-          leadId
-        ]);
-        throw err;
       }
+
+      res.status(201).json({ ok: true, leadId, chatToken: chat.token, pendiente: true });
     } catch (err) {
-      console.error('ERROR en alta autoservicio:', err);
-      res.status(500).json({ error: 'No se pudo crear la cuenta. Escribinos por WhatsApp y te ayudamos a mano.' });
+      console.error('ERROR en la solicitud de alta:', err);
+      res.status(500).json({ error: 'No se pudo enviar la solicitud. Escribinos por WhatsApp y te ayudamos a mano.' });
     }
   });
 
-  // Chat de ventas -- gateado por tener un leadId real (el registro de
-  // arriba ya filtro bots via Turnstile, no se le vuelve a pedir captcha
-  // por mensaje). Limite de preguntas gratis; pasado el limite, la landing
-  // muestra el link de WhatsApp en vez de seguir mandando mensajes aca.
-  router.post('/chat', chatLimiter, async (req, res) => {
+  // Valida leadId + token y devuelve la solicitud. La MISMA respuesta para
+  // "ese lead no existe" y "el token no es el de ese lead": distinguirlos
+  // convertiria esto en un oraculo para saber que ids existen.
+  async function leadDelChat(req, res) {
+    const { leadId, chatToken } = req.body || {};
+    const [[lead]] = leadId ? await db.query(
+      'SELECT id, email, chat_questions_used, chat_history, chat_token_hash FROM signup_leads WHERE id = ?', [leadId]) : [[null]];
+    if (!lead || !tokenCoincide(chatToken, lead.chat_token_hash)) {
+      res.status(403).json({ error: 'No se pudo validar la sesión del chat. Recargá la página.' });
+      return null;
+    }
+    return lead;
+  }
+
+  // Preguntas ya usadas por ese MAIL en los ultimos dias (todas sus solicitudes).
+  async function preguntasUsadas(lead) {
+    const [[uso]] = await db.query(
+      `SELECT COALESCE(SUM(chat_questions_used), 0) AS n FROM signup_leads
+       WHERE LOWER(email) = LOWER(?) AND created_at >= NOW() - INTERVAL ${DIAS_DEL_CUPO} DAY`, [lead.email]);
+    return Math.max(Number(uso.n) || 0, lead.chat_questions_used);
+  }
+
+  const historialVisible = (lead) => (Array.isArray(lead.chat_history) ? lead.chat_history : [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+    // Una respuesta vieja con mal trato (anterior al arreglo del 2026-10-01)
+    // tampoco se vuelve a mostrar.
+    .map((m) => ({ role: m.role, content: m.role === 'assistant' && tratoInapropiado(m.content) ? RESPUESTA_SEGURA : String(m.content) }));
+
+  // Al refrescar la pagina, la landing recupera la conversacion en vez de
+  // volver a pedir el formulario (y en vez de regalar otro cupo de preguntas).
+  router.post('/chat/estado', chatLimiter, async (req, res) => {
     try {
-      const { leadId, chatToken, message } = req.body;
+      const lead = await leadDelChat(req, res);
+      if (!lead) return;
+      const questionsLeft = Math.max(0, CHAT_QUESTION_LIMIT - await preguntasUsadas(lead));
+      res.json({ history: historialVisible(lead), questionsLeft, limitReached: questionsLeft <= 0 });
+    } catch (err) {
+      console.error('ERROR leyendo el estado del chat:', err);
+      res.status(502).json({ error: 'No se pudo recuperar la conversación.' });
+    }
+  });
+
+  // Chat de ventas -- gateado por tener un leadId real y su token (la
+  // solicitud de arriba ya filtro bots via Turnstile). Tres frenos, del mas
+  // chico al mas grande: cupo por mail, tope por conexion por dia (chatPorDia)
+  // y tope diario global de gasto (presupuestoChat.js).
+  router.post('/chat', chatPorDia, chatLimiter, async (req, res) => {
+    try {
+      const { leadId, message } = req.body || {};
       if (!leadId || !message || !String(message).trim()) {
         return res.status(400).json({ error: 'leadId y message son requeridos' });
       }
@@ -222,18 +270,11 @@ module.exports = function (db) {
         });
       }
 
-      const [[lead]] = await db.query(
-        'SELECT id, chat_questions_used, chat_history, chat_token_hash FROM signup_leads WHERE id = ?', [leadId]);
+      const lead = await leadDelChat(req, res);
+      if (!lead) return;
 
-      // La MISMA respuesta para "ese lead no existe" y "el token no es el de
-      // ese lead". Distinguirlos convertiria esto en un oraculo para saber
-      // que ids existen, que es justo el primer paso del ataque que este
-      // chequeo viene a cerrar.
-      if (!lead || !tokenCoincide(chatToken, lead.chat_token_hash)) {
-        return res.status(403).json({ error: 'No se pudo validar la sesión del chat. Recargá la página.' });
-      }
-
-      if (lead.chat_questions_used >= CHAT_QUESTION_LIMIT) {
+      const usadas = await preguntasUsadas(lead);
+      if (usadas >= CHAT_QUESTION_LIMIT) {
         return res.json({ limitReached: true, questionsLeft: 0 });
       }
 
@@ -245,20 +286,29 @@ module.exports = function (db) {
       const plan = await billingRepository.getDefaultPlan(db);
       if (!plan) return res.status(503).json({ error: 'No hay un plan configurado' });
 
-      // Bug real: antes cada mensaje se mandaba SOLO, sin los anteriores --
-      // el modelo no tenia forma de entender un "si" respondiendo a su
-      // propia pregunta. El historial de ESTE lead se persiste aca mismo
-      // (JSON, acotado solo por CHAT_QUESTION_LIMIT).
+      // Freno de emergencia del gasto: tope diario para toda la pagina.
+      const presupuesto = await consumirMensaje(db);
+      if (!presupuesto.permitido) {
+        return res.json({ limitReached: true, questionsLeft: 0 });
+      }
+      if (presupuesto.recienAlcanzado) {
+        avisos.enviarTelegram(`🚨 El chat de la página llegó al tope diario de ${presupuesto.tope} mensajes. Deja de responder hasta mañana (manda a WhatsApp). Si no es una campaña tuya, puede ser un abuso.`, db)
+          .catch(() => {});
+      }
+
+      // El historial de ESTE lead se persiste aca mismo (JSON, acotado por
+      // CHAT_QUESTION_LIMIT): sin los mensajes anteriores, un "si" del
+      // visitante le llegaba al modelo sin contexto.
       const history = Array.isArray(lead.chat_history) ? lead.chat_history : [];
       const { reply } = await askSalesChat({ apiKey, plan, history, userMessage: message });
       const updatedHistory = [...history, { role: 'user', content: message }, { role: 'assistant', content: reply }];
 
       await db.query(
         'UPDATE signup_leads SET chat_questions_used = chat_questions_used + 1, chat_history = ? WHERE id = ?',
-        [JSON.stringify(updatedHistory), leadId]
+        [JSON.stringify(updatedHistory), lead.id]
       );
 
-      const questionsLeft = CHAT_QUESTION_LIMIT - (lead.chat_questions_used + 1);
+      const questionsLeft = Math.max(0, CHAT_QUESTION_LIMIT - (usadas + 1));
       res.json({ reply, questionsLeft, limitReached: questionsLeft <= 0 });
     } catch (err) {
       console.error('ERROR en chat de ventas:', err);

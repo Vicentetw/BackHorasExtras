@@ -70,10 +70,17 @@ test('askSalesChat: manda el historial previo antes del mensaje nuevo', async ()
   assert.equal(body.messages[2].content, 'si');
 });
 
-test('buildSystemPrompt: sabe que el formulario esta en la pagina y que no puede mandar links', () => {
+test('buildSystemPrompt: sabe que el visitante YA envio la solicitud, y que no puede mandar links', () => {
+  // Reportado el 2026-10-01: el chat mandaba a "completar el formulario de
+  // arriba" a quien acababa de completarlo, y decia que la cuenta ya estaba
+  // creada. Ahora el alta es una solicitud que aprueba el superadmin.
   const prompt = buildSystemPrompt(FAKE_PLAN);
-  assert.match(prompt, /formulario.*esta en ESTA MISMA pagina/i);
+  assert.match(prompt, /YA ENVIO el formulario/);
+  assert.match(prompt, /NUNCA le digas que complete el formulario/);
+  assert.match(prompt, /TODAVIA NO esta creada/);
+  assert.doesNotMatch(prompt, /no hace falta .* que nadie los contacte/i);
   assert.match(prompt, /NO podés enviar links ni contactos/i);
+  assert.doesNotMatch(RESPUESTA_SEGURA, /complet(á|a)r? el formulario/i, 'la respuesta fija tampoco manda al formulario');
 });
 
 test('askSalesChat: si Anthropic responde con error, lo propaga con detalle', async () => {
@@ -130,9 +137,9 @@ test('buildSystemPrompt: exige trato profesional aunque el visitante escriba inf
 });
 
 test('askSalesChat: una respuesta con mal trato NO llega al visitante: se descarta y se pide otra', async () => {
-  const fetchImpl = fetchEnSecuencia(['Muy fácil, boludo. Completá el formulario.', 'Es sencillo: complete el formulario que está arriba de este chat.']);
+  const fetchImpl = fetchEnSecuencia(['Muy fácil, boludo. Completá el formulario.', 'Tu solicitud ya fue recibida: el equipo te va a contactar.']);
   const r = await askSalesChat({ apiKey: 'KEY', plan: FAKE_PLAN, userMessage: 'bueno, cómo hago, no tengo idea', fetchImpl });
-  assert.equal(r.reply, 'Es sencillo: complete el formulario que está arriba de este chat.');
+  assert.equal(r.reply, 'Tu solicitud ya fue recibida: el equipo te va a contactar.');
   assert.equal(r.revisado, 'reintento');
   assert.equal(fetchImpl.calls.length, 2);
   assert.match(JSON.parse(fetchImpl.calls[1].options.body).system, /respuesta anterior fue descartada/);

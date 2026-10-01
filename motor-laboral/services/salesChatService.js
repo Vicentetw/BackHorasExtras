@@ -70,8 +70,8 @@ function tratoInapropiado(texto) {
 
 // Texto fijo, escrito por nosotros: es lo que se muestra si el modelo falla
 // dos veces. Siempre correcto, aunque sea generico.
-const RESPUESTA_SEGURA = 'Con gusto te ayudo. Podés completar el formulario que está arriba de este chat para registrarte, '
-  + 'o usar el botón de WhatsApp que está en pantalla para hablar con una persona del equipo.';
+const RESPUESTA_SEGURA = 'Con gusto te ayudo. Tu solicitud ya fue recibida y una persona del equipo te va a contactar. '
+  + 'Si querés hablar ahora, podés usar el botón de WhatsApp que está en pantalla.';
 
 const RECORDATORIO_DE_TRATO = 'ATENCION: tu respuesta anterior fue descartada porque usó un insulto o un trato de confianza hacia el visitante. '
   + 'Volvé a responder la misma pregunta con trato estrictamente profesional y respetuoso, sin vocativos ni apodos.';
@@ -80,7 +80,10 @@ function buildSystemPrompt(plan) {
   return [
     'Sos el asistente de ventas del sitio de un sistema de control de asistencia, horas extra, ausencias y vacaciones para empresas en Argentina (fichaje biometrico, calculo automatico de horas extra, turnos partidos para docentes/medicos, multi-empresa).',
     `El plan vigente cuesta USD ${plan.base_price_usd} base + USD ${plan.price_per_employee_usd} por empleado facturado (minimo ${plan.min_billed_employees} empleados aunque la empresa tenga menos), con descuento del ${plan.discount_quarterly_pct}% trimestral, ${plan.discount_semiannual_pct}% semestral y ${plan.discount_annual_pct}% anual. El primer mes es gratis (trial), pago al mes vencido.`,
-    'El formulario para crear la cuenta y arrancar la prueba gratis esta en ESTA MISMA pagina, arriba del chat -- si preguntan "en que link", "como me registro" o "donde me anoto", decíles que completen ese formulario ahi arriba, no hace falta salir de la pagina ni que nadie los contacte para eso.',
+    // DONDE ESTA EL VISITANTE: este chat solo aparece DESPUES de enviar el
+    // formulario. Antes el prompt mandaba a "completar el formulario de
+    // arriba" a alguien que acababa de completarlo (reportado el 2026-10-01).
+    'CONTEXTO: la persona con la que hablás YA ENVIO el formulario de solicitud de esta pagina (este chat solo aparece despues de enviarlo). Su cuenta TODAVIA NO esta creada: una persona del equipo la va a contactar por el medio que eligio para activarla, y el mes de prueba gratis empieza recien cuando la cuenta se activa. NUNCA le digas que complete el formulario (ya lo hizo), ni que su cuenta ya esta creada, ni que ya puede entrar al sistema. Si pregunta "como sigo", "que hago ahora" o "cuando puedo empezar", decile que su solicitud ya fue recibida y que el equipo la va a contactar; si quiere acelerar, puede escribir por el boton de WhatsApp. No sabés nada sobre el estado de su solicitud ni si ya tiene una cuenta: no lo afirmes ni lo niegues.',
     'Ya hay un boton flotante de WhatsApp visible en la pantalla ("💬 Hablar por WhatsApp") para hablar con una persona. Si alguien pide que le "pases" o "mandes" el contacto, decile que use ese boton -- vos NO podés enviar links ni contactos por este chat, así que nunca digas "te lo paso" o "ahi te mando el link": derivalos al boton que ya esta a la vista.',
     'Respondé SIEMPRE en español de Argentina, corto y concreto (2-4 oraciones como mucho, nunca una lista larga) -- es un chat, no un email.',
     // Trato: ver "TRATO RESPETUOSO" arriba (incidente del 2026-10-01).
