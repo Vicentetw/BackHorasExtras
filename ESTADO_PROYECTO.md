@@ -53,14 +53,16 @@
 > ### Estado al 2026-10-01
 >
 > - Backend en producción: `cc8b89c`. **876/876 tests.**
-> - Frontend en producción: `69558e0`. Landing aparte: `0620117`.
+> - Frontend en producción: `bdc0ba7`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
 >   pasarlo a privado es obligatorio antes de vender).
-> - En el frontend hay cambios **ajenos sin commitear** en
->   `src/app/core/shell/shell.css` y `shell.html` (arreglo del panel
->   lateral). No son de la sesión que escribió esto: preguntar antes de tocar.
+> - No queda nada sin commitear en ninguno de los tres repos.
+> - **Cómo probar una pantalla de verdad sin estar en la PC:** `ng serve`
+>   (usa el backend local, puerto 3000) + Chrome sin ventana manejado por su
+>   protocolo de depuración. Sirve para medir tamaños y sacar capturas. Así
+>   se verificó el arreglo del panel lateral.
 >
 > ### Qué tiene que hacer el dueño (pendiente)
 >
@@ -121,6 +123,14 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-01 — Panel lateral: sin líneas al plegar y sin íconos
+>   cortados.** Dos problemas que reportó el dueño. (1) Al plegar quedaban
+>   líneas verticales: el panel pasaba a 72 px y el contenido seguía en 248.
+>   (2) Con Administración abierto los íconos quedaban por la mitad. El
+>   arreglo lo había empezado otra sesión y quedó sin commitear; al medirlo
+>   en Chrome apareció que la animación colgaba de una clase interna de
+>   Material que ya no existe. **Lección: no atar un estilo propio a una
+>   clase interna de una librería.** Frontend `bdc0ba7`.
 > - **2026-10-01 — Alta por solicitud.** El formulario de la página solo
 >   guarda una solicitud; el superadmin la aprueba o rechaza (pantalla
 >   Solicitudes de alta, aviso por Telegram y campanita). Misma respuesta
