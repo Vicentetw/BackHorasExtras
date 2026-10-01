@@ -3,6 +3,7 @@ const admin = require('firebase-admin');
 const { initFirebaseAdmin } = require('../firebaseAuth');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
+const { modulosDe } = require('../motor-laboral/services/modulos');
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
 const { resolveEffectiveStatus, DEFAULT_GRACE_DAYS } = require('../motor-laboral/services/billingCalculations');
 
@@ -64,6 +65,8 @@ module.exports = function (db) {
       permissions: Array.from(req.appUser.permissions),
       // Portal del empleado: el frontend muestra SOLO "Mi asistencia".
       employeeId: req.appUser.employeeId ?? null,
+      // Modulos que el superadmin le habilito a la empresa (ver modulos.js).
+      modulos: req.appUser.tenantId != null ? await modulosDe(db, req.appUser.tenantId).catch(() => ({})) : {},
       subscriptionStatus
     });
   });

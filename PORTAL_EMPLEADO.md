@@ -3,8 +3,8 @@
 Cada empleado entra con su mail y ve **solo lo suyo**: sus fichajes, sus días,
 sus horas extra y lo que se le liquidó. La etapa 1 es de **solo lectura**.
 
-Rama: `feature/portal-empleado`, en los dos repos. No se publica hasta que el
-dueño del producto lo decida. Migración: `20261010_portal_empleado.sql`.
+Hecho en la rama `feature/portal-empleado`. Publicado el 2026-10-01 con el
+módulo apagado para todas las empresas. Migración: `20261010_portal_empleado.sql`.
 
 ## Decisión de producto: incluido en el plan, no se cobra por persona que entra
 
@@ -18,6 +18,25 @@ dueño del producto lo decida. Migración: `20261010_portal_empleado.sql`.
 - Lo que sí iría en un plan superior es la **etapa 2 (solicitudes y
   aprobaciones)**, y el **fichaje con el celular** sería un módulo aparte, que
   se cobra por empleado habilitado.
+
+## Se habilita empresa por empresa (lo decide el superadmin)
+
+Pedido del dueño del producto (2026-09-30/10-01): "los empleados podrán
+acceder sólo cuando la empresa lo tiene habilitado, ya que se debe pagar por
+los recursos que consume".
+
+- Es un **módulo**, apagado por defecto (`motor-laboral/services/modulos.js`,
+  guardado en `app_settings` como `modulo_portal_empleado`, sin migración).
+  Publicarlo no le cambió nada a ninguna empresa.
+- Solo el **superadmin** lo prende o lo apaga, en **Empresas > Editar >
+  Módulos contratados** (`GET/PUT /api/labor-engine/admin/tenants/:id/modulos`).
+- Apagado, en cada pedido: el empleado no entra (`/api/mi` → 403), el
+  administrador no invita ni gestiona cuentas (`/api/portal-empleados` → 403)
+  y el menú no lo muestra.
+- Si se apaga después de haber invitado gente, esas cuentas dejan de entrar,
+  pero no se borran: vuelven a entrar si se prende de nuevo.
+- Una fila global (tenant NULL) **no** habilita nada, para que nunca se prenda
+  para todas las empresas por accidente.
 
 ## Cómo funciona
 

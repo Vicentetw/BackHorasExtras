@@ -36,6 +36,7 @@ async function borrarCuentaInvitada() {
 }
 
 async function cleanup() {
+  await db.query(`DELETE FROM app_settings WHERE name = 'modulo_portal_empleado' AND tenant_id IN (?, ?)`, [T, OTRA]);
   await db.query('UPDATE app_users SET employee_id = NULL WHERE tenant_id IN (?, ?)', [T, OTRA]);
   await borrarCuentaInvitada();
   for (const t of [T, OTRA]) {
@@ -79,6 +80,7 @@ before(async () => {
   [idA, idB] = ids;
   const [c] = await db.query(`INSERT INTO employees (employee_id, nombre, tenant_id, activo, exclude_from_report) VALUES (900903, 'Portal C sin cuenta (test)', ?, 1, 0)`, [T]);
   idC = c.insertId;
+  await db.query(`INSERT INTO app_settings (name, tenant_id, value) VALUES ('modulo_portal_empleado', ?, '1') ON DUPLICATE KEY UPDATE value = '1'`, [T]);
   await db.query('UPDATE app_users SET employee_id = ? WHERE firebase_uid = ?', [idA, A.uid]);
   await db.query('UPDATE app_users SET employee_id = ? WHERE firebase_uid = ?', [idB, B.uid]);
 });
@@ -159,7 +161,30 @@ test('mes cerrado: el empleado ve lo que se le liquido, con los ajustes', async 
   assert.equal((await (await get('/api/mi/mes?periodo=2026-05', hA)).json()).liquidado, null, 'mes abierto: todavia no hay liquidado');
 });
 
+test('el portal es un modulo: apagado no se usa, y solo el superadmin lo prende', async () => {
+  const hSuper = await getTestAuthHeaders('test-portal-super');
+  try {
+    const url = `/api/labor-engine/admin/tenants/${T}/modulos`;
+    assert.equal((await send('PUT', url, { portalEmpleado: false }, hAdmin)).status, 403, 'un admin de la empresa no se lo prende solo');
+    assert.equal((await send('PUT', url, { portalEmpleado: false }, hSuper)).status, 200);
+    assert.equal((await get('/api/mi/perfil', hA)).status, 403, 'apagado: el empleado no entra');
+    assert.equal((await get('/api/portal-empleados', hAdmin)).status, 403, 'apagado: no se administra');
+    assert.equal((await (await get('/api/app-users/me', hAdmin)).json()).modulos.portalEmpleado, false);
+    assert.equal((await send('PUT', url, { otraCosa: true }, hSuper)).status, 400);
+    assert.equal((await send('PUT', url, { portalEmpleado: true }, hSuper)).status, 200);
+    assert.equal((await get('/api/mi/perfil', hA)).status, 200);
+    assert.equal((await (await get('/api/app-users/me', hAdmin)).json()).modulos.portalEmpleado, true);
+    // Otra empresa sigue apagada: prender una no prende las demas.
+    assert.equal((await get('/api/portal-empleados', hAdminOtra)).status, 403);
+  } finally {
+    await deleteTestUser('test-portal-super');
+  }
+});
+
 test('admin: mail, invitacion y corte de acceso; otra empresa no toca empleados ajenos', async () => {
+  // La otra empresa TAMBIEN con el portal prendido: asi lo que se prueba es
+  // el aislamiento (no es tu empleado), no solo el modulo apagado.
+  await db.query(`INSERT INTO app_settings (name, tenant_id, value) VALUES ('modulo_portal_empleado', ?, '1') ON DUPLICATE KEY UPDATE value = '1'`, [OTRA]);
   const lista = (await (await get('/api/portal-empleados', hAdmin)).json()).empleados;
   assert.equal(lista.find((e) => e.id === idA).cuenta, 'ACTIVA');
   assert.equal(lista.find((e) => e.id === idC).cuenta, 'SIN_EMAIL');

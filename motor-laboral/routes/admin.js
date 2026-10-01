@@ -14,6 +14,7 @@ const { resolveToleranceConfig } = require('../services/toleranceResolver');
 const { computeAttendanceResult } = require('../services/timeClassifier');
 const { DAY_TYPES } = require('../services/dayTypeRuleResolver');
 const templateConfigHistoryRepository = require('../repositories/templateConfigHistoryRepository');
+const { MODULOS, modulosDe, setModulo } = require('../services/modulos');
 
 // Mismo motivo que ya documenta /attendance-range en horasdedica.js:
 // toISOString() usa UTC, y en un servidor con huso horario negativo
@@ -163,6 +164,33 @@ function createMotorLaboralAdminRoutes(db) {
     } catch (err) {
       console.error('Motor Laboral admin update tenant error:', err);
       res.status(500).json({ error: 'Error al actualizar empresa' });
+    }
+  });
+
+  // --- Modulos por empresa (motor-laboral/services/modulos.js) ---
+  // Solo el superadmin los prende o apaga, segun lo que contrato cada empresa.
+  router.get('/tenants/:id/modulos', requireSuperadmin, async (req, res) => {
+    try {
+      res.json({ modulos: await modulosDe(db, Number(req.params.id)) });
+    } catch (err) {
+      console.error('Motor Laboral admin modulos error:', err);
+      res.status(500).json({ error: 'Error al leer los módulos' });
+    }
+  });
+
+  router.put('/tenants/:id/modulos', requireSuperadmin, async (req, res) => {
+    try {
+      const tenantId = Number(req.params.id);
+      const [[t]] = await db.query('SELECT id FROM tenants WHERE id = ?', [tenantId]);
+      if (!t) return res.status(404).json({ error: 'Empresa no encontrada' });
+      const pedido = req.body || {};
+      const desconocido = Object.keys(pedido).find((k) => !MODULOS[k]);
+      if (desconocido) return res.status(400).json({ error: `Módulo desconocido: ${desconocido}` });
+      for (const [m, v] of Object.entries(pedido)) await setModulo(db, tenantId, m, !!v);
+      res.json({ ok: true, modulos: await modulosDe(db, tenantId) });
+    } catch (err) {
+      console.error('Motor Laboral admin set modulos error:', err);
+      res.status(500).json({ error: 'Error al guardar los módulos' });
     }
   });
 

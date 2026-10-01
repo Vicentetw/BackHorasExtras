@@ -130,7 +130,10 @@ test('GET /api/billing/subscriptions/:tenantId: el propio tenant ve su suscripci
   const start = new Date(json.subscription.current_period_start);
   const end = new Date(json.subscription.current_period_end);
   const expectedEnd = new Date(start);
-  expectedEnd.setMonth(expectedEnd.getMonth() + 1);
+  // En UTC, igual que llegan las fechas: con setMonth (hora local, UTC-3) el
+  // dia 1° de cada mes la cuenta daba el ultimo dia del mes y el test fallaba
+  // aunque el sistema calculara bien (1/10 -> 1/11).
+  expectedEnd.setUTCMonth(expectedEnd.getUTCMonth() + 1);
   assert.equal(end.toISOString().slice(0, 10), expectedEnd.toISOString().slice(0, 10), 'el primer periodo debe durar 1 mes exacto');
 });
 

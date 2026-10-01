@@ -15,6 +15,7 @@ const express = require('express');
 const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const { enviarEmailDeContrasena } = require('../motor-laboral/services/firebaseEmail');
+const { moduloHabilitado } = require('../motor-laboral/services/modulos');
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Cada invitacion son varias llamadas a Firebase: de a tandas, para que un
@@ -23,6 +24,19 @@ const MAX_POR_TANDA = 50;
 
 module.exports = function (db, { enviarEmail = enviarEmailDeContrasena } = {}) {
   const router = express.Router();
+
+  // Solo si el superadmin le habilito el portal a la empresa (segun su plan).
+  router.use(async (req, res, next) => {
+    const t = resolveTenantId(req);
+    if (t == null) return next(); // tenantONada responde "Elegí una empresa"
+    try {
+      if (await moduloHabilitado(db, t, 'portalEmpleado')) return next();
+      res.status(403).json({ error: 'El portal del empleado no está habilitado para esta empresa. Lo habilita el administrador del sistema según el plan.' });
+    } catch (err) {
+      console.error('ERROR portal modulo:', err);
+      res.status(500).json({ error: 'Error leyendo los módulos de la empresa' });
+    }
+  });
 
   function tenantONada(req, res) {
     const t = resolveTenantId(req);

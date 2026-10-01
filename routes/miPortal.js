@@ -19,6 +19,7 @@
 // El calculo es el MISMO que Presentismo (calcularAsistencia), filtrado a esta
 // persona desde el principio: cuesta lo de una persona, no lo de la empresa.
 const express = require('express');
+const { moduloHabilitado } = require('../motor-laboral/services/modulos');
 
 const PERIODO = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -85,6 +86,10 @@ module.exports = function (db, { calcularAsistencia }) {
          FROM employees e JOIN tenants t ON t.id = e.tenant_id
          WHERE e.id = ? AND e.tenant_id = ?`, [u.employeeId, u.tenantId]);
       if (!e) return res.status(403).json({ error: 'Tu cuenta no está vinculada a un legajo de tu empresa. Consultá con RRHH.' });
+      // El superadmin habilita el portal empresa por empresa (segun su plan).
+      if (!(await moduloHabilitado(db, e.tenant_id, 'portalEmpleado'))) {
+        return res.status(403).json({ error: 'El portal del empleado no está habilitado para tu empresa.' });
+      }
       // Dado de baja: el acceso se corta (la empresa puede reactivarlo).
       if (!Number(e.activo)) return res.status(403).json({ error: 'Tu legajo figura dado de baja. Consultá con RRHH.' });
       req.empleado = e;
