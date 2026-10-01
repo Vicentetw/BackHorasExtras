@@ -1,79 +1,154 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-09-20)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-01)
+>
+> **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
+> Las conversaciones se cortan y la siguiente no sabe en qué estábamos. Este
+> bloque es la memoria del proyecto. **Regla del dueño: al terminar cada
+> bloque de trabajo se actualiza acá** el estado, las metas y la bitácora.
 >
 > ### En qué carpeta se trabaja
 >
 > ```
-> C:\angular\horasdedicacion-back-deploy\BackHorasExtras     ← BACKEND. Todo acá.
+> C:\angular\horasdedicacion-back-deploy\BackHorasExtras        ← BACKEND. Todo acá.
 > C:\angular\horasDedicacionOnlineAngular\horas-dedica-angular  ← FRONTEND Angular
-> C:\angular\horasDedicacionOnline                           ← OBSOLETO, no usar
+> C:\angular\horas-dedica-landing                               ← LANDING aparte (repo landing-horas-dedica)
+> C:\angular\horas-dedica-db-backup                             ← respaldo diario de la base (repo privado)
+> C:\angular\horasDedicacionOnline                              ← OBSOLETO, no usar
 > ```
 >
-> La tercera es el monorepo viejo (`horas-dedica-completo`). **Suele ser el
+> El último es el monorepo viejo (`horas-dedica-completo`). **Suele ser el
 > directorio por defecto de la sesión**, así que el `git status` inicial
-> muestra SUS archivos aunque el trabajo real sea en las otras dos. Su
-> `backendonline2/` quedó congelado en la migración `20260920`. No portarle
+> muestra SUS archivos aunque el trabajo real sea en los otros. No portarle
 > nada.
 >
 > ### Cómo se despliega
 >
 > | | |
 > |---|---|
-> | Backend | `git push origin main` → Render despliega solo |
+> | Backend | `git push origin main` → Render despliega solo. Verificar con `https://academypruebadep.onrender.com/health` (devuelve la versión) |
 > | Frontend | `git push origin main` + **`npm run deploy:live`** (no es automático) |
-> | Migraciones | Actions → *"Correr migracion SQL en produccion (manual)"*. **Antes** del deploy, nunca después |
+> | Landing aparte | `git push` en `horas-dedica-landing` |
+> | Migraciones | **Las corre el dueño a mano** (phpMyAdmin de Clever Cloud, o `node run-sql.js` desde su PC). NO desde GitHub Actions: el repo es público y no se guardan credenciales ahí |
 >
-> Verificá el deploy comparando el hash del bundle, no asumas:
-> `main-XXXX.js` del `dist/` local vs. el de `https://horasdedicacionavp.web.app/index.html`.
+> Como Render publica antes de que se corra la migración, **todo código nuevo
+> tiene que funcionar también sin la migración** (leer NULL si falta una
+> columna, responder 503 claro en lo nuevo). Ya rompimos esto una vez.
 >
-> ### Estado al 2026-09-20
+> ### Reglas de trabajo que pidió el dueño
 >
-> - Backend: **558/558 tests**. Producción al día, sin migraciones pendientes.
-> - Frontend: build limpio, desplegado.
-> - Repo del backend: **PÚBLICO** (decisión del dueño por ahora). Los otros dos, privados.
+> 1. **No cambiar nada que ya funciona en producción sin preguntar.** Listar
+>    cada cambio (A, B, C…) y esperar el sí. Lo nuevo y aditivo sí se puede.
+> 2. **Lo grande va en una rama aparte** y se une a `main` cuando lo aprueba.
+> 3. **Todo módulo nuevo nace apagado** y lo habilita el superadmin por
+>    empresa (`motor-laboral/services/modulos.js`): se paga por lo que se usa.
+> 4. **Dejar todo probado**, y decir qué NO se pudo probar.
+> 5. **Explicar el por qué**, no solo el qué: el dueño está aprendiendo.
+> 6. Diseñar para 5000 empleados: cálculos en lote, listas con filtro.
+> 7. La base de pruebas es el contenedor Docker `mysql_local` (puerto 3307).
+>    Si cientos de tests fallan de golpe, es que Docker está caído.
+> 8. Si hay cambios sin commitear que no son tuyos (otra sesión), no los
+>    mezcles ni los publiques: apartalos, hacé lo tuyo y devolvelos.
 >
-> ### Para encender el monitoreo de errores (5 minutos, pendiente)
+> ### Estado al 2026-10-01
 >
-> El código ya está (`monitoreo.js`), **apagado hasta que exista la variable
-> `SENTRY_DSN`**. Sin ella no hace nada: ni se conecta, ni puede romper un
-> pedido.
+> - Backend en producción: `cc8b89c`. **876/876 tests.**
+> - Frontend en producción: `69558e0`. Landing aparte: `0620117`.
+> - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
+>   `tupctw@gmail.com`.
+> - Repos: backend **público** (decisión del dueño hasta que se venda;
+>   pasarlo a privado es obligatorio antes de vender).
+> - En el frontend hay cambios **ajenos sin commitear** en
+>   `src/app/core/shell/shell.css` y `shell.html` (arreglo del panel
+>   lateral). No son de la sesión que escribió esto: preguntar antes de tocar.
 >
-> 1. cuenta gratis en **sentry.io**, proyecto tipo **Node.js**
-> 2. copiar el DSN (`https://xxxx@o0.ingest.sentry.io/0`)
-> 3. pegarlo en **Render → el backend → Environment → `SENTRY_DSN`**
+> ### Qué tiene que hacer el dueño (pendiente)
 >
-> A partir de ahí, cada error no atrapado avisa con archivo y línea, qué
-> empresa y qué usuario lo sufrió, y cuántas veces pasó. No se mandan
-> cookies, ni headers de autorización, ni cuerpos de pedido
-> (`sendDefaultPii: false`): son datos de asistencia de personas reales.
+> | Qué | Para qué |
+> |---|---|
+> | Correr `migrations/20261012_solicitudes_de_alta.sql` | Sin ella no se puede aprobar ni rechazar solicitudes de alta |
+> | Correr `migrations/20261010_portal_empleado.sql` (si no la corrió) | Portal del empleado |
+> | Confirmar que corrió `20261008` y `20261009` | Cierre de mes y ajustes |
+> | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
+> | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
+> | Decir cuál de las dos landing usa y dónde está publicada la separada | Hoy hay dos copias |
+> | Activar `MYSQL_SSL` en Render (F-11) y mandar `SHOW GRANTS` (F-12) | Seguridad |
+> | Branch protection en `main` (los dos repos) | Seguridad |
+> | Probar en un celular el portal del empleado y el alta completa | Nadie lo probó en un navegador |
 >
-> ### Lo que falta (en orden)
+> ### Metas, en orden
 >
-> 1. **Las dos listas lado a lado** en Matching (reloj ↔ empleados) para
->    vincular a mano. Pedido explícito del dueño: *"debe ser fácil… piensa
->    cómo puede ser lo más fácil e intuitivo para un empleado que no sabe
->    usar el sistema"*. Hoy resolvería pocos casos, pero hace falta al sumar
->    una empresa nueva.
-> 2. **Cambiar la contraseña del MySQL local** — estuvo en este archivo, que
->    está en un repo público, y sigue en el historial de git.
-> 3. **Branch protection** en ambos repos (a mano en GitHub, ver más abajo).
-> 4. ~~Lentitud intermitente en Presentismo~~ — **RESUELTA el 2026-09-21.**
->    No era el plan gratuito de Render. El `JOIN` traía los fichajes con
->    `ON (u.USERID = c.USERID OR CAST(u.Badgenumber AS CHAR) = CAST(c.USERID AS CHAR))`:
->    ese `OR` entre dos columnas más el `CAST` anula cualquier índice, y el
->    `EXPLAIN` mostraba que por **cada** fichada MySQL recorría las 499 filas
->    de `users` (39 millones de comparaciones para un año). Se resolvió con
->    tres cambios medidos contra producción: el mapa usuario→empleado se arma
->    una vez y la correspondencia se hace en memoria; un índice
->    `(tenant_id, CHECKTIME)` (migración `20260929`); y el detalle de una
->    persona trae **sólo sus fichadas**, no las de los 480. Resultado:
->    **~19 s → ~1,5 s** en el detalle anual, con resultados idénticos.
->    Lo que queda de ese segundo y medio son mayormente las pulsaciones de
->    los marcadores (badges 5, 6, 9, 10), que acumulan las de toda la
->    empresa y hacen falta para detectar salidas particulares.
-> 5. Backlog: monitoreo de errores (Sentry), backend de staging, tests de
->    integración en CI, consolidar los tres motores de asistencia.
+> 1. **Separar la landing del sistema** (para no exponer el sistema ni
+>    afectar a los clientes que pagan). Dominio propio → una sola landing en
+>    su dominio (Astro + Cloudflare Pages) → servicio de recepción aparte
+>    (solicitud + chat) con un usuario de base que solo escriba en
+>    `signup_leads`. Ver `SOLICITUDES_DE_ALTA.md`.
+> 2. **Fichaje con el celular** (módulo pago aparte, por empleado
+>    habilitado). Decidido: GPS + zonas, detección de GPS falso, llave atada
+>    al celular y biometría del propio teléfono (sin guardar huellas ni
+>    caras). Necesita app (Capacitor); primero Android, con el APK compilado
+>    por GitHub. Ver `PORTAL_EMPLEADO.md`.
+> 3. **Portal del empleado, lo que falta**: prueba de carga con 400
+>    usuarios, cargar el mail desde la importación, web instalable (PWA),
+>    etapa 2 (solicitudes y aprobaciones). Decisión abierta: si el empleado
+>    ve el excedente de horas extra (hoy lo ve).
+> 4. **Exportación a sistemas de sueldos**: falta que el dueño averigüe qué
+>    sistema usa AVP y consiga un archivo de novedades de ejemplo.
+> 5. Pasar al convenio la campaña, los cupos y las horas de dedicación.
+> 6. Tipo de fichaje: corregirlo desde el detalle del día. Bandeja de
+>    "Pendientes de revisión" como inicio. Asistente con IA (con filtro de
+>    salida en el servidor: ver el incidente del chat más abajo).
+> 7. Antes de vender: repos privados, plan pago de Render y de la base
+>    (lo paga al entrar el primer cliente), términos y privacidad (Ley
+>    25.326 y registro en la AAIP), factura electrónica.
+>
+> 8. Pendientes más viejos, todavía sin hacer: monitoreo de errores con
+>    Sentry (el código está en `monitoreo.js`, apagado hasta cargar
+>    `SENTRY_DSN` en Render); en Matching, las dos listas lado a lado para
+>    vincular a mano; cambiar la contraseña del MySQL local (estuvo en este
+>    archivo, en un repo público, y sigue en el historial de git); datos:
+>    asignaciones de plantilla superpuestas (ej. MARTENSEN).
+>
+> ### Dónde está explicado cada tema
+>
+> | Tema | Documento |
+> |---|---|
+> | Horas extra: regímenes, topes, liquidación, cierre de mes, ajustes | `HORAS_EXTRA_REGIMENES.md` |
+> | Portal del empleado, módulos por empresa, fichaje móvil | `PORTAL_EMPLEADO.md` |
+> | Alta de empresas (solicitudes), chat de ventas, titular | `SOLICITUDES_DE_ALTA.md` |
+> | Campaña | `CAMPANA.md` |
+> | Seguridad del agente que sube fichajes | `SEGURIDAD_AGENTE.md` |
+>
+> ### Bitácora (lo más nuevo arriba)
+>
+> - **2026-10-01 — Alta por solicitud.** El formulario de la página solo
+>   guarda una solicitud; el superadmin la aprueba o rechaza (pantalla
+>   Solicitudes de alta, aviso por Telegram y campanita). Misma respuesta
+>   para todos, sin mail automático, una solicitud por mail. El titular se
+>   elige de una lista en Empresas. Migración `20261012`.
+> - **2026-10-01 — Incidente: el chat de ventas le dijo "boludo" a un
+>   visitante.** Causa: el prompt pedía "español rioplatense" sin regla de
+>   trato y nadie revisaba la respuesta. Arreglo: prompt con trato
+>   profesional + revisión de cada respuesta en el servidor + texto fijo de
+>   respaldo. Además: el chat ahora sabe que el visitante ya envió la
+>   solicitud, el cupo de preguntas es por mail (refrescar no lo reinicia) y
+>   hay un tope diario de gasto. **Lección: la salida de una IA que ve un
+>   cliente se controla con código, no solo con el prompt.**
+> - **2026-10-01 — Portal del empleado publicado, apagado.** Cada empleado
+>   ve solo lo suyo. Es un módulo que el superadmin prende por empresa.
+>   Migración `20261010`.
+> - **2026-09-30 — Solo el titular pide la baja.** Antes cualquier usuario
+>   de la empresa podía pedir la baja del servicio. Migración `20261011`.
+> - **2026-09-30 — Corregir un mes cerrado y pagar la diferencia al mes
+>   siguiente** ("ajuste de meses anteriores"). Migración `20261009`.
+> - **2026-09-29 — Horas extra B1–B5 completo.** Convenios y regímenes con
+>   herencia, topes por día/mes/año, autorizaciones, informe de liquidación
+>   y cierre de mes. Migraciones `20261006` a `20261008`.
+> - **2026-09-28/29 — Campaña, cupos por motivo, avisos de asistencia, tipo
+>   de cada fichaje, fechas en hora local, CI en verde, seguridad F-01 a
+>   F-07.**
+> - **2026-09-21 — Lentitud de Presentismo resuelta** (un `JOIN` con `OR`
+>   anulaba los índices: ~19 s → ~1,5 s).
 >
 > ### ⚠️ Lo que hay que leer antes de tocar matching
 >
