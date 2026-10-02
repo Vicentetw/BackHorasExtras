@@ -79,6 +79,51 @@
 > | Probar el portal del empleado con un empleado real (pasos en `PORTAL_EMPLEADO.md`, "Cómo se usa") | En local se probó en Chrome; falta en producción y en un celular físico |
 > | Probar el alta completa en la página (registrarse, chatear, aprobar) | No se probó en un navegador |
 >
+> ### Camino al primer cliente (actualizado 2026-10-02)
+>
+> El dueño quiere empezar a ofrecerlo. El producto ya alcanza; lo que falta
+> es dejar prolija la puerta de entrada. En orden:
+>
+> | # | Qué | Quién | Estado |
+> |---|---|---|---|
+> | 1 | Correr las migraciones `20261010` y `20261012` en producción (y confirmar `20261008` y `20261009`) | Dueño | Pendiente |
+> | 2 | Elegir `tupctw@gmail.com` como titular de AVP en Empresas | Dueño | Pendiente |
+> | 3 | Publicar la landing en su propia dirección (ver abajo) | Los dos | Pendiente: falta elegir el nombre |
+> | 4 | Agregar esa dirección al `CORS_ORIGINS` del backend (Render) y a los dominios del widget de Turnstile (Cloudflare) | Dueño | Pendiente |
+> | 5 | Probar el alta completa en producción: registrarse, aviso de Telegram, chatear, aprobar, que llegue el mail de contraseña y entrar | Dueño | Pendiente |
+> | 6 | Pasar los repos a privados (acordado: obligatorio antes de vender) | Dueño | Pendiente |
+> | 7 | Seguridad: `MYSQL_SSL` en Render, `SHOW GRANTS`, protección de `main` | Dueño | Pendiente |
+> | 8 | Términos y condiciones y política de privacidad, enlazados desde la landing | Dueño (con abogado); el borrador lo puede armar una sesión | Pendiente |
+> | 9 | Al entrar el primer cliente: plan pago de Render (hoy se duerme) y de la base (hoy 5 conexiones) | Dueño | Decidido: se paga con el primer cliente |
+>
+> **La landing: cómo queda y cómo se conecta**
+>
+> - Hay dos copias y están **iguales** (verificado el 2026-10-02: solo
+>   difieren en un comentario): `horas-dedica-angular/public/landing.html`
+>   (se publica dentro del sistema) y el repo `landing-horas-dedica`.
+> - **No hace falta pagar hosting.** Firebase Hosting permite un segundo
+>   sitio gratis en el mismo proyecto, con su propia dirección
+>   (`<nombre>.web.app`). Al ser otra dirección, para el navegador ya es
+>   "otro sitio" que el sistema, que es lo que se buscaba. Cloudflare Pages
+>   también es gratis y suma un firewall. El dominio propio queda para
+>   después.
+> - **La landing NO se conecta a la base de datos, y el backend sigue
+>   existiendo.** La landing es una página estática: lo único que hace es
+>   llamar por internet a dos direcciones del backend de Render
+>   (`/api/public/signup` y `/api/public/chat`). El backend es el único que
+>   habla con la base. Mover la landing no cambia nada de eso: solo cambia
+>   desde dónde se sirve el archivo HTML.
+> - Al publicarla en una dirección nueva hay que avisarle a dos lugares que
+>   esa dirección es de confianza: el backend (`CORS_ORIGINS`) y Turnstile.
+>   Si no, el formulario falla con "no se pudo conectar con el servidor".
+> - Cuando la landing nueva esté andando, se saca `landing.html` del sistema
+>   para que quede una sola copia.
+> - Mientras Render esté en el plan gratuito, el primer envío del formulario
+>   puede tardar medio minuto (el servidor se despierta).
+>
+> **No bloquea al primer cliente:** fichaje con celular, exportación a
+> sueldos, dominio propio, servicio de recepción aparte.
+>
 > ### Metas, en orden
 >
 > 1. **Separar la landing del sistema** (para no exponer el sistema ni
