@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-01
 >
 > - Backend en producción: `5e486cb`. **878/878 tests.**
-> - Frontend en producción: `f675b56`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `d4b0d64`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -124,6 +124,15 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-02 — Formulario del empleado: Email y Dirección en la misma
+>   fila.** El dueño vio media fila en blanco y la leyenda del mail encima
+>   de "Dirección". Causa: las filas son una grilla de 2 columnas, y un
+>   `mat-hint` largo en media columna se parte en varias líneas (Material
+>   reserva lugar para una). La explicación pasó al ícono de ayuda.
+>   **Regla para este formulario: los campos van de a dos por fila, y las
+>   explicaciones largas en `app-info-hint`, no en `mat-hint`.** Los errores
+>   que marca el editor en `employee-dialog.html` son falsos (análisis
+>   desactualizado): vale lo que dice `ng build`. Frontend `d4b0d64`.
 > - **2026-10-02 — Mail del empleado, opcional, en su formulario.** Antes
 >   solo se cargaba desde Portal del empleado. Ahora también en Empleados
 >   (alta y edición). Si se escribe un mail que ya tiene otro empleado de la
