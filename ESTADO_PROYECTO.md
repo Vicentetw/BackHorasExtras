@@ -52,8 +52,8 @@
 >
 > ### Estado al 2026-10-01
 >
-> - Backend en producción: `cc8b89c`. **876/876 tests.**
-> - Frontend en producción: `a99e30a`. Landing aparte: `ee40f10`.
+> - Backend en producción: `5e486cb`. **878/878 tests.**
+> - Frontend en producción: `f675b56`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -124,6 +124,15 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-02 — Mail del empleado, opcional, en su formulario.** Antes
+>   solo se cargaba desde Portal del empleado. Ahora también en Empleados
+>   (alta y edición). Si se escribe un mail que ya tiene otro empleado de la
+>   empresa, no se guarda y el aviso dice quién lo tiene, con un botón para
+>   abrir su ficha (si hay permiso). Una sola regla para las dos pantallas:
+>   `motor-laboral/services/emailDeEmpleado.js`. Probado en Chrome; ahí
+>   aparecieron dos detalles que los tests no veían (el texto del aviso se
+>   borraba al recargar la lista, y el campo seguía mostrando el mail
+>   rechazado). No necesita migración nueva (usa la `20261010`).
 > - **2026-10-02 — Portal del empleado probado en un navegador; se
 >   encontró y corrigió un bug.** El empleado iniciaba sesión y quedaba en
 >   una pantalla en blanco: los guards de ruta se evalúan antes del login.
