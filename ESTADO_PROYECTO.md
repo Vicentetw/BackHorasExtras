@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-01)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-02)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > Las conversaciones se cortan y la siguiente no sabe en qué estábamos. Este
@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-01
 >
 > - Backend en producción: `cc8b89c`. **876/876 tests.**
-> - Frontend en producción: `bdc0ba7`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `6524902`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -123,6 +123,14 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-02 — Panel lateral: íconos centrados al plegar.** El dueño
+>   vio que quedaban corridos a la izquierda y propuso ensanchar el panel a
+>   81 px. Medido: 8 px del centro (15,5 con Administración abierto). Se
+>   corrigió la causa en vez de ensanchar: plegado, el ícono no lleva
+>   márgenes, el contenedor vacío del texto sale del flujo y la barra de
+>   desplazamiento se oculta. Todo está en
+>   `horas-dedica-angular/src/app/core/shell/shell.css`. El ancho plegado
+>   es la variable `--rail-width` (72 px). Frontend `6524902`.
 > - **2026-10-01 — Panel lateral: sin líneas al plegar y sin íconos
 >   cortados.** Dos problemas que reportó el dueño. (1) Al plegar quedaban
 >   líneas verticales: el panel pasaba a 72 px y el contenido seguía en 248.
