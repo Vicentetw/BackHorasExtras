@@ -53,6 +53,45 @@ los recursos que consume".
   liquidado (si el mes está cerrado, con los ajustes de meses anteriores) y el
   detalle día por día.
 
+## Cómo se usa (paso a paso)
+
+**El superadmin, una sola vez por empresa**
+
+1. Correr en producción `migrations/20261010_portal_empleado.sql` (una vez
+   para todo el sistema).
+2. En **Empresas**, editar la empresa y tildar **Portal del empleado** en
+   "Módulos contratados".
+
+**El administrador de la empresa**
+
+3. Entrar a **Administración > Portal del empleado**. Aparecen todos los
+   empleados con su estado: *Falta el mail*, *Listo para invitar*, *Con
+   acceso* o *Acceso cortado*.
+4. Escribir el mail de cada persona en su fila (se guarda al salir del
+   campo). Con el mail cargado pasa a *Listo para invitar*.
+5. Tildar a quienes invitar (o "Elegir todos los listos para invitar") y
+   tocar **Invitar**. Va en tandas de 50, con barra de progreso.
+6. A cada persona le llega un mail de Firebase para **elegir su contraseña**.
+   Queda *Con acceso*.
+7. Si alguien deja la empresa: **Cortar acceso** en su fila. No se borra nada
+   y se puede devolver.
+
+**El empleado**
+
+8. Abre el mail, elige su contraseña y entra a la misma dirección del sistema
+   con su mail. Llega directo a **Mi asistencia**: resumen del mes, horas
+   extra, lo liquidado (si el mes está cerrado) y el detalle día por día. Con
+   las flechas cambia de mes. No ve ninguna otra pantalla.
+
+**Qué se probó y qué no**
+
+- Probado en Chrome, en local, el recorrido completo: el administrador carga
+  el mail e invita; el empleado entra en tamaño celular, ve su mes real y, si
+  intenta ir a otra pantalla, vuelve a la suya.
+- No se probó: que llegue el mail de invitación (en las pruebas se usan
+  direcciones `example.com`, a las que no se les manda nada), un celular
+  físico, ni en producción.
+
 ## Seguridad: tres capas
 
 Hasta el portal, toda cuenta del sistema era de un administrador de confianza,

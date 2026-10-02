@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-01
 >
 > - Backend en producción: `cc8b89c`. **876/876 tests.**
-> - Frontend en producción: `6524902`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `a99e30a`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -76,7 +76,8 @@
 > | Decir cuál de las dos landing usa y dónde está publicada la separada | Hoy hay dos copias |
 > | Activar `MYSQL_SSL` en Render (F-11) y mandar `SHOW GRANTS` (F-12) | Seguridad |
 > | Branch protection en `main` (los dos repos) | Seguridad |
-> | Probar en un celular el portal del empleado y el alta completa | Nadie lo probó en un navegador |
+> | Probar el portal del empleado con un empleado real (pasos en `PORTAL_EMPLEADO.md`, "Cómo se usa") | En local se probó en Chrome; falta en producción y en un celular físico |
+> | Probar el alta completa en la página (registrarse, chatear, aprobar) | No se probó en un navegador |
 >
 > ### Metas, en orden
 >
@@ -123,6 +124,14 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-02 — Portal del empleado probado en un navegador; se
+>   encontró y corrigió un bug.** El empleado iniciaba sesión y quedaba en
+>   una pantalla en blanco: los guards de ruta se evalúan antes del login.
+>   Ahora el shell lo lleva a "Mi asistencia". Recorrido completo verificado
+>   en Chrome en local (administrador invita, empleado ve su mes en tamaño
+>   celular y queda encerrado en su portal). **Lección: los tests del
+>   servidor no ven los problemas de navegación; lo que tiene pantalla se
+>   prueba en un navegador.** Frontend `a99e30a`.
 > - **2026-10-02 — Panel lateral: íconos centrados al plegar.** El dueño
 >   vio que quedaban corridos a la izquierda y propuso ensanchar el panel a
 >   81 px. Medido: 8 px del centro (15,5 con Administración abierto). Se
