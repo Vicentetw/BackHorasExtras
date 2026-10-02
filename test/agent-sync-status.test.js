@@ -107,3 +107,28 @@ test('superadmin puede consultar el estado de cualquier empresa via ?tenantId=',
   const rows = await res.json();
   assert.ok(rows.length >= 2);
 });
+
+// Nombre del reloj (migracion 20261013): en pantalla se muestra el nombre que
+// le puso la empresa en lugar de la IP.
+test('nombre del reloj: la empresa lo cambia, se recorta, vacio lo quita, y otra empresa no puede', async () => {
+  const leer = async (h) => (await (await fetch(`${BASE_URL}/api/sync-status`, { headers: h })).json());
+  const reloj = (await leer(headersTenant)).find((r) => r.machine_ip === '192.168.9.10');
+  assert.ok(reloj.id, 'la lista trae el id del reloj');
+  assert.equal(reloj.nombre, null, 'sin nombre: la pantalla muestra la IP');
+
+  const put = (id, nombre, h) => fetch(`${BASE_URL}/api/sync-status/${id}/nombre`, {
+    method: 'PUT', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ nombre }),
+  });
+  assert.equal((await put(reloj.id, 'robado', headersOther)).status, 404, 'un reloj ajeno responde como si no existiera');
+  assert.equal((await put(reloj.id, `  Reloj recepción ${'x'.repeat(200)}`, headersTenant)).status, 200);
+  const conNombre = (await leer(headersTenant)).find((r) => r.id === reloj.id);
+  assert.ok(conNombre.nombre.startsWith('Reloj recepción'));
+  assert.equal(conNombre.nombre.length, 80, 'se recorta al largo de la columna');
+
+  // Subir fichajes de nuevo (lo que hace el agente) no pisa el nombre.
+  await db.query('UPDATE agent_sync_status SET last_synced_at = NOW() WHERE id = ?', [reloj.id]);
+  assert.equal((await put(reloj.id, 'Reloj recepción', headersTenant)).status, 200);
+  assert.equal((await put(reloj.id, '', headersTenant)).status, 200);
+  assert.equal((await leer(headersTenant)).find((r) => r.id === reloj.id).nombre, null, 'vacio = vuelve a verse la IP');
+  assert.equal((await put(999999999, 'x', headersTenant)).status, 404);
+});

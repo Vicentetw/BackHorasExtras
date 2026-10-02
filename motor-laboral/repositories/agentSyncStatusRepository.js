@@ -31,24 +31,38 @@ async function upsertSyncStatus(tenantId, registros, db) {
   }
 }
 
+// `nombre` (migracion 20261013) es como la empresa llama al reloj. Si la
+// columna todavia no existe (backend publicado antes que la migracion), se
+// lee NULL y la pantalla sigue mostrando la IP, como hasta ahora.
+async function leer(db, columnas, resto, params) {
+  const sql = (conNombre) => `SELECT id, ${columnas}, ${conNombre ? 'nombre' : 'NULL AS nombre'} FROM agent_sync_status ${resto}`;
+  try {
+    return (await db.query(sql(true), params))[0];
+  } catch (err) {
+    if (err.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    return (await db.query(sql(false), params))[0];
+  }
+}
+
 async function getSyncStatusForTenant(tenantId, db) {
-  const [rows] = await db.query(
-    `SELECT machine_ip, machine_sn, last_synced_at, last_checktime, fichajes_ultima_subida
-     FROM agent_sync_status WHERE tenant_id = ? ORDER BY last_synced_at DESC`,
-    [tenantId]
-  );
-  return rows;
+  return leer(db, 'machine_ip, machine_sn, last_synced_at, last_checktime, fichajes_ultima_subida',
+    'WHERE tenant_id = ? ORDER BY last_synced_at DESC', [tenantId]);
 }
 
-// El superadmin no pertenece a ninguna empresa (tenant_id NULL) -- sin
-// esto, no veia NUNCA el estado de sincronizacion de ningun reloj. Como
-// operador de la plataforma tiene sentido que vea el de todas (hoy, una).
 async function getAllSyncStatus(db) {
-  const [rows] = await db.query(
-    `SELECT tenant_id, machine_ip, machine_sn, last_synced_at, last_checktime, fichajes_ultima_subida
-     FROM agent_sync_status ORDER BY last_synced_at DESC`
-  );
-  return rows;
+  return leer(db, 'tenant_id, machine_ip, machine_sn, last_synced_at, last_checktime, fichajes_ultima_subida',
+    'ORDER BY last_synced_at DESC', []);
 }
 
-module.exports = { upsertSyncStatus, getSyncStatusForTenant, getAllSyncStatus };
+// Cambia el nombre de UN reloj. `tenantId` null = superadmin (cualquiera).
+// Devuelve false si ese reloj no existe o no es de esa empresa.
+async function renombrar(db, { id, tenantId, nombre }) {
+  const [r] = await db.query(
+    `UPDATE agent_sync_status SET nombre = ? WHERE id = ? ${tenantId == null ? '' : 'AND tenant_id = ?'}`,
+    tenantId == null ? [nombre, id] : [nombre, id, tenantId]);
+  return r.affectedRows > 0 || (await db.query(
+    `SELECT id FROM agent_sync_status WHERE id = ? ${tenantId == null ? '' : 'AND tenant_id = ?'}`,
+    tenantId == null ? [id] : [id, tenantId]))[0].length > 0;
+}
+
+module.exports = { upsertSyncStatus, getSyncStatusForTenant, getAllSyncStatus, renombrar };
