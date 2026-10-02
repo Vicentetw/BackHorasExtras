@@ -67,8 +67,23 @@ los recursos que consume".
 3. Entrar a **Administración > Portal del empleado**. Aparecen todos los
    empleados con su estado: *Falta el mail*, *Listo para invitar*, *Con
    acceso* o *Acceso cortado*.
-4. Escribir el mail de cada persona en su fila (se guarda al salir del
-   campo). Con el mail cargado pasa a *Listo para invitar*.
+4. Cargar el mail de cada persona. Es **opcional** y se puede hacer en
+   cualquiera de estos dos lugares, que guardan en el mismo campo
+   (`employees.email`):
+   - en su fila de esta pantalla (se guarda al salir del campo);
+   - en el **formulario del empleado** (Empleados > editar, campo "Email
+     (opcional)"), también al darlo de alta.
+
+   Con el mail cargado pasa a *Listo para invitar*. El lápiz de cada fila
+   abre el formulario del empleado, si quien mira tiene permiso para editar
+   empleados.
+
+   **Mail repetido.** Dos empleados de la misma empresa no pueden compartir
+   el mail, porque es con lo que cada uno inicia sesión. Si se escribe uno
+   que ya tiene otro, no se guarda y aparece un aviso que dice **quién lo
+   tiene**, con el botón **Abrir la ficha de…** para corregirlo ahí (solo
+   con permiso de editar empleados). La regla vive en un solo lugar,
+   `motor-laboral/services/emailDeEmpleado.js`, y la usan las dos pantallas.
 5. Tildar a quienes invitar (o "Elegir todos los listos para invitar") y
    tocar **Invitar**. Va en tandas de 50, con barra de progreso.
 6. A cada persona le llega un mail de Firebase para **elegir su contraseña**.

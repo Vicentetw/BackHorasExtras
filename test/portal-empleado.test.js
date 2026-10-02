@@ -208,3 +208,65 @@ test('admin: mail, invitacion y corte de acceso; otra empresa no toca empleados 
   assert.equal((await send('POST', `/api/portal-empleados/${idA}/reactivar`, {}, hAdmin)).status, 200);
   assert.equal((await get('/api/mi/perfil', hA)).status, 200);
 });
+
+// ---------------------------------------------------------------------------
+// El mail del empleado es opcional y se carga desde dos pantallas (formulario
+// del empleado y Portal del empleado): las dos responden igual.
+// ---------------------------------------------------------------------------
+test('mail del empleado: repetido avisa QUIEN lo tiene (para abrir su ficha), y no se guarda', async () => {
+  const mail = 'portal-repetido-900904@example.com';
+  const [d] = await db.query(`INSERT INTO employees (employee_id, nombre, tenant_id, activo, exclude_from_report, email) VALUES (900904, 'Portal D con mail (test)', ?, 1, 0, ?)`, [T, mail]);
+
+  // Desde la pantalla del portal, a mano, sobre OTRO empleado.
+  const [e] = await db.query(`INSERT INTO employees (employee_id, nombre, tenant_id, activo, exclude_from_report) VALUES (900905, 'Portal E sin mail (test)', ?, 1, 0)`, [T]);
+  const r = await send('PUT', `/api/portal-empleados/${e.insertId}/email`, { email: `  ${mail.toUpperCase()} ` }, hAdmin);
+  assert.equal(r.status, 409);
+  const cuerpo = await r.json();
+  assert.deepEqual(cuerpo.duplicado, { id: d.insertId, legajo: 900904, nombre: 'Portal D con mail (test)' });
+  assert.match(cuerpo.error, /ya lo tiene Portal D con mail/);
+  const [[sin]] = await db.query('SELECT email FROM employees WHERE id = ?', [e.insertId]);
+  assert.equal(sin.email, null, 'no se guardo');
+
+  // Desde el formulario del empleado: editar.
+  const base = { employee_id: 900905, nombre: 'Portal E sin mail (test)' };
+  const put = await send('PUT', `/api/employees/${e.insertId}`, { ...base, email: mail }, hAdmin);
+  assert.equal(put.status, 409);
+  assert.equal((await put.json()).duplicado.id, d.insertId);
+
+  // Y al dar de alta uno nuevo: no queda un empleado creado a medias.
+  const post = await send('POST', '/api/employees', { employee_id: 900906, nombre: 'Portal F nuevo (test)', email: mail }, hAdmin);
+  assert.equal(post.status, 409);
+  const [[f]] = await db.query('SELECT COUNT(*) AS n FROM employees WHERE employee_id = 900906 AND tenant_id = ?', [T]);
+  assert.equal(f.n, 0);
+
+  // En OTRA empresa el mismo mail no choca (el aislamiento es por empresa).
+  await db.query(`INSERT INTO app_settings (name, tenant_id, value) VALUES ('modulo_portal_empleado', ?, '1') ON DUPLICATE KEY UPDATE value = '1'`, [OTRA]);
+  const [g] = await db.query(`INSERT INTO employees (employee_id, nombre, tenant_id, activo, exclude_from_report) VALUES (900907, 'Portal G otra empresa (test)', ?, 1, 0)`, [OTRA]);
+  assert.equal((await send('PUT', `/api/portal-empleados/${g.insertId}/email`, { email: mail }, hAdminOtra)).status, 200);
+});
+
+test('mail del empleado: es opcional; se guarda desde el formulario y editar sin mandarlo no lo borra', async () => {
+  const [e] = await db.query(`INSERT INTO employees (employee_id, nombre, tenant_id, activo, exclude_from_report) VALUES (900908, 'Portal H (test)', ?, 1, 0)`, [T]);
+  const base = { employee_id: 900908, nombre: 'Portal H (test)' };
+  const leer = async () => (await db.query('SELECT email FROM employees WHERE id = ?', [e.insertId]))[0][0].email;
+
+  assert.equal((await send('PUT', `/api/employees/${e.insertId}`, { ...base, email: 'no-es-mail' }, hAdmin)).status, 400);
+  assert.equal((await send('PUT', `/api/employees/${e.insertId}`, { ...base, email: ' Portal-H-900908@Example.com ' }, hAdmin)).status, 200);
+  assert.equal(await leer(), 'portal-h-900908@example.com', 'se guarda en minusculas y sin espacios');
+
+  // Un cliente que no conoce el campo (el import) no lo tiene que borrar.
+  assert.equal((await send('PUT', `/api/employees/${e.insertId}`, base, hAdmin)).status, 200);
+  assert.equal(await leer(), 'portal-h-900908@example.com');
+
+  // Vacio = quitarlo. Sin mail, en el portal figura "Falta el mail".
+  assert.equal((await send('PUT', `/api/employees/${e.insertId}`, { ...base, email: '' }, hAdmin)).status, 200);
+  assert.equal(await leer(), null);
+  const lista = (await (await get('/api/portal-empleados', hAdmin)).json()).empleados;
+  assert.equal(lista.find((x) => x.id === e.insertId).cuenta, 'SIN_EMAIL');
+
+  // Alta con mail: queda listo para invitar, sin pasos extra.
+  const post = await send('POST', '/api/employees', { employee_id: 900909, nombre: 'Portal I con mail (test)', email: 'portal-i-900909@example.com' }, hAdmin);
+  assert.equal(post.status, 200, await post.clone().text());
+  const lista2 = (await (await get('/api/portal-empleados', hAdmin)).json()).empleados;
+  assert.equal(lista2.find((x) => x.legajo === 900909).cuenta, 'SIN_INVITAR');
+});

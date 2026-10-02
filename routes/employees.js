@@ -1,4 +1,5 @@
 const express = require('express');
+const { guardarEmailDeEmpleado, verificarEmailDeEmpleado } = require('../motor-laboral/services/emailDeEmpleado');
 const router = express.Router();
 const db = require('../db');
 const { resolveTenantId, requirePermission, requireActiveSubscription } = require('../appUserMiddleware');
@@ -311,6 +312,15 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
       }
     }
 
+    // Mail (opcional, para invitarlo al portal): se verifica ANTES de crear,
+    // asi un mail repetido no deja un empleado creado a medias.
+    try {
+      await verificarEmailDeEmpleado(db, { tenantId: effectiveTenantId, email: req.body.email });
+    } catch (errMail) {
+      if (errMail.status) return res.status(errMail.status).json({ error: errMail.message, ...errMail.extra });
+      throw errMail;
+    }
+
     // Insertar
     const [result] = await db.query(
       `INSERT INTO employees
@@ -340,6 +350,9 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
     );
 
     const insertedId = result.insertId;
+    const mailNuevo = req.body.email
+      ? await guardarEmailDeEmpleado(db, { tenantId: effectiveTenantId, employeeId: insertedId, email: req.body.email })
+      : {};
 
     res.json({
       ok: true,
@@ -453,6 +466,20 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
       }
     }
 
+    // Mail (opcional). Solo si el pedido lo trae: un cliente viejo, o el
+    // import, que no saben del campo, no lo tienen que borrar. Va ANTES del
+    // UPDATE: si el mail esta repetido no se guarda nada (igual que con el
+    // documento repetido).
+    let mailEditado = {};
+    if (req.body.email !== undefined) {
+      try {
+        mailEditado = await guardarEmailDeEmpleado(db, { tenantId: effectiveTenantId, employeeId: Number(id), email: req.body.email });
+      } catch (errMail) {
+        if (errMail.status) return res.status(errMail.status).json({ error: errMail.message, ...errMail.extra });
+        throw errMail;
+      }
+    }
+
     // Actualizar
     await db.query(
       `UPDATE employees SET
@@ -491,7 +518,8 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
 
     res.json({
       ok: true,
-      message: 'Empleado actualizado correctamente'
+      message: 'Empleado actualizado correctamente',
+      ...(mailEditado.aviso ? { aviso: mailEditado.aviso } : {})
     });
 
   } catch (err) {

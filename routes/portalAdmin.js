@@ -16,6 +16,7 @@ const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const { enviarEmailDeContrasena } = require('../motor-laboral/services/firebaseEmail');
 const { moduloHabilitado } = require('../motor-laboral/services/modulos');
+const { guardarEmailDeEmpleado } = require('../motor-laboral/services/emailDeEmpleado');
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Cada invitacion son varias llamadas a Firebase: de a tandas, para que un
@@ -80,18 +81,17 @@ module.exports = function (db, { enviarEmail = enviarEmailDeContrasena } = {}) {
 
   router.put('/:employeeId/email', requirePermission('employees', 'update'), async (req, res) => {
     const tenantId = tenantONada(req, res); if (tenantId == null) return;
-    const email = String((req.body || {}).email || '').trim().toLowerCase();
-    if (email && !EMAIL.test(email)) return res.status(400).json({ error: 'Ese mail no parece válido.' });
     try {
       const e = await empleadoDe(tenantId, req.params.employeeId);
       if (!e) return res.status(404).json({ error: 'Empleado no encontrado' });
-      // Con la cuenta ya creada, el mail de ingreso es el de la cuenta: se
-      // cambia desactivando y volviendo a invitar, no en silencio desde aca.
-      const [[cuenta]] = await db.query('SELECT id FROM app_users WHERE employee_id = ?', [e.id]);
-      if (cuenta) return res.status(409).json({ error: 'Ya tiene cuenta: para cambiar el mail de ingreso, desactivala y volvé a invitar.' });
-      await db.query('UPDATE employees SET email = ? WHERE id = ?', [email || null, e.id]);
-      res.json({ ok: true });
+      // Misma validacion que el formulario del empleado (emailDeEmpleado.js):
+      // formato, que no lo tenga otro empleado de la empresa (devuelve quien,
+      // para abrir su ficha) y que no se cambie si ya tiene cuenta.
+      const r = await guardarEmailDeEmpleado(db, { tenantId, employeeId: e.id, email: (req.body || {}).email });
+      if (r.aviso) return res.status(503).json({ error: 'Falta correr la migración 20261010 (portal del empleado).' });
+      res.json({ ok: true, email: r.email });
     } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message, ...err.extra });
       if (faltaMigracion(res, err)) return;
       console.error('ERROR portal email:', err);
       res.status(500).json({ error: 'Error guardando el mail' });
