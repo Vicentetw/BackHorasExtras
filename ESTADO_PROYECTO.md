@@ -52,8 +52,8 @@
 >
 > ### Estado al 2026-10-01
 >
-> - Backend en producción: `5e486cb`. **878/878 tests.**
-> - Frontend en producción: `d4b0d64`. Landing aparte: `ee40f10`.
+> - Backend en producción: `ce73699`. **879/879 tests.**
+> - Frontend en producción: `b8de0f1`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -86,7 +86,7 @@
 >
 > | # | Qué | Quién | Estado |
 > |---|---|---|---|
-> | 1 | Correr las migraciones `20261010` y `20261012` en producción (y confirmar `20261008` y `20261009`) | Dueño | Pendiente |
+> | 1 | Correr las migraciones `20261010`, `20261012` y `20261013` en producción (y confirmar `20261008` y `20261009`) | Dueño | Pendiente |
 > | 2 | Elegir `tupctw@gmail.com` como titular de AVP en Empresas | Dueño | Pendiente |
 > | 3 | Publicar la landing en su propia dirección (ver abajo) | Los dos | Pendiente: falta elegir el nombre |
 > | 4 | Agregar esa dirección al `CORS_ORIGINS` del backend (Render) y a los dominios del widget de Turnstile (Cloudflare) | Dueño | Pendiente |
@@ -120,6 +120,16 @@
 >   para que quede una sola copia.
 > - Mientras Render esté en el plan gratuito, el primer envío del formulario
 >   puede tardar medio minuto (el servidor se despierta).
+>
+> **Empresa de demostración (para capturas y demos).** No usar pantallas de
+> AVP para vender: muestran nombres reales de sus empleados. El script
+> `scripts/crear-empresa-demo.js` crea "Empresa Demo S.A." con 24 empleados
+> y fichajes inventados de los últimos 45 días, relativos al día en que se
+> corre (volver a correrlo la deja "al día"). Se corre contra producción con
+> las variables `MYSQL_ADDON_*`, igual que `run-sql.js`. Después, el
+> superadmin le crea un usuario en Usuarios y Roles. Con `--borrar` se saca
+> del todo (si tiene usuarios, primero hay que borrarlos). Solo escribe y
+> borra con el `tenant_id` de la demo.
 >
 > **No bloquea al primer cliente:** fichaje con celular, exportación a
 > sueldos, dominio propio, servicio de recepción aparte.
@@ -169,6 +179,16 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-02 — Presentismo en el celular, listo para capturas.** Medido
+>   en 390 px: la primera tarjeta de empleado aparecía a los 980 px (más de
+>   una pantalla de controles); ahora a los 376. Período y Fecha en una
+>   fila, búsqueda y "Más filtros" en otra, Excel y PDF adentro de "Más
+>   filtros", totales en una tira deslizable. Además: "Modo de cálculo" y
+>   "Comparar Legacy" quedan solo para el superadmin (son herramientas de
+>   diagnóstico); con un solo fichaje la salida muestra un guion (antes
+>   repetía la hora de entrada); el reloj se muestra por su nombre y no por
+>   su IP (migración `20261013`, se renombra con el lápiz); y se creó el
+>   script de la empresa de demostración.
 > - **2026-10-02 — Formulario del empleado: Email y Dirección en la misma
 >   fila.** El dueño vio media fila en blanco y la leyenda del mail encima
 >   de "Dirección". Causa: las filas son una grilla de 2 columnas, y un
