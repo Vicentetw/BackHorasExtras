@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-02)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-03)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > Las conversaciones se cortan y la siguiente no sabe en qué estábamos. Este
@@ -50,10 +50,10 @@
 > 8. Si hay cambios sin commitear que no son tuyos (otra sesión), no los
 >    mezcles ni los publiques: apartalos, hacé lo tuyo y devolvelos.
 >
-> ### Estado al 2026-10-01
+> ### Estado al 2026-10-03
 >
-> - Backend en producción: `02b3ba5`. **880/880 tests.**
-> - Frontend en producción: `3bb23cf`. Landing aparte: `ee40f10`.
+> - Backend en producción: `bfcb86f`. **890/890 tests.**
+> - Frontend en producción: `a8f957b`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -99,9 +99,11 @@
 >
 > **La landing: cómo queda y cómo se conecta**
 >
-> - Hay dos copias y están **iguales** (verificado el 2026-10-02: solo
->   difieren en un comentario): `horas-dedica-angular/public/landing.html`
->   (se publica dentro del sistema) y el repo `landing-horas-dedica`.
+> - Hay dos copias: `horas-dedica-angular/public/landing.html` (se publica
+>   dentro del sistema) y el repo `landing-horas-dedica`. Eran iguales hasta
+>   el 2026-10-03; ese día, en la del sistema, el código pasó a
+>   `landing.js` por la CSP (ver `SEGURIDAD_WEB.md`). **La del repo aparte
+>   todavía no tiene ese cambio:** aplicarlo cuando se publique.
 > - **No hace falta pagar hosting.** Firebase Hosting permite un segundo
 >   sitio gratis en el mismo proyecto, con su propia dirección
 >   (`<nombre>.web.app`). Al ser otra dirección, para el navegador ya es
