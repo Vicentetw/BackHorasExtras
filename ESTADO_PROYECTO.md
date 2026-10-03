@@ -52,8 +52,8 @@
 >
 > ### Estado al 2026-10-01
 >
-> - Backend en producción: `ce73699`. **879/879 tests.**
-> - Frontend en producción: `b8de0f1`. Landing aparte: `ee40f10`.
+> - Backend en producción: `02b3ba5`. **880/880 tests.**
+> - Frontend en producción: `3bb23cf`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -179,6 +179,21 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-03 — Aviso de relojes para muchos relojes.** Pedido del dueño
+>   ("por ejemplo 150 relojes"). Resumen arriba, selector de empresa para el
+>   superadmin, primero los atrasados, y con más de 6 relojes solo los
+>   atrasados más "Ver todos". Probado en Chrome con 152 relojes.
+> - **2026-10-03 — Revisión de seguridad (pendiente de aprobación del
+>   dueño).** Hallazgos verificados contra producción: (1) el filtro CORS
+>   acepta cualquier origen, porque `corsOptionsDelegate` está conectado
+>   como opción `origin` cuando es un delegado de opciones; riesgo bajo hoy
+>   (el token no viaja solo), pero hay que cerrarlo; (2) Firebase Hosting no
+>   manda cabeceras de seguridad (sin X-Frame-Options ni CSP); (3)
+>   dependencias: `firebase-admin` y el SDK de Firebase atrasados, `xlsx` sin
+>   arreglo. Propuesto: A (CORS) y B (cabeceras sin CSP) ya; C (CSP con
+>   pruebas) y D (dependencias) después. Del dueño: repo del backend
+>   privado, verificación en dos pasos para el superadmin, `MYSQL_SSL`,
+>   `SHOW GRANTS`, protección de `main`, Sentry.
 > - **2026-10-02 — Presentismo en el celular, listo para capturas.** Medido
 >   en 390 px: la primera tarjeta de empleado aparecía a los 980 px (más de
 >   una pantalla de controles); ahora a los 376. Período y Fecha en una
