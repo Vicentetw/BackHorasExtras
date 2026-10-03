@@ -49,9 +49,20 @@ async function getSyncStatusForTenant(tenantId, db) {
     'WHERE tenant_id = ? ORDER BY last_synced_at DESC', [tenantId]);
 }
 
+// Todas las empresas (solo el superadmin). Trae el NOMBRE de la empresa: con
+// muchos relojes de muchas empresas, sin el nombre no se sabe de quien es
+// cada uno (pedido real del dueño, 2026-10-03).
 async function getAllSyncStatus(db) {
-  return leer(db, 'tenant_id, machine_ip, machine_sn, last_synced_at, last_checktime, fichajes_ultima_subida',
-    'ORDER BY last_synced_at DESC', []);
+  const sql = (conNombre) => `SELECT s.id, s.tenant_id, t.name AS empresa, s.machine_ip, s.machine_sn, s.last_synced_at,
+            s.last_checktime, s.fichajes_ultima_subida, ${conNombre ? 's.nombre' : 'NULL AS nombre'}
+     FROM agent_sync_status s JOIN tenants t ON t.id = s.tenant_id
+     ORDER BY t.name, s.last_synced_at DESC`;
+  try {
+    return (await db.query(sql(true)))[0];
+  } catch (err) {
+    if (err.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    return (await db.query(sql(false)))[0];
+  }
 }
 
 // Cambia el nombre de UN reloj. `tenantId` null = superadmin (cualquiera).

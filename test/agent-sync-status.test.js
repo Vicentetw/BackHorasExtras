@@ -132,3 +132,13 @@ test('nombre del reloj: la empresa lo cambia, se recorta, vacio lo quita, y otra
   assert.equal((await leer(headersTenant)).find((r) => r.id === reloj.id).nombre, null, 'vacio = vuelve a verse la IP');
   assert.equal((await put(999999999, 'x', headersTenant)).status, 404);
 });
+
+test('superadmin sin ?tenantId= ve los relojes de todas las empresas CON el nombre de cada empresa', async () => {
+  const rows = await (await fetch(`${BASE_URL}/api/sync-status`, { headers: headersSuperadmin })).json();
+  const propio = rows.find((r) => r.machine_ip === '192.168.9.10' && r.tenant_id === TENANT_SYNC);
+  assert.ok(propio, 'incluye los relojes de esta empresa');
+  assert.equal(propio.empresa, 'Tenant Sync Status (test)');
+  // Un usuario comun NO recibe relojes de otras empresas (ni su nombre).
+  const comun = await (await fetch(`${BASE_URL}/api/sync-status`, { headers: headersTenant })).json();
+  assert.ok(comun.every((r) => r.tenant_id === undefined || r.tenant_id === TENANT_SYNC));
+});
