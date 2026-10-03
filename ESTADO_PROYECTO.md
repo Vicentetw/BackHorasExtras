@@ -78,6 +78,7 @@
 > | Branch protection en `main` (los dos repos) | Seguridad |
 > | Probar el portal del empleado con un empleado real (pasos en `PORTAL_EMPLEADO.md`, "Cómo se usa") | En local se probó en Chrome; falta en producción y en un celular físico |
 > | Probar el alta completa en la página (registrarse, chatear, aprobar) | No se probó en un navegador |
+> | Desde el 2026-10-10: buscar `[CSP]` en Render → Logs; si no hay nada, activar el bloqueo de la CSP | Ver `SEGURIDAD_WEB.md` |
 >
 > ### Camino al primer cliente (actualizado 2026-10-02)
 >
@@ -176,6 +177,7 @@
 > | Alta de empresas (solicitudes), chat de ventas, titular | `SOLICITUDES_DE_ALTA.md` |
 > | Campaña | `CAMPANA.md` |
 > | Seguridad del agente que sube fichajes | `SEGURIDAD_AGENTE.md` |
+> | Seguridad de la web: CORS, cabeceras, CSP, librerías | `SEGURIDAD_WEB.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
 >
@@ -183,17 +185,17 @@
 >   ("por ejemplo 150 relojes"). Resumen arriba, selector de empresa para el
 >   superadmin, primero los atrasados, y con más de 6 relojes solo los
 >   atrasados más "Ver todos". Probado en Chrome con 152 relojes.
-> - **2026-10-03 — Revisión de seguridad (pendiente de aprobación del
->   dueño).** Hallazgos verificados contra producción: (1) el filtro CORS
->   acepta cualquier origen, porque `corsOptionsDelegate` está conectado
->   como opción `origin` cuando es un delegado de opciones; riesgo bajo hoy
->   (el token no viaja solo), pero hay que cerrarlo; (2) Firebase Hosting no
->   manda cabeceras de seguridad (sin X-Frame-Options ni CSP); (3)
->   dependencias: `firebase-admin` y el SDK de Firebase atrasados, `xlsx` sin
->   arreglo. Propuesto: A (CORS) y B (cabeceras sin CSP) ya; C (CSP con
->   pruebas) y D (dependencias) después. Del dueño: repo del backend
->   privado, verificación en dos pasos para el superadmin, `MYSQL_SSL`,
->   `SHOW GRANTS`, protección de `main`, Sentry.
+> - **2026-10-03 — Revisión de seguridad, A–D hechos.** Explicado en
+>   `SEGURIDAD_WEB.md`. (A) El filtro CORS dejaba pasar cualquier origen:
+>   arreglado, con los sitios propios fijos en el código y 403 para un
+>   navegador en un sitio ajeno. (B) Cabeceras de seguridad en Firebase
+>   Hosting. (C) CSP en modo "solo reportar" con receptor en
+>   `/api/public/csp-report` (log `[CSP]` en Render); probada bloqueando en
+>   las 28 pantallas, exportar Excel y PDF, importar, landing y login con
+>   Google: cero bloqueos. El código de la landing pasó a `landing.js`.
+>   (D) `firebase-admin` 13.10, `xlsx` 0.20.3 de SheetJS, Angular 22.2.1.
+>   **Pendiente: en una semana, si el log no muestra `[CSP]`, activar el
+>   bloqueo** (pasos en `SEGURIDAD_WEB.md`).
 > - **2026-10-02 — Presentismo en el celular, listo para capturas.** Medido
 >   en 390 px: la primera tarjeta de empleado aparecía a los 980 px (más de
 >   una pantalla de controles); ahora a los 376. Período y Fecha en una

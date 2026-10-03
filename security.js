@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { firebaseAuthMiddleware } = require('./firebaseAuth');
 const { appUserMiddleware } = require('./appUserMiddleware');
+const { origenPermitido } = require('./origenesPermitidos');
 
 // Generoso a proposito -- esto es una app interna (asistencia/RRHH), no una
 // API publica de alto trafico. El objetivo es frenar un scaneo/ataque de
@@ -64,19 +65,6 @@ const reportesRateLimiter = rateLimit({
 });
 
 const API_KEY = process.env.API_KEY || null;
-const CORS_ORIGINS = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean)
-  : [
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      'http://localhost:5500',
-      'http://127.0.0.1:5500'
-    ];
-
-function isLocalHostOrigin(origin) {
-  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
-}
-
 function authMiddleware(req, res, next) {
   if (!API_KEY) {
     return next();
@@ -96,21 +84,38 @@ function authMiddleware(req, res, next) {
   return next();
 }
 
+// HALLAZGO DE SEGURIDAD (revision 2026-10-03): antes esto se pasaba como
+// `cors({ origin: corsOptionsDelegate })`. Pero la libreria `cors` llama a la
+// funcion `origin` con el TEXTO del origen ("https://sitio.com"), no con el
+// pedido. Entonces `req.headers` no existia, `origin` quedaba vacio, y la
+// funcion respondia "permitido" SIEMPRE: el servidor le decia a cualquier
+// pagina de internet "podes leer mis respuestas". Comprobado contra
+// produccion con Origin: https://sitio-malicioso.example.
+//
+// Ahora se pasa como corresponde, `cors(corsOptionsDelegate)`: la libreria
+// le da el pedido entero y espera de vuelta las opciones.
 function corsOptionsDelegate(req, callback) {
-  const origin = req && req.headers && (req.headers.origin || req.headers.Origin);
-
-  if (!origin) {
-    return callback(null, { origin: true });
+  const origin = req.headers.origin;
+  // Sin Origin = no es un navegador pidiendo desde otro sitio (el agente de
+  // los relojes, curl, el propio servidor). CORS no aplica: no hace falta
+  // agregar cabeceras.
+  if (!origin || !origenPermitido(origin)) {
+    return callback(null, { origin: false });
   }
+  return callback(null, { origin: true, optionsSuccessStatus: 200 });
+}
 
-  const isLocalOrigin = isLocalHostOrigin(origin);
-  const allowedLocalOrigin = isLocalOrigin && CORS_ORIGINS.some(o => /localhost|127\.0\.0\.1/.test(o));
-
-  if (CORS_ORIGINS.includes(origin) || allowedLocalOrigin) {
-    return callback(null, { origin: true });
+// Segunda capa: un pedido que viene de un navegador en un sitio AJENO se
+// corta aca, con 403, antes de llegar a ninguna ruta. Sin las cabeceras de
+// CORS el navegador igual no deja LEER la respuesta, pero el pedido ya se
+// habria ejecutado en el servidor (por ejemplo, un formulario de otro sitio
+// que hace POST). Asi ni siquiera se ejecuta.
+function rechazarOrigenAjeno(req, res, next) {
+  const origin = req.headers.origin;
+  if (origin && !origenPermitido(origin)) {
+    return res.status(403).json({ error: 'Origen no permitido' });
   }
-
-  return callback(new Error(`CORS policy: Origin not allowed (${origin})`));
+  return next();
 }
 
 // Fase 11 (landing publica + alta autoservicio): rutas bajo publicPaths
@@ -137,7 +142,8 @@ function securityMiddlewares(app, cors, { publicPaths = [] } = {}) {
   app.disable('x-powered-by');
   app.use(helmet());
   app.use(apiRateLimiter);
-  app.use(cors({ origin: corsOptionsDelegate, optionsSuccessStatus: 200 }));
+  app.use(cors(corsOptionsDelegate));
+  app.use(rechazarOrigenAjeno);
   app.use((req, res, next) => (isPublicPath(req, publicPaths) ? next() : authMiddleware(req, res, next)));
   // El API_KEY de arriba solo filtra bots/escaneos; no identifica usuarios.
   // Esto exige ademas un login real de Firebase en TODAS las rutas (antes
@@ -160,6 +166,7 @@ function apiKeyWarning() {
 module.exports = {
   authMiddleware,
   corsOptionsDelegate,
+  origenPermitido,
   securityMiddlewares,
   apiKeyWarning,
   isPublicPath,

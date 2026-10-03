@@ -120,6 +120,9 @@ module.exports = function (db) {
   // Turnstile por un pedido que ya se va a rechazar igual.
   router.use(createCountryFirewallMiddleware(db));
 
+  // Reportes de la politica de seguridad (CSP) del frontend: ver cspReport.js.
+  router.use('/csp-report', require('./cspReport').router);
+
   // ALTA: SOLO guarda la SOLICITUD y le avisa al superadmin (Telegram +
   // campanita). Decision del dueño del producto (2026-10-01): nada se activa
   // hasta que el superadmin la apruebe despues de hablar con la persona
