@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-03
 >
 > - Backend en producción: `bfcb86f`. **890/890 tests.**
-> - Frontend en producción: `a8f957b`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `8cb7253`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -183,6 +183,11 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-04 — Horas Extra por Régimen en el celular.** El texto de
+>   ayuda pasó a un ícono (?) junto al título; Fecha | Régimen y Buscar |
+>   Más filtros en dos filas; Excel y PDF dentro de "Más filtros". El
+>   Período sigue con el año completo (pedido del dueño: son períodos de
+>   pago); solo se evitó que cada fecha se parta por la mitad.
 > - **2026-10-03 — Aviso de relojes para muchos relojes.** Pedido del dueño
 >   ("por ejemplo 150 relojes"). Resumen arriba, selector de empresa para el
 >   superadmin, primero los atrasados, y con más de 6 relojes solo los
