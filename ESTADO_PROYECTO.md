@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-03
 >
 > - Backend en producción: `bfcb86f`. **890/890 tests.**
-> - Frontend en producción: `93e17a1`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `02773dd`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -195,6 +195,10 @@
 >   se veían dos y la fecha cortada. Arreglado con `@supports
 >   (-moz-appearance: none)`. Probar siempre también en Firefox: hay
 >   `puppeteer-core` para manejarlo sin ventana (Firefox está instalado).
+>   **Tipografía** (`02773dd`): todos los controles de la fila en Roboto
+>   14px con el mismo espaciado (antes 16/15/14px), botones en peso medio,
+>   texto a 12px del borde. Se cambia en un solo lugar: variables
+>   `--texto-filtros-celular` y `--espaciado-filtros-celular` de `styles.css`.
 > - **2026-10-04 — Horas Extra por Régimen en el celular.** El texto de
 >   ayuda pasó a un ícono (?) junto al título; Fecha | Régimen y Buscar |
 >   Más filtros en dos filas; Excel y PDF dentro de "Más filtros". El
