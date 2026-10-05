@@ -52,7 +52,7 @@
 >
 > ### Estado al 2026-10-03
 >
-> - Backend en producción: `4589969`. **891/891 tests.**
+> - Backend en producción: (ver git log). **892/892 tests.**
 > - Frontend en producción: `e4fe61f`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
@@ -189,8 +189,14 @@
 >   "Sin regreso — fin de horario" (`4589969`). **Pendiente de aprobación
 >   del dueño, dos diferencias más con Salidas:** (B) el calendario marca
 >   una salida completa que en realidad es la llegada del día (marcador de
->   otra persona, caso AVILA); Salidas la descarta. (C) la "entrada
->   particular" (regreso sin salida) Salidas la cuenta y el calendario no.
+>   otra persona, caso AVILA); Salidas la descarta. (C) HECHO 2026-10-05:
+>   la "entrada particular" ahora se marca en el calendario.
+>   Caso AVILA exacto (para B): 08/04/2026 marcador 6 a las 07:22:57 y su
+>   llegada 07:23:05; 14/04/2026 marcador 07:23:19 y llegada 07:23:26. Sin
+>   reloj guardado (fichajes viejos). Medido desde junio: 601 marcadores
+>   con 7-10 s de demora, casi todos legítimos -> la tolerancia en segundos
+>   (`markerMaxGapSeconds`, hoy 25 en AVP) NO sirve para separar el caso
+>   AVILA; la regla "primer fichaje del día" sí.
 > - **2026-10-04 — Estilo de filtros en el celular (publicado 2026-10-05).**
 >   El dueño mandó un HTML de ejemplo para Presentismo: rótulo arriba del
 >   campo, bordes de 2px, calendario en la fecha, lupa a la izquierda con
