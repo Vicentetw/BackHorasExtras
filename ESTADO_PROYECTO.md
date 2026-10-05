@@ -52,7 +52,7 @@
 >
 > ### Estado al 2026-10-03
 >
-> - Backend en producción: `bfcb86f`. **890/890 tests.**
+> - Backend en producción: `4589969`. **891/891 tests.**
 > - Frontend en producción: `e4fe61f`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
@@ -183,6 +183,14 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-05 — Salida particular sin regreso en el calendario.** Bug
+>   real (PERROTTA, 2525, 29/09): el calendario del detalle mensual solo
+>   marcaba salidas completas; ahora también las que Salidas muestra como
+>   "Sin regreso — fin de horario" (`4589969`). **Pendiente de aprobación
+>   del dueño, dos diferencias más con Salidas:** (B) el calendario marca
+>   una salida completa que en realidad es la llegada del día (marcador de
+>   otra persona, caso AVILA); Salidas la descarta. (C) la "entrada
+>   particular" (regreso sin salida) Salidas la cuenta y el calendario no.
 > - **2026-10-04 — Estilo de filtros en el celular (publicado 2026-10-05).**
 >   El dueño mandó un HTML de ejemplo para Presentismo: rótulo arriba del
 >   campo, bordes de 2px, calendario en la fecha, lupa a la izquierda con
