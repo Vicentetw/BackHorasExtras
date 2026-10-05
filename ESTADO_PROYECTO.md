@@ -183,6 +183,15 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-04 — Estilo de filtros en el celular (ESPERA APROBACIÓN).**
+>   El dueño mandó un HTML de ejemplo para Presentismo: rótulo arriba del
+>   campo, bordes de 2px, calendario en la fecha, lupa a la izquierda con
+>   botón Buscar, "Más filtros" a lo ancho, totales de a 3. Hecho como clase
+>   global reutilizable `filtros-celular` en `styles.css` (para aplicarlo a
+>   otra vista: agregar la clase a su fila de filtros). Escritorio sin
+>   cambios. Rama `estilo-celular` del frontend (`fd35fb5`), NO en `main`;
+>   vista previa en `horasdedicacionavp--estilo-celular-ysvhs3us.web.app`
+>   (vence 2026-10-11). Si lo aprueba: merge a `main` + `npm run deploy:live`.
 > - **2026-10-04 — Horas Extra por Régimen en el celular.** El texto de
 >   ayuda pasó a un ícono (?) junto al título; Fecha | Régimen y Buscar |
 >   Más filtros en dos filas; Excel y PDF dentro de "Más filtros". El
