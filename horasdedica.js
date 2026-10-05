@@ -3608,6 +3608,15 @@ async function attendanceRangeHandler(req, res) {
         )
           .filter(ev => ev.category === 'PARTICULAR')
           .forEach(ev => particularExitByEmployeeDate.add(`${ev.employeeId}|${date}`));
+        // "Entrada particular": llego con el marcador de REGRESO antes de su
+        // primer fichaje del dia, sin salida ese dia (se la autorizaron el
+        // dia anterior). Salidas ya la cuenta como salida particular; el
+        // calendario solo la sugeria como posible justificacion. Decision del
+        // dueño (2026-10-05): se marca como salida particular, y el encargado
+        // revisa en Salidas si estaba autorizada.
+        orphanReturns
+          .filter(r => r.category === 'PARTICULAR')
+          .forEach(r => particularExitByEmployeeDate.add(`${r.employeeId}|${date}`));
         if (detailEmployeeId) {
           orphanReturns
             .filter(r => r.employeeId === detailEmployeeId)

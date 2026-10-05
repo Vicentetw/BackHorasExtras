@@ -26,6 +26,10 @@ const DATE_WITHOUT_EXIT = '2026-05-12'; // martes
 // Bug real (PERROTTA, legajo 2525, 29/09/2026): Salidas la mostraba como
 // "Sin regreso -- fin de horario" y el calendario no la marcaba.
 const DATE_EXIT_NO_RETURN = '2026-05-13'; // miercoles
+// "Entrada particular": llega con el marcador de REGRESO (la salida se la
+// autorizaron el dia anterior). Salidas la cuenta como salida particular;
+// decision del dueño (2026-10-05): el calendario tambien.
+const DATE_ENTRY_WITH_RETURN_MARKER = '2026-05-15'; // viernes
 
 let headers;
 
@@ -80,6 +84,12 @@ before(async () => {
     USERID, TENANT_ID, `${DATE_EXIT_NO_RETURN} 10:15:10`,
   ]);
 
+  await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`, [
+    MARKER_REGRESO_USERID, TENANT_ID, `${DATE_ENTRY_WITH_RETURN_MARKER} 08:59:55`,
+    USERID, TENANT_ID, `${DATE_ENTRY_WITH_RETURN_MARKER} 09:00:00`,
+    USERID, TENANT_ID, `${DATE_ENTRY_WITH_RETURN_MARKER} 17:00:00`,
+  ]);
+
   // Dia SIN salida particular: entrada y salida normales nada mas.
   await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?)`, [
     USERID, TENANT_ID, `${DATE_WITHOUT_EXIT} 07:00:00`,
@@ -127,5 +137,10 @@ async function diaDe(fecha) {
 
 test('/attendance-range: una salida particular SIN regreso tambien marca el dia', async () => {
   const day = await diaDe(DATE_EXIT_NO_RETURN);
+  assert.equal(day.hasParticularExit, true);
+});
+
+test('/attendance-range: la entrada particular (llega con el marcador de regreso) marca el dia', async () => {
+  const day = await diaDe(DATE_ENTRY_WITH_RETURN_MARKER);
   assert.equal(day.hasParticularExit, true);
 });
