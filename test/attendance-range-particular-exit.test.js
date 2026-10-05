@@ -22,6 +22,10 @@ const MARKER_SALIDA_USERID = 999965002;
 const MARKER_REGRESO_USERID = 999965003;
 const DATE_WITH_EXIT = '2026-05-11'; // lunes
 const DATE_WITHOUT_EXIT = '2026-05-12'; // martes
+// Salida SIN regreso: se fue con el marcador y no volvio a fichar ese dia.
+// Bug real (PERROTTA, legajo 2525, 29/09/2026): Salidas la mostraba como
+// "Sin regreso -- fin de horario" y el calendario no la marcaba.
+const DATE_EXIT_NO_RETURN = '2026-05-13'; // miercoles
 
 let headers;
 
@@ -70,6 +74,12 @@ before(async () => {
     ]
   );
 
+  await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`, [
+    USERID, TENANT_ID, `${DATE_EXIT_NO_RETURN} 07:00:00`,
+    MARKER_SALIDA_USERID, TENANT_ID, `${DATE_EXIT_NO_RETURN} 10:15:00`,
+    USERID, TENANT_ID, `${DATE_EXIT_NO_RETURN} 10:15:10`,
+  ]);
+
   // Dia SIN salida particular: entrada y salida normales nada mas.
   await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?)`, [
     USERID, TENANT_ID, `${DATE_WITHOUT_EXIT} 07:00:00`,
@@ -105,4 +115,17 @@ test('/attendance-range: hasParticularExit=false un dia sin salida particular', 
   const row = json.data.find((e) => String(e.employeeId) === String(BADGE));
   const day = row.days.find((d) => d.date === DATE_WITHOUT_EXIT);
   assert.equal(day.hasParticularExit, false);
+});
+
+async function diaDe(fecha) {
+  const res = await fetch(`${BASE_URL}/attendance-range?from=${fecha}&to=${fecha}&employeeId=${BADGE}&tenantId=${TENANT_ID}`, { headers });
+  assert.equal(res.status, 200);
+  const json = await res.json();
+  const row = json.data.find((e) => String(e.employeeId) === String(BADGE));
+  return row.days.find((d) => d.date === fecha);
+}
+
+test('/attendance-range: una salida particular SIN regreso tambien marca el dia', async () => {
+  const day = await diaDe(DATE_EXIT_NO_RETURN);
+  assert.equal(day.hasParticularExit, true);
 });

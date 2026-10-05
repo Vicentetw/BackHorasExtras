@@ -3591,8 +3591,21 @@ async function attendanceRangeHandler(req, res) {
       // buscando los PARTICULAR (ver movementsCalculations.js).
       const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
       for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
-        const { closedEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
+        const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
         closedEvents
+          .filter(ev => ev.category === 'PARTICULAR')
+          .forEach(ev => particularExitByEmployeeDate.add(`${ev.employeeId}|${date}`));
+        // Salida SIN regreso (se fue y no volvio a fichar ese dia): Salidas la
+        // muestra como "Sin regreso -- fin de horario", pero el calendario no
+        // la marcaba porque solo miraba las salidas completas (bug real:
+        // PERROTTA, legajo 2525, 29/09/2026). Se usa el mismo filtro que
+        // Salidas (filterEventsOpenedByFirstCheckinOfDay): una "salida" que en
+        // realidad es la llegada del dia (marcador de otra persona apretado
+        // justo antes) no cuenta. La hora de cierre no hace falta para la
+        // bandera, por eso el mapa de horarios va vacio.
+        movementsCalc.filterEventsOpenedByFirstCheckinOfDay(
+          movementsCalc.closeOpenEventsAtScheduleExit(openEvents, new Map()), dayCheckins
+        )
           .filter(ev => ev.category === 'PARTICULAR')
           .forEach(ev => particularExitByEmployeeDate.add(`${ev.employeeId}|${date}`));
         if (detailEmployeeId) {
