@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-03
 >
 > - Backend en producción: `bfcb86f`. **890/890 tests.**
-> - Frontend en producción: `02773dd`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `8d1b33c`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -199,6 +199,8 @@
 >   14px con el mismo espaciado (antes 16/15/14px), botones en peso medio,
 >   texto a 12px del borde. Se cambia en un solo lugar: variables
 >   `--texto-filtros-celular` y `--espaciado-filtros-celular` de `styles.css`.
+>   Fecha centrada verticalmente (`8d1b33c`): cada navegador le daba su
+>   altura al campo (Chrome 14px, Firefox 17px); fijada en 24px.
 > - **2026-10-04 — Horas Extra por Régimen en el celular.** El texto de
 >   ayuda pasó a un ícono (?) junto al título; Fecha | Régimen y Buscar |
 >   Más filtros en dos filas; Excel y PDF dentro de "Más filtros". El
