@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-03
 >
 > - Backend en producción: `bfcb86f`. **890/890 tests.**
-> - Frontend en producción: `8cb7253`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `fd35fb5`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -183,15 +183,14 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
-> - **2026-10-04 — Estilo de filtros en el celular (ESPERA APROBACIÓN).**
+> - **2026-10-04 — Estilo de filtros en el celular (publicado 2026-10-05).**
 >   El dueño mandó un HTML de ejemplo para Presentismo: rótulo arriba del
 >   campo, bordes de 2px, calendario en la fecha, lupa a la izquierda con
 >   botón Buscar, "Más filtros" a lo ancho, totales de a 3. Hecho como clase
 >   global reutilizable `filtros-celular` en `styles.css` (para aplicarlo a
 >   otra vista: agregar la clase a su fila de filtros). Escritorio sin
->   cambios. Rama `estilo-celular` del frontend (`fd35fb5`), NO en `main`;
->   vista previa en `horasdedicacionavp--estilo-celular-ysvhs3us.web.app`
->   (vence 2026-10-11). Si lo aprueba: merge a `main` + `npm run deploy:live`.
+>   cambios. Aprobado y publicado (`fd35fb5`). Falta aplicarlo a las
+>   otras vistas que elija el dueño.
 > - **2026-10-04 — Horas Extra por Régimen en el celular.** El texto de
 >   ayuda pasó a un ícono (?) junto al título; Fecha | Régimen y Buscar |
 >   Más filtros en dos filas; Excel y PDF dentro de "Más filtros". El
