@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-03
 >
 > - Backend en producción: `bfcb86f`. **890/890 tests.**
-> - Frontend en producción: `fd35fb5`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `93e17a1`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -190,7 +190,11 @@
 >   global reutilizable `filtros-celular` en `styles.css` (para aplicarlo a
 >   otra vista: agregar la clase a su fila de filtros). Escritorio sin
 >   cambios. Aprobado y publicado (`fd35fb5`). Falta aplicarlo a las
->   otras vistas que elija el dueño.
+>   otras vistas que elija el dueño. **Firefox** (2026-10-05, `93e17a1`):
+>   dibuja su propio calendario en el campo de fecha y no deja esconderlo;
+>   se veían dos y la fecha cortada. Arreglado con `@supports
+>   (-moz-appearance: none)`. Probar siempre también en Firefox: hay
+>   `puppeteer-core` para manejarlo sin ventana (Firefox está instalado).
 > - **2026-10-04 — Horas Extra por Régimen en el celular.** El texto de
 >   ayuda pasó a un ícono (?) junto al título; Fecha | Régimen y Buscar |
 >   Más filtros en dos filas; Excel y PDF dentro de "Más filtros". El
