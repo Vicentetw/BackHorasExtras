@@ -53,7 +53,7 @@
 > ### Estado al 2026-10-03
 >
 > - Backend en producción: `bfcb86f`. **890/890 tests.**
-> - Frontend en producción: `46c58f3`. Landing aparte: `ee40f10`.
+> - Frontend en producción: `e4fe61f`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
 > - Repos: backend **público** (decisión del dueño hasta que se venda;
@@ -203,8 +203,14 @@
 >   altura al campo (Chrome 14px, Firefox 17px); fijada en 24px.
 >   Firefox Android (`46c58f3`): agranda el texto por su cuenta (font
 >   inflation) → `text-size-adjust: none` en la fila, y margen de 8px solo
->   en Firefox. **Sin confirmar en el celular del dueño**: el agrandado no se
->   reproduce en el Firefox de PC.
+>   en Firefox. Resultó ser el "Tamaño de fuente automático" de Firefox, que
+>   copia la letra de Android: es un ajuste de ACCESIBILIDAD de la persona,
+>   la página no lo puede ni debe anular (WCAG pide texto agrandable al 200%).
+>   **Letra agrandada** (`e4fe61f`): los anchos mínimos de la fila van en
+>   `em`; con letra grande cada campo pasa a su propio renglón en vez de
+>   cortarse. Probado al 100/110/130/160% (se simula subiendo
+>   `--texto-filtros-celular`, porque el ajuste de Android no existe en PC).
+>   Regla para pantallas nuevas: anchos mínimos en `em`, no en `px`.
 > - **2026-10-04 — Horas Extra por Régimen en el celular.** El texto de
 >   ayuda pasó a un ícono (?) junto al título; Fecha | Régimen y Buscar |
 >   Más filtros en dos filas; Excel y PDF dentro de "Más filtros". El
