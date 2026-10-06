@@ -188,6 +188,11 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-05 — Botones del celular en píldora** (frontend `e3a49a7`).
+>   Buscar y Más filtros tenían esquinas de 6px (del ejemplo HTML); vuelven
+>   a ser píldoras como en escritorio y en todas las páginas. Criterio
+>   (Material 3): **botones = píldora, campos = rectángulo**. Mantenerlo al
+>   aplicar `filtros-celular` a otras pantallas.
 > - **2026-10-05 — Documentación para no repetir errores.** Nuevo
 >   `MARCADORES_Y_SALIDAS.md` (cómo funcionan los marcadores, las 5 reglas,
 >   los errores reales con datos y cómo verificar). Nuevo `CLAUDE.md` en el
