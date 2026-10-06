@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAnyPermission, resolveTenantId } = require('../appUserMiddleware');
+const { requireAnyPermission, resolveTenantId, resolveTenantForWrite, MENSAJE_ELEGIR_EMPRESA } = require('../appUserMiddleware');
 
 // Ciudades las consume tanto Empleados como Feriados -- un rol con
 // permisos de Feriados pero no de Empleados (o viceversa) tiene que poder
@@ -20,10 +20,9 @@ module.exports = function (db) {
     try {
       const { includeInactive } = req.query;
       const effectiveTenantId = resolveTenantId(req);
-      // tenant_id IS NULL = ciudad global (la carga un superadmin sin
-      // empresa seleccionada, ver POST de abajo) -- visible para todos,
-      // ademas de las propias de la empresa. Mismo criterio que holidays.
-      const tenantClause = effectiveTenantId !== null ? ' AND (tenant_id = ? OR tenant_id IS NULL)' : '';
+      // Solo las ciudades de la empresa. Ya no hay ciudades globales
+      // (AISLAMIENTO_POR_EMPRESA.md, D): las que habia eran de AVP.
+      const tenantClause = effectiveTenantId !== null ? ' AND tenant_id = ?' : '';
       const tenantParams = effectiveTenantId !== null ? [effectiveTenantId] : [];
       const sql = includeInactive === 'true'
         ? `SELECT * FROM ciudades WHERE 1=1${tenantClause} ORDER BY nombre ASC`
@@ -46,9 +45,11 @@ module.exports = function (db) {
         return res.status(400).json({ success: false, error: 'nombre es requerido' });
       }
 
-      const tenantId = req.appUser && !req.appUser.isSuperadmin
-        ? req.appUser.tenantId
-        : (req.body.tenant_id ?? req.body.tenantId ?? null);
+      // Siempre de UNA empresa: la propia, o la que eligio el superadmin.
+      const tenantId = resolveTenantForWrite(req);
+      if (req.appUser && tenantId === null) {
+        return res.status(400).json({ success: false, error: MENSAJE_ELEGIR_EMPRESA });
+      }
 
       const [result] = await db.query(
         'INSERT INTO ciudades (tenant_id, nombre, active) VALUES (?, ?, 1)',
@@ -115,6 +116,15 @@ module.exports = function (db) {
   router.get('/:id/usage', canRead, async (req, res) => {
     try {
       const { id } = req.params;
+      // Solo se informa el uso de una ciudad de la propia empresa (antes
+      // cualquiera podia contar empleados de una ciudad ajena por su id).
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[existing]] = await db.query('SELECT tenant_id FROM ciudades WHERE id = ?', [id]);
+        if (!existing || existing.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Ciudad no encontrada' });
+        }
+      }
       const [[{ employees }]] = await db.query('SELECT COUNT(*) AS employees FROM employees WHERE ciudad_id = ?', [id]);
       const [[{ sucursales }]] = await db.query('SELECT COUNT(*) AS sucursales FROM sucursales WHERE ciudad_id = ?', [id]);
       const [[{ holidays }]] = await db.query('SELECT COUNT(*) AS holidays FROM holidays WHERE ciudad_id = ?', [id]);

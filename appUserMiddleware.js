@@ -165,6 +165,23 @@ function resolveTenantId(req) {
   return req.appUser.tenantId;
 }
 
+// Empresa DUEÑA de algo que se va a crear (un feriado, una ciudad, una
+// escala de vacaciones...). Un usuario normal: siempre la suya. El
+// superadmin: la que eligio en la pantalla (en el cuerpo o en ?tenantId=).
+// Devuelve null si el superadmin no eligio ninguna: la ruta tiene que
+// responder 400 en vez de crear el dato "global". Aislamiento por empresa,
+// 2026-10-06 (AISLAMIENTO_POR_EMPRESA.md): los datos globales que habia eran
+// en realidad de AVP, cargados por el superadmin sin elegir empresa, y se le
+// aplicaban a todas.
+function resolveTenantForWrite(req) {
+  if (!req.appUser) return null;
+  if (!req.appUser.isSuperadmin) return req.appUser.tenantId;
+  const elegida = (req.body && (req.body.tenant_id ?? req.body.tenantId)) ?? req.query.tenantId;
+  return elegida !== undefined && elegida !== null && elegida !== '' ? Number(elegida) : null;
+}
+
+const MENSAJE_ELEGIR_EMPRESA = 'Elegí la empresa: cada empresa tiene sus propios datos y no se cargan datos compartidos entre empresas.';
+
 // Fase 9 (venta): bloquea escritura (POST/PUT/DELETE) si a la empresa se le
 // vencio el periodo de gracia de pago ('readonly'). Un tenant SIN fila en
 // tenant_subscriptions (empresas que ya usaban el sistema antes de que
@@ -241,5 +258,7 @@ module.exports = {
   requireSuperadmin,
   requireActiveSubscription,
   tenantFilter,
-  resolveTenantId
+  resolveTenantId,
+  resolveTenantForWrite,
+  MENSAJE_ELEGIR_EMPRESA
 };

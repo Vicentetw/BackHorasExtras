@@ -1605,9 +1605,10 @@ app.delete('/config/special-users/:userId', requirePermission('settings', 'delet
 // eso le cambiaba las liquidaciones a la otra empresa.
 async function findCompanyScheduleForDate(date, tenantId) {
   const [rows] = await db.query(
+    // Solo el de la empresa (AISLAMIENTO_POR_EMPRESA.md, C): los "globales"
+    // eran el horario de AVP (07:00-13:40) y lo heredaba cualquier empresa.
     `SELECT * FROM companyschedule
-     WHERE scheduleDate = ? AND (tenant_id <=> ? OR tenant_id IS NULL)
-     ORDER BY (tenant_id IS NULL) ASC
+     WHERE scheduleDate = ? AND tenant_id <=> ?
      LIMIT 1`,
     [date, tenantId]
   );
@@ -2202,8 +2203,7 @@ app.get('/config/payroll-regime', async (req, res) => {
     const [rows] = await db.query(
       `SELECT tenant_id, regime, week_start_day, biweekly_cut_day1, biweekly_cut_day2
        FROM payroll_regime_settings
-       WHERE tenant_id <=> ? OR tenant_id IS NULL
-       ORDER BY (tenant_id IS NULL) ASC
+       WHERE tenant_id <=> ?
        LIMIT 1`,
       [tenantId]
     );
@@ -2757,11 +2757,13 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
     };
     
     try {
+      // Solo el horario de la empresa (antes no filtraba: leia el de
+      // cualquiera). AISLAMIENTO_POR_EMPRESA.md, C.
       const [scheduleRows] = await db.query(`
         SELECT timeEntrance, timeExit, isWorkDay
         FROM \`companyschedule\`
-        WHERE scheduleDate = ?
-      `, [date]);
+        WHERE scheduleDate = ? AND tenant_id <=> ?
+      `, [date, effectiveTenantId]);
       
       if (scheduleRows && scheduleRows.length > 0) {
         schedule = scheduleRows[0];
@@ -2783,7 +2785,8 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
       const holidayParams = [date, date];
       let holidayTenantClause = '';
       if (effectiveTenantId !== null) {
-        holidayTenantClause = ' AND (tenant_id = ? OR tenant_id IS NULL)';
+        // Solo los feriados de la empresa: ver AISLAMIENTO_POR_EMPRESA.md (B).
+        holidayTenantClause = ' AND tenant_id = ?';
         holidayParams.push(effectiveTenantId);
       }
       const [holidayRows] = await db.query(
@@ -3101,7 +3104,8 @@ async function attendanceRangeHandler(req, res) {
     const holidayRangeParams = [from, formatLocalDate(effectiveEndDate), monthDays];
     let holidayRangeTenantClause = '';
     if (tenantId !== null) {
-      holidayRangeTenantClause = ' AND (tenant_id = ? OR tenant_id IS NULL)';
+      // Solo los feriados de la empresa: ver AISLAMIENTO_POR_EMPRESA.md (B).
+      holidayRangeTenantClause = ' AND tenant_id = ?';
       holidayRangeParams.push(tenantId);
     }
     const [holidayRows] = await db.query(
@@ -3151,9 +3155,11 @@ async function attendanceRangeHandler(req, res) {
     const companyScheduleByTenantAndDate = {};
     const companyScheduleGlobalByDate = {};
     if (needsCompanySchedule) {
+      // Solo los horarios de la empresa pedida (antes traia los de todas).
+      // AISLAMIENTO_POR_EMPRESA.md, C.
       const [csRows] = await db.query(
-        `SELECT * FROM companyschedule WHERE scheduleDate BETWEEN ? AND ?`,
-        [from, formatLocalDate(effectiveEndDate)]
+        `SELECT * FROM companyschedule WHERE scheduleDate BETWEEN ? AND ?${tenantId !== null ? ' AND tenant_id = ?' : ''}`,
+        tenantId !== null ? [from, formatLocalDate(effectiveEndDate), tenantId] : [from, formatLocalDate(effectiveEndDate)]
       );
       csRows.forEach(row => {
         if (row.tenant_id === null || row.tenant_id === undefined) {
@@ -3163,9 +3169,9 @@ async function attendanceRangeHandler(req, res) {
         }
       });
     }
-    // Primero el horario propio de la empresa; si no tiene, el global.
+    // Solo el horario propio de la empresa: ya no hay horario global.
     const companyScheduleFor = (tenantId, date) =>
-      companyScheduleByTenantAndDate[`${tenantId}|${date}`] || companyScheduleGlobalByDate[date] || null;
+      companyScheduleByTenantAndDate[`${tenantId}|${date}`] || null;
 
     // Arranca en previousDayStr (no "from") para poder resolver el
     // schedule del dia anterior al rango pedido -- ver comentario de

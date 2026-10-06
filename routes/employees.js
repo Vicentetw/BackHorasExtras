@@ -5,6 +5,23 @@ const db = require('../db');
 const { resolveTenantId, requirePermission, requireActiveSubscription } = require('../appUserMiddleware');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
 
+// La ciudad y la sucursal de un empleado tienen que ser de SU empresa.
+// Antes no se validaba: con el id de una ciudad ajena se la podia asignar
+// (AISLAMIENTO_POR_EMPRESA.md, D). Devuelve un mensaje de error o null.
+async function ubicacionAjena(tenantId, ciudadId, sucursalId) {
+  if (tenantId == null) return null; // sin empresa resuelta (local sin login): como antes
+  if (ciudadId) {
+    const [[c]] = await db.query('SELECT tenant_id FROM ciudades WHERE id = ?', [ciudadId]);
+    if (!c || c.tenant_id !== Number(tenantId)) return 'Ciudad no encontrada';
+  }
+  if (sucursalId) {
+    const [[s]] = await db.query('SELECT tenant_id, ciudad_id FROM sucursales WHERE id = ?', [sucursalId]);
+    if (!s || s.tenant_id !== Number(tenantId)) return 'Sucursal no encontrada';
+    if (ciudadId && Number(s.ciudad_id) !== Number(ciudadId)) return 'La sucursal no pertenece a esa ciudad';
+  }
+  return null;
+}
+
 // NOTE: Automatic employee->user sync has been disabled.
 // Matching now requires explicit approval via the matching dashboard.
 
@@ -282,6 +299,9 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
       }
     }
 
+    const ubicacionMal = await ubicacionAjena(effectiveTenantId, ciudad_id, sucursal_id);
+    if (ubicacionMal) return res.status(404).json({ error: ubicacionMal });
+
     const normalizedDocumento = documento ? String(documento).trim() : null;
 
     // Fase 20: el legajo (employee_id) y el documento son unicos POR EMPRESA,
@@ -436,6 +456,9 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
     const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
       ? existing[0].tenant_id
       : (tenant_id !== undefined && tenant_id !== null && tenant_id !== '' ? tenant_id : existing[0].tenant_id);
+
+    const ubicacionMal = await ubicacionAjena(effectiveTenantId, ciudad_id, sucursal_id);
+    if (ubicacionMal) return res.status(404).json({ error: ubicacionMal });
 
     // Verificar que no haya conflicto de legajo
     const normalizedDocumento = documento ? String(documento).trim() : null;
@@ -615,11 +638,21 @@ router.patch('/bulk-location', requirePermission('employees', 'update'), async (
       return res.status(400).json({ error: 'ids inválidos' });
     }
 
+    // La ciudad y la sucursal tienen que ser de una misma empresa, y solo se
+    // tocan empleados de ESA empresa (antes no se validaba la ciudad).
+    const [[ciudadDestino]] = await db.query('SELECT tenant_id FROM ciudades WHERE id = ?', [ciudad_id]);
+    if (!ciudadDestino || (req.appUser && !req.appUser.isSuperadmin && ciudadDestino.tenant_id !== req.appUser.tenantId)) {
+      return res.status(404).json({ error: 'Ciudad no encontrada' });
+    }
+    const empresaDestino = ciudadDestino.tenant_id;
+    const ubicacionMal = await ubicacionAjena(empresaDestino, ciudad_id, sucursal_id);
+    if (ubicacionMal) return res.status(404).json({ error: ubicacionMal });
+
     // Mismo criterio que bulk-status -- un empleado de otra empresa se
     // trata como si no existiera, nunca se toca aunque su id venga en la lista.
     const [rows] = await db.query('SELECT id, tenant_id FROM employees WHERE id IN (?)', [numericIds]);
     const allowedIds = rows
-      .filter((r) => !req.appUser || req.appUser.isSuperadmin || r.tenant_id === req.appUser.tenantId)
+      .filter((r) => !req.appUser || r.tenant_id === empresaDestino)
       .map((r) => r.id);
 
     if (allowedIds.length === 0) {

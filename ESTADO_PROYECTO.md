@@ -189,8 +189,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
-> - **2026-10-06 — Aislamiento por empresa: relevamiento y plan A–J, ESPERA
->   APROBACIÓN.** Casi todo lo "global" es dato de AVP (feriados que se aplican
+> - **2026-10-06 — Aislamiento por empresa: A–I HECHOS, SIN PUBLICAR.** Ramas
+>   `aislamiento-por-empresa` (backend y frontend). **Orden: 1) el dueño corre
+>   la migración `20261014`, 2) backend a `main`, 3) frontend.** Detalle y
+>   verificación en `AISLAMIENTO_POR_EMPRESA.md`. Control nuevo:
+>   `node scripts/verificar-aislamiento.js` (solo lee; avisa filas sin empresa).
+> - **2026-10-06 — Aislamiento por empresa: relevamiento y plan A–J (aprobado).** Casi todo lo "global" es dato de AVP (feriados que se aplican
 >   pero no se ven, horario 07–13:40, escala de vacaciones, ciudades…), y tres
 >   consultas de `companyschedule` no filtran por empresa. Ver
 >   `AISLAMIENTO_POR_EMPRESA.md`. Nada cambiado.

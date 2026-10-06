@@ -18,6 +18,7 @@
 const billingRepository = require('../repositories/billingRepository');
 const appUserRepository = require('../repositories/appUserRepository');
 const { computeFreeTrialPeriod } = require('./billingCalculations');
+const { darKitInicial } = require('./kitInicialEmpresa');
 const { enviarEmailDeContrasena } = require('./firebaseEmail');
 
 const ACENTOS = { á: 'a', é: 'e', í: 'i', ó: 'o', ú: 'u', ü: 'u', ñ: 'n' };
@@ -58,6 +59,8 @@ async function aprobarSolicitud(db, leadId, { companyName, email } = {}, revisad
     const [[rol]] = await db.query(`SELECT id FROM roles WHERE name = 'Administrador de Empresa' AND is_system = 1`);
     await appUserRepository.createInvitedUser({ email: mail, tenantId, isSuperadmin: false, roleId: rol ? rol.id : null }, db);
     await db.query('UPDATE tenants SET titular_email = ? WHERE id = ?', [mail, tenantId]);
+    // Sus propios valores desde el primer dia (ver kitInicialEmpresa.js).
+    await darKitInicial(db, tenantId);
     await db.query(
       `UPDATE signup_leads SET status = 'provisioned', tenant_id = ?, company_name = ?, email = ?, reviewed_by = ?, reviewed_at = NOW()
        WHERE id = ?`, [tenantId, empresa, mail, revisadoPor, leadId]);
@@ -68,6 +71,8 @@ async function aprobarSolicitud(db, leadId, { companyName, email } = {}, revisad
     await deshacer('DELETE FROM user_permissions WHERE user_id IN (SELECT id FROM app_users WHERE tenant_id = ?)');
     await deshacer('DELETE FROM app_users WHERE tenant_id = ?');
     await deshacer('DELETE FROM tenant_subscriptions WHERE tenant_id = ?');
+    await deshacer('DELETE FROM vacation_scale WHERE tenant_id = ?');
+    await deshacer('DELETE FROM payroll_regime_settings WHERE tenant_id = ?');
     await deshacer('DELETE FROM tenants WHERE id = ?');
     await db.query('UPDATE signup_leads SET error_message = ? WHERE id = ?', [String(err.message).slice(0, 1000), leadId]).catch(() => {});
     throw err;

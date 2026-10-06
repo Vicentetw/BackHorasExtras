@@ -1,5 +1,19 @@
 # Aislamiento por empresa — relevamiento y plan (2026-10-06)
 
+> **ESTADO (2026-10-06): A–I HECHOS en las ramas `aislamiento-por-empresa`
+> (backend y frontend), NO publicados. Falta: (1) el dueño corre
+> `migrations/20261014_aislamiento_por_empresa.sql` en producción, (2) unir el
+> backend a `main` (Render publica), (3) publicar el frontend. En ese orden.**
+> Verificado en la copia de producción: la migración deja una sola fila sin
+> empresa (la carga manual id 40, a propósito), y AVP da IDÉNTICO antes y
+> después (5.776 filas: Presentismo de 9 meses, 50 calendarios, Salidas,
+> liquidación, vacaciones, configuración), con el código viejo y con el nuevo.
+> Únicas diferencias, buscadas: la pantalla de Feriados ahora MUESTRA el 02/04
+> y el 03/04 (antes se aplicaban sin verse). Suite: 903/903.
+> J (catálogos para copiar) queda para más adelante. Pendiente de decisión del
+> dueño: la carga manual id 40 (2 h extra del legajo 2926, 05/06/2026, sin
+> empresa, hoy no se cuenta).
+>
 > Pedido del dueño: "cada empresa debe tener todo propio" (ej. el 05/10, Día
 > del Camino, es feriado solo para AVP). **Plan propuesto, NO aplicado:**
 > cada letra espera aprobación. Regla: no romper nada de lo que funciona.

@@ -210,38 +210,55 @@ test('DELETE /api/ciudades/:id (soft delete) no rompe al empleado que ya la tien
   assert.ok(!body.ciudades.some((c) => c.id === ciudadId), 'una ciudad desactivada no aparece en el listado por defecto');
 });
 
-// Bug real reportado: crear una ciudad como superadmin (sin una empresa
-// puntual seleccionada) tiraba 500 -- tenant_id quedaba NULL, columna era
-// NOT NULL. Ver migrations/20260916_ciudades_tenant_id_nullable.sql.
-test('POST /api/ciudades como superadmin (sin tenant) -> 200, queda global', async () => {
+// Aislamiento por empresa (2026-10-06, AISLAMIENTO_POR_EMPRESA.md, D): ya no
+// existen ciudades globales. Antes, un superadmin sin empresa elegida creaba
+// una ciudad "de todos" -- asi quedaron Rawson y Trelew, que eran de AVP,
+// visibles para cualquier empresa. Ahora el superadmin tiene que elegir la
+// empresa, y cada empresa ve solo sus ciudades.
+test('POST /api/ciudades como superadmin SIN elegir empresa -> 400, no crea una ciudad global', async () => {
   const { status, body } = await json(await fetch(`${BASE_URL}/api/ciudades`, {
     method: 'POST',
     headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ nombre: 'Ciudad Global (test)' }),
+    body: JSON.stringify({ nombre: 'Ciudad Sin Empresa (test)' }),
+  }));
+  assert.equal(status, 400, JSON.stringify(body));
+  const [[{ n }]] = await db.query("SELECT COUNT(*) AS n FROM ciudades WHERE nombre = 'Ciudad Sin Empresa (test)'");
+  assert.equal(n, 0);
+});
+
+test('POST /api/ciudades como superadmin eligiendo la empresa -> queda de ESA empresa', async () => {
+  const { status, body } = await json(await fetch(`${BASE_URL}/api/ciudades`, {
+    method: 'POST',
+    headers: { ...headersSuperadmin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nombre: 'Ciudad Del Superadmin Para B (test)', tenant_id: TENANT_B }),
   }));
   assert.equal(status, 200, JSON.stringify(body));
   globalCiudadId = body.id;
-
   const [[row]] = await db.query('SELECT tenant_id FROM ciudades WHERE id = ?', [globalCiudadId]);
-  assert.equal(row.tenant_id, null);
+  assert.equal(row.tenant_id, TENANT_B);
 });
 
-test('una ciudad global es visible para cualquier empresa, no solo la del que la creo', async () => {
-  const { body } = await json(await fetch(`${BASE_URL}/api/ciudades`, { headers: headersB }));
-  assert.ok(body.ciudades.some((c) => c.id === globalCiudadId), 'el tenant B deberia ver la ciudad global');
+test('la ciudad de una empresa no la ve otra, aunque la haya creado el superadmin', async () => {
+  const { body } = await json(await fetch(`${BASE_URL}/api/ciudades`, { headers: headersA }));
+  assert.ok(!body.ciudades.some((c) => c.id === globalCiudadId), 'el tenant A no deberia ver la ciudad del tenant B');
 });
 
-test('una empresa puede crear una sucursal propia bajo una ciudad global', async () => {
-  const { status, body } = await json(await fetch(`${BASE_URL}/api/sucursales`, {
+test('una empresa NO puede crear una sucursal bajo la ciudad de otra empresa', async () => {
+  const { status } = await json(await fetch(`${BASE_URL}/api/sucursales`, {
     method: 'POST',
-    headers: { ...headersB, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ nombre: 'Sucursal De B En Ciudad Global', ciudad_id: globalCiudadId }),
+    headers: { ...headersA, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nombre: 'Sucursal De A En Ciudad De B', ciudad_id: globalCiudadId }),
   }));
-  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(status, 404);
+});
 
-  const [[row]] = await db.query('SELECT tenant_id, ciudad_id FROM sucursales WHERE id = ?', [body.id]);
-  assert.equal(row.ciudad_id, globalCiudadId);
-  assert.equal(row.tenant_id, TENANT_B, 'la sucursal en si sigue siendo de la empresa B, solo la ciudad es global');
+test('PATCH /api/employees/bulk-location con una ciudad de OTRA empresa -> 404, no toca nada', async () => {
+  const { status } = await json(await fetch(`${BASE_URL}/api/employees/bulk-location`, {
+    method: 'PATCH',
+    headers: { ...headersA, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids: [1], ciudad_id: globalCiudadId, sucursal_id: sucursalId }),
+  }));
+  assert.equal(status, 404);
 });
 
 test('PATCH /api/employees/bulk-location asigna ciudad/sucursal a varios de una, y no toca empleados de otra empresa', async () => {
@@ -270,7 +287,7 @@ test('PATCH /api/employees/bulk-location asigna ciudad/sucursal a varios de una,
   const { status, body } = await json(await fetch(`${BASE_URL}/api/employees/bulk-location`, {
     method: 'PATCH',
     headers: { ...headersA, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids: [emp1, emp2, empOther], ciudad_id: globalCiudadId, sucursal_id: sucursalId }),
+    body: JSON.stringify({ ids: [emp1, emp2, empOther], ciudad_id: ciudadId, sucursal_id: sucursalId }),
   }));
   assert.equal(status, 200, JSON.stringify(body));
   assert.equal(body.updated, 2);
@@ -278,7 +295,7 @@ test('PATCH /api/employees/bulk-location asigna ciudad/sucursal a varios de una,
 
   const [rows] = await db.query('SELECT id, ciudad_id, sucursal_id FROM employees WHERE id IN (?, ?)', [emp1, emp2]);
   rows.forEach((r) => {
-    assert.equal(r.ciudad_id, globalCiudadId);
+    assert.equal(r.ciudad_id, ciudadId);
     assert.equal(r.sucursal_id, sucursalId);
   });
 
