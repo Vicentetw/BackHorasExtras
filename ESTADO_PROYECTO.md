@@ -52,7 +52,7 @@
 >
 > ### Estado al 2026-10-03
 >
-> - Backend en producción: (ver git log). **892/892 tests.**
+> - Backend en producción: (ver git log). **894/894 tests.**
 > - Frontend en producción: `e4fe61f`. Landing aparte: `ee40f10`.
 > - Única empresa real: **AVP** (id 6, ~480 empleados). Titular:
 >   `tupctw@gmail.com`.
@@ -186,8 +186,14 @@
 > - **2026-10-05 — Salida particular sin regreso en el calendario.** Bug
 >   real (PERROTTA, 2525, 29/09): el calendario del detalle mensual solo
 >   marcaba salidas completas; ahora también las que Salidas muestra como
->   "Sin regreso — fin de horario" (`4589969`). **Pendiente de aprobación
->   del dueño, dos diferencias más con Salidas:** (B) el calendario marca
+>   "Sin regreso — fin de horario" (`4589969`). (B) HECHO 2026-10-05, y con
+>   él la causa de fondo: en el DETALLE de una persona la detección de
+>   marcadores solo veía sus fichajes, así que un marcador que se llevó otra
+>   persona se le asignaba a ella. Afectaba también las HORAS EXTRA del
+>   detalle (abril/agosto: 13 y 11 empleados distintos del resumen). Ahora
+>   usa todos los fichajes del período; verificado con la copia de
+>   producción empleado por empleado: calendario = Salidas, detalle =
+>   resumen. Antes, (B) era: el calendario marca
 >   una salida completa que en realidad es la llegada del día (marcador de
 >   otra persona, caso AVILA); Salidas la descarta. (C) HECHO 2026-10-05:
 >   la "entrada particular" ahora se marca en el calendario.
