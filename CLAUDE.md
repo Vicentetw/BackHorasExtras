@@ -44,6 +44,20 @@ preguntar dónde va esa configuración.
 Sí van en el código las reglas que son verdad para cualquier empresa (ej.
 "nadie tiene una salida antes de haber llegado").
 
+**Quién configura qué** (definido por el dueño, 2026-10-06):
+- El **administrador de cada empresa** configura todo lo de su empresa
+  (plantillas, horarios, marcadores, reglas de horas extra). Toda opción de
+  negocio tiene que estar a su alcance, con ayuda clara: el dueño no va a
+  configurar 150 empresas.
+- El **superadmin** administra la plataforma (altas, módulos, cobros,
+  soporte). Configurar una empresa por ella es un servicio pago de puesta en
+  marcha, no el camino normal.
+- **Aislamiento total entre empresas.** Lo "global" (`tenant_id` NULL o 0) es
+  solo un valor por defecto de la plataforma y solo lo edita el superadmin.
+- Una opción que solo ve el superadmin no puede ser la que hace funcionar una
+  configuración del administrador (pasó con el "modo" de las plantillas:
+  las políticas de horas extra se veían pero no hacían nada).
+
 ## ⚠️ Trampa conocida: marcadores (salidas particulares y horas extra)
 
 Antes de tocar Presentismo, Salidas, horas extra, campaña o el portal del
