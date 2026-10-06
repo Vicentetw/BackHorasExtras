@@ -183,12 +183,18 @@
 > | Campaña | `CAMPANA.md` |
 > | Seguridad del agente que sube fichajes | `SEGURIDAD_AGENTE.md` |
 > | Seguridad de la web: CORS, cabeceras, CSP, librerías | `SEGURIDAD_WEB.md` |
+> | Licencias largas (gremial, cargo electivo…): análisis y propuesta A–F | `LICENCIAS_LARGAS.md` |
 > | **Aislamiento por empresa: qué es global, qué debería ser propio, plan A–J** | `AISLAMIENTO_POR_EMPRESA.md` |
 > | **Marcadores: salidas particulares y horas extra. Reglas que no se pueden romper y cómo verificarlas** | `MARCADORES_Y_SALIDAS.md` |
 > | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-06 — Licencias largas (gremial): análisis, ESPERA APROBACIÓN.**
+>   Hoy ya se puede cargar como Licencia con rango de años (no figura ausente),
+>   pero: fecha de fin obligatoria, la lista de Licencias no la muestra en los
+>   años del medio (bug), avisos falsos si ficha, infla "Excusado", sin aviso al
+>   vencer. Ver `LICENCIAS_LARGAS.md`.
 > - **2026-10-06 — Aislamiento por empresa: relevamiento y plan A–J, ESPERA
 >   APROBACIÓN.** Casi todo lo "global" es dato de AVP (feriados que se aplican
 >   pero no se ven, horario 07–13:40, escala de vacaciones, ciudades…), y tres
