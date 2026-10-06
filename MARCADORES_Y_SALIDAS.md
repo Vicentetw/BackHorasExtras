@@ -191,6 +191,23 @@ y fichó dos veces más (23:02:52 y 23:02:55).
   (en `specialusers` figura con `userId` 2 y `badgeNumber` 10; el reloj la
   registra como USERID 10). Rehacer la tabla cruzando por `badgeNumber`.
 
+### Doble lectura: medido y verificado (2026-10-06)
+
+- **Es general, no de una persona**: agosto-septiembre 2026, el 10 % de todas
+  las lecturas son dobles (misma persona < 10 s). 3 personas casi siempre
+  (MENDOZA 9467), 46 a veces, 44 rara vez, 54 nunca.
+- **Caso MENDOZA, 29/05/2026**: tecla 6 a las 12:36:32, dedo 12:36:35 y
+  12:36:38. Se fue y no volvió; quedó "salida particular de 0 minutos".
+- **Caso 1496, 07/04/2026**: tecla 9 14:47:24, dedo 14:47:28 y 14:47:32;
+  tecla 10 18:01:36, dedo 18:01:47. Hizo 3 h 14 min de HE; hoy cuenta 0. Con
+  `reboteRefinado` da 194 min: **el arreglo es correcto**.
+- Impacto ene-sep 2026 con `reboteRefinado` para PARTICULAR: salidas de
+  0 minutos 89 -> 15; sin regreso 981 -> 1.040; +56 h en las cerradas. Para
+  HE: +1.060 h (+5,6 %), 495 empleado-mes.
+- Complemento del lado del aparato: los relojes ZK tienen un ajuste de
+  "intervalo de marcaje repetido" que descarta la segunda lectura de la misma
+  persona; igual el sistema tiene que ser robusto para cualquier empresa.
+
 ### Relevamiento 2026-10-06: TODO lo que hoy decide si algo es hora extra
 
 Antes de diseñar nada para los serenos (pedido del dueño: "analizar bien
