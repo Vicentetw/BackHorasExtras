@@ -183,11 +183,17 @@
 > | Campaña | `CAMPANA.md` |
 > | Seguridad del agente que sube fichajes | `SEGURIDAD_AGENTE.md` |
 > | Seguridad de la web: CORS, cabeceras, CSP, librerías | `SEGURIDAD_WEB.md` |
+> | **Aislamiento por empresa: qué es global, qué debería ser propio, plan A–J** | `AISLAMIENTO_POR_EMPRESA.md` |
 > | **Marcadores: salidas particulares y horas extra. Reglas que no se pueden romper y cómo verificarlas** | `MARCADORES_Y_SALIDAS.md` |
 > | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-06 — Aislamiento por empresa: relevamiento y plan A–J, ESPERA
+>   APROBACIÓN.** Casi todo lo "global" es dato de AVP (feriados que se aplican
+>   pero no se ven, horario 07–13:40, escala de vacaciones, ciudades…), y tres
+>   consultas de `companyschedule` no filtran por empresa. Ver
+>   `AISLAMIENTO_POR_EMPRESA.md`. Nada cambiado.
 > - **2026-10-06 — Sereno AGUILAR (3056) y doble lectura del lector: EN
 >   PAUSA, el dueño pidió esperar antes de cambiar lógica.** Diagnóstico y
 >   medición en `MARCADORES_Y_SALIDAS.md` sección 5. Nuevo principio en
