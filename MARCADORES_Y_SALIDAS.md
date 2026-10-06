@@ -191,6 +191,25 @@ y fichó dos veces más (23:02:52 y 23:02:55).
   (en `specialusers` figura con `userId` 2 y `badgeNumber` 10; el reloj la
   registra como USERID 10). Rehacer la tabla cruzando por `badgeNumber`.
 
+### Relevamiento 2026-10-06: TODO lo que hoy decide si algo es hora extra
+
+Antes de diseñar nada para los serenos (pedido del dueño: "analizar bien
+antes de pisar otra lógica"). Seis capas, de afuera hacia adentro:
+
+| Capa | Dónde | Qué decide | Observación |
+|---|---|---|---|
+| Empresa | Configuración: `overtimeAuthorizationMode` (`all`/`custom`), corte y tope globales | Si se respeta el tilde de cada empleado | AVP está en `all` |
+| Empleado | Empleados: tilde "autorizado a hacer horas extras" (`employees.overtime_authorized`) | Si esa persona puede tener HE | **Con `all` se ignora.** En AVP 472 de 484 lo tienen desmarcado: pasar a `custom` les sacaría las HE. La columna en producción tiene default 0 y el código crea con 1 |
+| Plantilla | Plantillas de horario: corte HE, tope HE, tolerancias, políticas de llegada anticipada y salida posterior, **modo** (`legacy`/`shadow`/`active`, solo superadmin) | Cómo se clasifica el tiempo fuera del horario | **Las políticas solo las usa el motor nuevo.** Todas las plantillas de AVP están en `legacy`: la "08 a 12 y 16 a 20" tiene "Salida posterior: extra si autorizado" cargada y **no tiene efecto**. Una configuración que parece andar y no anda |
+| Marcadores 9/10 | `detectMovements` (solo en `legacy`) | Prioridad 1 sobre el corte | Cuenta el tramo marcado **entero**, sin recortar por el horario |
+| Motor nuevo | `timeClassifier` (plantillas en `active`) | HE = lo que excede el horario, según políticas y reglas por tipo de día (franco, feriado) | **No usa marcadores** |
+| Régimen / convenio | `horasExtraRegimen.js` (topes, liquidación, cierre de mes) | Cuánto se paga | **Recorta por la plantilla**: nunca cuenta como extra lo que cae dentro de la jornada. Con marcadores en `legacy`, Presentismo puede mostrar más HE que lo que liquida el régimen (**a verificar con datos**) |
+
+Consecuencia para los serenos: las piezas para "la plantilla decide si hay
+HE" ya existen (motor nuevo + políticas), pero hoy no se usan en AVP y su
+modo solo lo cambia el superadmin. El modo `shadow` (calcula los dos y
+registra diferencias) es la vía segura para migrar una plantilla.
+
 ## 6. Antes de cambiar algo de esto, preguntarse
 
 - ¿Cambia **qué fichajes** recibe `detectMovements`? → Regla 1.
