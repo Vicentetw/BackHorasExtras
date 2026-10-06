@@ -188,6 +188,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-06 — Sereno AGUILAR (3056) y doble lectura del lector: EN
+>   PAUSA, el dueño pidió esperar antes de cambiar lógica.** Diagnóstico y
+>   medición en `MARCADORES_Y_SALIDAS.md` sección 5. Nuevo principio en
+>   `CLAUDE.md`: nada de AVP en el código, todo configurable por empresa con
+>   valor por defecto = comportamiento actual. Propuesta de diseño (fuente de
+>   horas extra por régimen) esperando decisión del dueño.
 > - **2026-10-05 — Botones del celular en píldora** (frontend `e3a49a7`).
 >   Buscar y Más filtros tenían esquinas de 6px (del ejemplo HTML); vuelven
 >   a ser píldoras como en escritorio y en todas las páginas. Criterio

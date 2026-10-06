@@ -168,7 +168,30 @@ aparecieron recién al **comparar pantallas entre sí con datos reales**.
 3. Medir el tiempo del detalle de una persona (mes y año) antes y después.
    Referencia 2026-10-05: ~450 ms un mes, ~1,4 s nueve meses.
 
-## 5. Antes de cambiar algo de esto, preguntarse
+## 5. Pendiente de decisión (2026-10-06): doble lectura y serenos
+
+Caso real: AGUILAR, legajo 3056, sábado 03/10/2026, turno de 15 a 23.
+Apretó el 9 (inicio HE) a las 14:54:57, puso el dedo a las 14:54:59 **y otra
+vez** a las 14:55:02 (el lector lo leyó dos veces). La segunda lectura cerró
+lo que la primera abrió: quedó "HE de 14:54 a 14:55". A la salida apretó el 10
+y fichó dos veces más (23:02:52 y 23:02:55).
+
+- La solución técnica de la doble lectura ya existe (`reboteRefinado` en
+  `movementsCalculations.js`) pero está **activada solo para Campaña**.
+  Medido sobre la copia de producción, activarla para horas extra sumaría
+  +1.060 h en enero-septiembre 2026 (+5,6 %, 495 empleado-mes). **No está
+  verificado caso por caso que esas horas sean reales** y cambia
+  liquidaciones: no activarla sin revisar casos y sin aprobación del dueño.
+- El dueño aclaró que el sereno usa el 9 y el 10 **para indicar que entra y
+  sale**, igual que los demás marcan inicio y fin de hora extra. Si su turno
+  asignado es de 15 a 23, ¿esas horas son extra o normales? Es una regla de
+  negocio de AVP: tiene que resolverse como **configuración por empresa**
+  (ver el principio en `CLAUDE.md`), no con un caso especial en el código.
+- Además: en la medición de demoras de la regla 4 quedó afuera la tecla 10
+  (en `specialusers` figura con `userId` 2 y `badgeNumber` 10; el reloj la
+  registra como USERID 10). Rehacer la tabla cruzando por `badgeNumber`.
+
+## 6. Antes de cambiar algo de esto, preguntarse
 
 - ¿Cambia **qué fichajes** recibe `detectMovements`? → Regla 1.
 - ¿Una pantalla va a calcular algo "a su manera" en vez de usar el mismo

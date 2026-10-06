@@ -30,6 +30,20 @@ del proyecto está en archivos, no en el chat.**
   explicar el porqué, no solo el qué.
 - No subir credenciales ni secretos a GitHub.
 
+## Principio de producto: nada de AVP escrito en el código
+
+AVP es el primer cliente, no el único (pedido explícito del dueño,
+2026-10-06). Toda regla que dependa de cómo trabaja una empresa (qué
+significa cada tecla del reloj, qué cuenta como hora extra, cómo se tratan los
+serenos, tolerancias, cómo cuenta una campaña) va como **configuración por
+empresa** (`app_settings`, `specialusers`, convenios/regímenes), con un valor
+por defecto que reproduzca el comportamiento actual, para no cambiarle nada a
+quien ya lo usa. Antes de escribir un `if` que solo tiene sentido para AVP,
+preguntar dónde va esa configuración.
+
+Sí van en el código las reglas que son verdad para cualquier empresa (ej.
+"nadie tiene una salida antes de haber llegado").
+
 ## ⚠️ Trampa conocida: marcadores (salidas particulares y horas extra)
 
 Antes de tocar Presentismo, Salidas, horas extra, campaña o el portal del
