@@ -75,7 +75,13 @@ producción que AVP no cambie (por defecto todo sigue como hoy).
 
 ## Preguntas para el dueño
 
-1. En AVP, ¿los delegados con licencia gremial van algunos días o no van?
+1. ~~En AVP, ¿los delegados con licencia gremial van algunos días o no van?~~
+   **Respuesta (2026-10-06): con licencia gremial NO fichan.** Los "permisos
+   gremiales por salidas" (salir unas horas por tareas gremiales) son otra
+   cosa: no son licencia. Consecuencia: la opción "puede fichar durante la
+   licencia sin aviso" (letra C) no hace falta para la gremial; al revés, si
+   alguien con licencia gremial ficha, el aviso que ya existe es útil (o se
+   cargó mal la licencia, o el fichaje es de otro).
 2. ¿Tienen fecha de fin (fin del mandato) o es "hasta nuevo aviso"?
 3. ¿Esos días tienen que contar como trabajados para algún premio o
    presentismo, o solo "no ausente"?
