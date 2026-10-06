@@ -82,6 +82,31 @@ producción que AVP no cambie (por defecto todo sigue como hoy).
    licencia sin aviso" (letra C) no hace falta para la gremial; al revés, si
    alguien con licencia gremial ficha, el aviso que ya existe es útil (o se
    cargó mal la licencia, o el fichaje es de otro).
-2. ¿Tienen fecha de fin (fin del mandato) o es "hasta nuevo aviso"?
-3. ¿Esos días tienen que contar como trabajados para algún premio o
-   presentismo, o solo "no ausente"?
+2. ~~¿Tienen fecha de fin (fin del mandato) o es "hasta nuevo aviso"?~~
+   **Respuesta (2026-10-06): sí tienen fecha de fin**: son períodos de
+   mandato que se votan. Consecuencia: la letra B ("hasta nuevo aviso") deja
+   de ser necesaria para la gremial y baja de prioridad (puede servir para
+   otras licencias, se decide después). Sube la E: al terminar el mandato
+   puede haber reelección (se extiende la licencia) o la persona vuelve; si
+   nadie lo carga, empieza a figurar Ausente sin aviso.
+3. ~~¿Esos días tienen que contar como trabajados para algún premio o
+   presentismo?~~ **Respuesta (2026-10-06): probablemente sí, pero depende de
+   cada convenio.** Consecuencia: no se decide en el código; es una opción
+   más **por motivo** (letra C), que configura el administrador de cada
+   empresa: "para premios / presentismo cuenta como: día trabajado / día
+   justificado (hoy)". Por defecto, lo de hoy.
+
+## Propuesta ajustada con las respuestas (para aprobar)
+
+- **A. Corregir la lista de Licencias** (bug de los años del medio). Sin
+  cambios de cálculo.
+- **C. Opciones por motivo**, por defecto = hoy: "En Presentismo se muestra
+  como Excusado / En licencia (aparte)" y "Para premios y presentismo cuenta
+  como día trabajado / justificado".
+- **D. Presentismo**: "En licencia gremial (hasta 30/04/2027)" en el día y
+  los días en licencia aparte en el resumen.
+- **E. Avisos**: "licencia por vencer en 30 días" (para cargar la
+  reelección a tiempo) y "licencia vencida y no volvió a fichar".
+- **B** queda en espera (no hace falta para la gremial). **F** después.
+
+Orden: A → C+D → E, verificando cada paso contra la copia de producción.
