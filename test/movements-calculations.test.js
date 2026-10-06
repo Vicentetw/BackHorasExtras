@@ -227,8 +227,10 @@ const OLGUIN_AGOSTO = [
   lect('2026-08-31T07:56:59', 159, '2555'), lect('2026-08-31T07:57:05', 8, null), lect('2026-08-31T07:57:07', 159, '2555'),
 ];
 
-test('rebote refinado: sin la opcion, OLGUIN sigue sin campañas (el comportamiento de siempre no cambia)', () => {
-  const { closedEvents, openEvents } = detectMovements(OLGUIN_AGOSTO, CAMPANA_MARKERS, { maxMarkerGapMs: 6000 });
+// Desde 2026-10-06 el rebote refinado es la regla de siempre (aprobado por el
+// dueño). Este test documenta como era ANTES, apagandola a proposito.
+test('rebote refinado APAGADO: OLGUIN quedaba sin campañas (comportamiento anterior al 2026-10-06)', () => {
+  const { closedEvents, openEvents } = detectMovements(OLGUIN_AGOSTO, CAMPANA_MARKERS, { maxMarkerGapMs: 6000, reboteRefinado: false });
   assert.equal(closedEvents.length, 0);
   assert.equal(openEvents.size, 0);
 });
@@ -258,10 +260,11 @@ test('rebote refinado: forma A (marcador, lectura, lectura) -- el rebote no cier
     lect('2026-01-09T18:10:00', 9448, '9448'),
   ];
 
-  const antes = detectMovements(checkins, CAMPANA_MARKERS, { maxMarkerGapMs: 6000 });
+  const antes = detectMovements(checkins, CAMPANA_MARKERS, { maxMarkerGapMs: 6000, reboteRefinado: false });
   assert.equal(antes.closedEvents[0].timeIn.getTime(), new Date('2026-01-05T07:05:37').getTime(), 'documenta el bug: se cerraba a los 3 s');
 
-  const { closedEvents } = detectMovements(checkins, CAMPANA_MARKERS, { maxMarkerGapMs: 6000, reboteRefinado: true });
+  // Sin pasar nada: desde 2026-10-06 es la regla por defecto.
+  const { closedEvents } = detectMovements(checkins, CAMPANA_MARKERS, { maxMarkerGapMs: 6000 });
   assert.equal(closedEvents.length, 1);
   assert.equal(closedEvents[0].timeOut.getTime(), new Date('2026-01-05T07:05:34').getTime());
   assert.equal(closedEvents[0].timeIn.getTime(), new Date('2026-01-09T18:10:00').getTime());
@@ -511,4 +514,104 @@ test('filterEventsOpenedByFirstCheckinOfDay: NO saca una salida real (abrio bien
   const result = filterEventsOpenedByFirstCheckinOfDay(events, dayCheckins);
 
   assert.deepEqual(result, events);
+});
+
+// ---------------------------------------------------------------------------
+// Doble lectura como regla universal (aprobado por el dueño 2026-10-06).
+// Casos reales de AVP, ver MARCADORES_Y_SALIDAS.md ("Doble lectura").
+// ---------------------------------------------------------------------------
+const HE_MARKERS = {
+  9: { category: 'HE', direction: 'SALIDA' },
+  2: { category: 'HE', direction: 'REGRESO' }
+};
+
+test('doble lectura: MENDOZA 29/05/2026 -- se fue con la salida particular y no volvio (no "salida de 0 minutos")', () => {
+  const checkins = [
+    lect('2026-05-29T07:04:02', 440, '9467'), lect('2026-05-29T07:04:05', 440, '9467'),
+    lect('2026-05-29T12:36:32', 6, null),
+    lect('2026-05-29T12:36:35', 440, '9467'), lect('2026-05-29T12:36:38', 440, '9467'),
+  ];
+  const r = detectMovements(checkins, PARTICULAR_MARKERS, { maxMarkerGapMs: 25000 });
+  assert.equal(r.closedEvents.length, 0, 'la 2da lectura no es un regreso');
+  assert.equal(r.openEvents.get('9467').timeOut.getTime(), new Date('2026-05-29T12:36:35').getTime());
+});
+
+test('doble lectura: legajo 1496 07/04/2026 -- 3 h 14 min de horas extra, no 4 segundos', () => {
+  const checkins = [
+    lect('2026-04-07T06:36:16', 479, '1496'), lect('2026-04-07T06:36:19', 479, '1496'), // su llegada
+    lect('2026-04-07T14:03:18', 479, '1496'), lect('2026-04-07T14:03:21', 479, '1496'), // su salida (real)
+    lect('2026-04-07T14:47:24', 9, null),
+    lect('2026-04-07T14:47:28', 479, '1496'), lect('2026-04-07T14:47:32', 479, '1496'),
+    lect('2026-04-07T18:01:36', 2, null),
+    lect('2026-04-07T18:01:47', 479, '1496'),
+  ];
+  const { closedEvents } = detectMovements(checkins, HE_MARKERS, { maxMarkerGapMs: 25000 });
+  assert.equal(closedEvents.length, 1);
+  assert.equal(closedEvents[0].timeOut.getTime(), new Date('2026-04-07T14:47:28').getTime());
+  assert.equal(closedEvents[0].timeIn.getTime(), new Date('2026-04-07T18:01:47').getTime());
+});
+
+test('doble lectura: la ventana es configurable -- con 2 s, lecturas a 4 s ya no se juntan', () => {
+  const checkins = [
+    lect('2026-04-07T06:36:16', 479, '1496'),
+    lect('2026-04-07T14:47:24', 9, null),
+    lect('2026-04-07T14:47:28', 479, '1496'), lect('2026-04-07T14:47:32', 479, '1496'),
+  ];
+  const { closedEvents } = detectMovements(checkins, HE_MARKERS, { maxMarkerGapMs: 25000, ownCheckinBounceMs: 2000 });
+  assert.equal(closedEvents.length, 1, 'fuera de la ventana, la 2da lectura cierra la hora extra');
+});
+
+test('doble lectura: resguardo -- una hora extra que abre con la LLEGADA del dia no se alarga (patron sereno, AGUILAR 03/10/2026)', () => {
+  // Aprieta 9 al entrar y 10 al salir: el dueño aclaro que para el sereno es
+  // entrada/salida, no hora extra. Queda como antes de la regla nueva.
+  const checkins = [
+    lect('2026-10-03T14:54:57', 9, null),
+    lect('2026-10-03T14:54:59', 3056, '3056'), lect('2026-10-03T14:55:02', 3056, '3056'),
+    lect('2026-10-03T23:02:47', 2, null),
+    lect('2026-10-03T23:02:52', 3056, '3056'),
+  ];
+  const { closedEvents } = detectMovements(checkins, HE_MARKERS, { maxMarkerGapMs: 25000 });
+  assert.equal(closedEvents.length, 1);
+  assert.equal(closedEvents[0].timeIn.getTime(), new Date('2026-10-03T14:55:02').getTime(), 'no se convierte en 8 h de horas extra');
+});
+
+test('doble lectura: resguardo -- 9 apretado dos veces y tres lecturas al LLEGAR no abren horas extra (2451, 15/02/2026)', () => {
+  const checkins = [
+    lect('2026-02-15T14:56:34', 9, null),
+    lect('2026-02-15T14:56:37', 2451, '2451'), lect('2026-02-15T14:56:40', 2451, '2451'),
+    lect('2026-02-15T14:56:45', 9, null),
+    lect('2026-02-15T14:56:48', 2451, '2451'),
+    lect('2026-02-15T23:02:25', 2, null),
+    lect('2026-02-15T23:02:31', 2451, '2451'),
+  ];
+  const { closedEvents } = detectMovements(checkins, HE_MARKERS, { maxMarkerGapMs: 25000 });
+  const minutos = closedEvents.reduce((s, e) => s + (e.timeIn - e.timeOut) / 60000, 0);
+  assert.ok(minutos < 1, `no se cuenta el turno como horas extra (dio ${minutos} min)`);
+});
+
+test('doble lectura: resguardo -- tambien es "llegada" volver despues de mas de 3 h (turno noche + turno tarde, AGUILAR 17/02/2026)', () => {
+  const checkins = [
+    lect('2026-02-17T07:22:43', 2, null), lect('2026-02-17T07:22:45', 3056, '3056'),
+    lect('2026-02-17T14:55:15', 9, null), lect('2026-02-17T14:55:24', 3056, '3056'),
+    lect('2026-02-17T14:55:29', 9, null), lect('2026-02-17T14:55:35', 3056, '3056'),
+    lect('2026-02-17T22:59:00', 2, null), lect('2026-02-17T22:59:05', 3056, '3056'),
+  ];
+  const { closedEvents } = detectMovements(checkins, HE_MARKERS, { maxMarkerGapMs: 25000 });
+  const minutos = closedEvents.reduce((s, e) => s + (e.timeIn - e.timeOut) / 60000, 0);
+  assert.ok(minutos < 1, `no se cuenta el turno como horas extra (dio ${minutos} min)`);
+});
+
+test('doble lectura: despues de una pausa larga SIN marcador es la salida, no una llegada (2559, 06/03/2026: salida, 9, hora extra real)', () => {
+  const checkins = [
+    lect('2026-03-06T06:52:21', 2559, '2559'),
+    lect('2026-03-06T14:01:26', 2559, '2559'),
+    lect('2026-03-06T14:01:39', 9, null),
+    lect('2026-03-06T14:01:43', 2559, '2559'),
+    lect('2026-03-06T16:13:18', 2, null),
+    lect('2026-03-06T16:13:21', 2559, '2559'),
+  ];
+  const { closedEvents } = detectMovements(checkins, HE_MARKERS, { maxMarkerGapMs: 25000 });
+  assert.equal(closedEvents.length, 1);
+  assert.equal(closedEvents[0].timeOut.getTime(), new Date('2026-03-06T14:01:43').getTime());
+  assert.equal(closedEvents[0].timeIn.getTime(), new Date('2026-03-06T16:13:21').getTime());
 });

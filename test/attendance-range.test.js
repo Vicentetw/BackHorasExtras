@@ -95,7 +95,14 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   //
   // Actualizado 2026-09-28: 1730.31 -> 2763.46 y 74 -> 129. Ver el
   // comentario al principio de este test (datos reimportados el 18/09).
-  assert.equal(sumOvertime.toFixed(2), '2763.46', 'suma total de horas extras del mes');
+  //
+  // Actualizado 2026-10-06: 2763.46 -> 2814.59 (+51 h, +1,9 %). Regla de
+  // LECTURA REPETIDA aprobada por el dueño (rebote refinado como regla
+  // universal, MARCADORES_Y_SALIDAS.md "Doble lectura"): la segunda lectura
+  // de la misma persona ya no cierra la hora extra que abrio la primera
+  // (ej. legajo 1496, 07/04: 3 h 14 min que contaban 0). Verificado sobre
+  // la copia de produccion, empleado por empleado.
+  assert.equal(sumOvertime.toFixed(2), '2814.59', 'suma total de horas extras del mes');
   assert.equal(withOvertime, 129, 'cantidad de empleados con horas extras > 0');
 });
 

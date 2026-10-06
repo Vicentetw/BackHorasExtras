@@ -190,6 +190,13 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-06 — Lectura repetida como regla universal (aprobada A/B/C).**
+>   El 10 % de las lecturas del reloj son dobles; la 2da cerraba lo que abría
+>   la 1ra (MENDOZA 9467: salida particular "de 0 min"; 1496: 3 h 14 min de
+>   HE contadas como 0). Ahora: lecturas repetidas dentro de 20 s (configurable
+>   en Marcadores) = una, salvo marcador en el medio. Resguardo transitorio
+>   para serenos al llegar. Impacto medido: +819 h HE ene-sep (+4,3 %),
+>   serenos sin cambio. Ver `MARCADORES_Y_SALIDAS.md` ("Doble lectura").
 > - **2026-10-06 — Licencias largas (gremial): análisis, ESPERA APROBACIÓN.**
 >   Hoy ya se puede cargar como Licencia con rango de años (no figura ausente),
 >   pero: fecha de fin obligatoria, la lista de Licencias no la muestra en los

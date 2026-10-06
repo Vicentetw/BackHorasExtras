@@ -86,15 +86,20 @@ test('X lo recibe aunque haya fichado en el otro reloj: lo dijo una persona', ()
 });
 
 test('la regla de rebote no le quita a X un marcador que alguien confirmo', () => {
-  // X ficha, aprieta el marcador y vuelve a fichar a los 10 s. Para el motor
-  // la segunda lectura es rebote de la primera; con la correccion, no.
+  // X ficha, aprieta el marcador y vuelve a fichar a los 10 s.
   const casos = [
     fichaje('10:00:00', 200, X),
     marcador('10:00:05', 6),
     fichaje('10:00:10', 200, X),
   ];
-  assert.equal(detectMovements(casos, MARCADORES, opciones).openEvents.size, 0,
-    'sin correccion se toma como rebote (comportamiento de siempre)');
+  // Con la regla vieja (rebote simple) la 2da lectura era rebote de la 1ra.
+  assert.equal(detectMovements(casos, MARCADORES, { ...opciones, reboteRefinado: false }).openEvents.size, 0,
+    'regla vieja: se tomaba como rebote');
+  // Regla de siempre desde 2026-10-06 (rebote refinado): el marcador esta al
+  // menos tan cerca de la 2da lectura como de la 1ra -> es "ficho, apreto el
+  // marcador y volvio a fichar", una accion nueva, aun sin correccion.
+  assert.equal(detectMovements(casos, MARCADORES, opciones).openEvents.get(X).timeOut.getTime(), t('10:00:10').getTime(),
+    'regla actual: la 2da lectura toma el marcador');
   const { openEvents } = detectMovements(casos, MARCADORES, {
     ...opciones, correccionesMarcadores: corregido('10:00:05', 6, X),
   });

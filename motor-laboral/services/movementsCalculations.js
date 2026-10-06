@@ -57,8 +57,21 @@ const DEFAULT_MAX_MARKER_GAP_MS = 30 * 1000;
 // duplicada en dos informes distintos.
 const DEFAULT_OWN_CHECKIN_BOUNCE_MS = 20 * 1000;
 
+// Cuanto dura "estar llegando" para el resguardo transitorio de horas extra
+// (ver detectMovements). Medido en la copia de produccion: quienes aprietan
+// 9/10 para entrar insisten al llegar hasta ~50 s (9, dedo, otra vez 9,
+// dedo...); nunca mas de 2 minutos desde su primera lectura del dia.
+const VENTANA_LLEGADA_HE_MS = 2 * 60 * 1000;
+// Una lectura es una LLEGADA si es la primera del dia, o si viene despues de
+// mas de 3 horas sin fichar Y con el marcador de horas extra apretado (turno
+// de noche que termina a la mañana y otro turno a la tarde: AGUILAR 3056,
+// 17/02/2026). Sin el marcador, despues de una pausa larga lo normal es la
+// SALIDA del turno (2559, 06/03/2026: fichó la salida, apretó el 9 y volvió
+// a fichar para empezar horas extra reales -- eso NO es una llegada).
+const PAUSA_QUE_HACE_LLEGADA_MS = 3 * 60 * 60 * 1000;
+
 // ============================================================================
-// Rebote refinado (opcion `reboteRefinado`, apagada por defecto)
+// Rebote refinado (opcion `reboteRefinado`, ENCENDIDA por defecto desde 2026-10-06)
 // ============================================================================
 //
 // POR QUE
@@ -101,11 +114,20 @@ const DEFAULT_OWN_CHECKIN_BOUNCE_MS = 20 * 1000;
 // En los 50 casos visibles del diagnostico, marcador -> lectura 2 fue de 3 a
 // 6 s y siempre <= lectura 1 -> marcador. Ver DIAGNOSTICO_CAMPANA_REBOTE_DETALLE.sql.
 //
-// POR QUE ES UNA OPCION Y NO EL COMPORTAMIENTO DE SIEMPRE
+// DESDE 2026-10-06 ES EL COMPORTAMIENTO DE SIEMPRE (para todas las
+// categorias: particular, oficial, horas extra, campaña)
 // -------------------------------------------------------
-// El mismo motor calcula horas extra y salidas particulares. Aplicarlo ahi
-// cambiaria numeros de liquidacion ya calculados, y eso se decide midiendo
-// primero, no de rebote. Hoy solo lo pide la deteccion de Campaña.
+// Antes era una opcion solo de Campaña, porque en horas extra y salidas
+// particulares cambia numeros de liquidacion y eso se decide midiendo. Se
+// midio (MARCADORES_Y_SALIDAS.md, "Doble lectura"): el 10 % de las lecturas
+// de AVP son dobles; con la regla vieja la 2da lectura cerraba lo que la 1ra
+// abria. Casos verificados: MENDOZA 29/05/2026 (salida particular "de 0
+// minutos" que era "se fue y no volvio") y legajo 1496 07/04/2026 (3 h 14 min
+// de horas extra contadas como 0). El dueño aprobo aplicarla como regla
+// universal: es como funcionan los lectores, no una regla de una empresa.
+// La ventana (20 s por defecto) es configurable por empresa en Marcadores
+// (`markerBounceSeconds`, se pasa como ownCheckinBounceMs).
+// Se puede apagar pasando `reboteRefinado: false` (solo para comparar).
 function marcadorEsDeEstaLectura(marcador, lecturaAnterior, ahora) {
   if (!marcador || lecturaAnterior == null) return false;
   if (marcador.markedAt <= lecturaAnterior) return false;
@@ -254,13 +276,33 @@ function detectMovements(checkins, markerMap, options = {}) {
   const reservadosPorEmpleado = new Map(); // employeeId -> marcador corregido
   const soloPuedenConsumir = options.soloPuedenConsumir ?? null;
   const ownCheckinBounceMs = options.ownCheckinBounceMs ?? DEFAULT_OWN_CHECKIN_BOUNCE_MS;
-  const reboteRefinado = options.reboteRefinado === true;
+  const reboteRefinado = options.reboteRefinado !== false;
   // TODOS los marcadores de la empresa, no solo los de la categoria que se
   // esta detectando en esta pasada. Hace falta para que "gana el ultimo"
   // funcione entre categorias distintas -- ver el comentario en el loop.
   // Si no se pasa, el comportamiento es el de antes.
   const todosLosMarcadores = options.todosLosMarcadores ?? null;
   const sorted = checkins.slice().sort((a, b) => a.checktime - b.checktime);
+  // Para el resguardo de horas extra "mientras esta llegando" (ver mas
+  // abajo): a cada lectura real se le asigna la hora de SU llegada (la
+  // primera del dia, o la primera despues de mas de 3 horas sin fichar).
+  // lectura -> { hora: inicio de su tanda, primeraDelDia: bool }. Si la
+  // tanda empezo despues de una pausa larga, recien en el recorrido de abajo
+  // se sabe si vino con el marcador de horas extra (tandaConHE).
+  const llegadaDeLectura = new Map();
+  const tandaConHE = new Map(); // `${empleado}|${inicio de tanda}` -> bool
+  {
+    const ultima = new Map();
+    const tandaActual = new Map();
+    for (const c of sorted) {
+      if (!c.employeeId || markerMap[c.userId] || (options.todosLosMarcadores && options.todosLosMarcadores[c.userId])) continue;
+      const ant = ultima.get(c.employeeId);
+      if (ant == null) tandaActual.set(c.employeeId, { hora: c.checktime, primeraDelDia: true });
+      else if ((c.checktime - ant) > PAUSA_QUE_HACE_LLEGADA_MS) tandaActual.set(c.employeeId, { hora: c.checktime, primeraDelDia: false });
+      ultima.set(c.employeeId, c.checktime);
+      llegadaDeLectura.set(c, tandaActual.get(c.employeeId));
+    }
+  }
   // Un marcador pendiente POR RELOJ (ver claveReloj/marcadorDelReloj arriba).
   const marcadoresPorReloj = new Map(); // claveReloj -> { category, direction, markedAt, userId }
   const openEvents = new Map();
@@ -359,11 +401,32 @@ function detectMovements(checkins, markerMap, options = {}) {
 
     const previousOwnCheckin = lastRealCheckinByEmployeeId.get(row.employeeId);
     const isOwnBounce = previousOwnCheckin != null && (row.checktime - previousOwnCheckin) <= ownCheckinBounceMs;
+    // RESGUARDO TRANSITORIO (2026-10-06) para HORAS EXTRA: mientras la
+    // persona esta LLEGANDO (sus lecturas dentro de los primeros 2 minutos
+    // desde su llegada, VENTANA_LLEGADA_HE_MS), se usa la regla vieja
+    // de rebote. Es el patron de
+    // quienes aprietan 9 y 10 para entrar y salir -- y a veces aprietan el 9
+    // dos veces y ponen el dedo tres --, que el dueño aclaro que NO son horas
+    // extra (en AVP: NAIN 3051, 2451, AGUILAR 3056). Sin esto la regla nueva
+    // les contaba el turno entero como HE. Medido en la copia de produccion:
+    // ver MARCADORES_Y_SALIDAS.md. Sacarlo cuando la plantilla decida si hay
+    // horas extra (seccion 5).
+    const tanda = llegadaDeLectura.get(row);
+    if (tanda && !tanda.primeraDelDia && row.checktime === tanda.hora) {
+      // Primera lectura despues de una pausa larga: ¿vino con el 9 apretado?
+      tandaConHE.set(`${row.employeeId}|${+tanda.hora}`, !!(marcadorAplicable && marcadorAplicable.category === 'HE'));
+    }
+    const esLlegada = tanda && (tanda.primeraDelDia || tandaConHE.get(`${row.employeeId}|${+tanda.hora}`) === true);
+    const llegando = !!esLlegada && (row.checktime - tanda.hora) <= VENTANA_LLEGADA_HE_MS;
+    const reglaViejaParaHE = (cat) => llegando && cat === 'HE';
     const marcadorNuevoEnElMedio = reservado != null
-      || (reboteRefinado && marcadorEsDeEstaLectura(marcadorAplicable, previousOwnCheckin, row.checktime));
+      || (reboteRefinado && !(marcadorAplicable && reglaViejaParaHE(marcadorAplicable.category))
+          && marcadorEsDeEstaLectura(marcadorAplicable, previousOwnCheckin, row.checktime));
 
     const open = openEvents.get(row.employeeId);
-    if (open && reboteRefinado && isOwnBounce && !marcadorNuevoEnElMedio) {
+    // Mismo resguardo: una hora extra abierta mientras la persona llegaba no
+    // la sostiene esta regla (queda como con la regla vieja).
+    if (open && reboteRefinado && isOwnBounce && !marcadorNuevoEnElMedio && !reglaViejaParaHE(open.category)) {
       // Forma A (ver "Rebote refinado"): el rebote de la lectura que acaba
       // de abrir la salida no es un regreso.
       lastRealCheckinByEmployeeId.set(row.employeeId, row.checktime);

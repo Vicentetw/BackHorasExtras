@@ -3626,12 +3626,14 @@ async function attendanceRangeHandler(req, res) {
     {
       const particularMarkerMap = await fetchMarkerMap('PARTICULAR', tenantId);
       const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+      // Ventana de lectura repetida de la empresa (Rebote refinado, movementsCalculations.js).
+      const ventanaReboteMs = await fetchVentanaReboteMs(tenantId);
       // Todos los marcadores, no solo los de esta categoría: si alguien
       // aprieta el 5 y después el 9, vale el 9 aunque acá solo se estén
       // buscando los PARTICULAR (ver movementsCalculations.js).
       const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
       for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
-        const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
+        const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores, ownCheckinBounceMs: ventanaReboteMs });
         // Regla AVILA, igual que Salidas: nadie tiene una salida particular
         // antes de haber llegado. Si el marcador de salida se pego al PRIMER
         // fichaje del dia, era la llegada (caso real: AVILA, 08/04/2026 y
@@ -3690,9 +3692,11 @@ async function attendanceRangeHandler(req, res) {
       const heMarkerMap = await fetchMarkerMap('HE', tenantId);
       if (Object.keys(heMarkerMap).length > 0) {
         const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+        // Ventana de lectura repetida de la empresa (Rebote refinado, movementsCalculations.js).
+        const ventanaReboteMs = await fetchVentanaReboteMs(tenantId);
         const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
         for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
-          const { closedEvents } = movementsCalc.detectMovements(dayCheckins, heMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
+          const { closedEvents } = movementsCalc.detectMovements(dayCheckins, heMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores, ownCheckinBounceMs: ventanaReboteMs });
           closedEvents
             .filter(ev => ev.category === 'HE')
             .forEach(ev => {
@@ -4577,6 +4581,7 @@ async function attendanceRangeHandler(req, res) {
 // Estos envoltorios mantienen los nombres de siempre para los llamadores de aca.
 const fetchMovementCheckins = (fromDate, toDateExclusive, tenantId) => campanaService.fetchMovementCheckins(db, fromDate, toDateExclusive, tenantId);
 const fetchMarkerMap = (category, tenantId) => campanaService.fetchMarkerMap(db, category, tenantId);
+const fetchVentanaReboteMs = (tenantId) => campanaService.fetchVentanaReboteMs(db, tenantId);
 
 // GET /movements-range?from=&to=&category=PARTICULAR|OFICIAL&employeeId=&groupBy=day|month|year
 app.get('/movements-range', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
@@ -4611,6 +4616,8 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
     // cualquiera de ese empleado, aunque fuera del día 6 (bug real, visto con
     // datos de julio 2026: daba 65hs de "salida particular").
     const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+    // Ventana de lectura repetida de la empresa (Rebote refinado, movementsCalculations.js).
+    const ventanaReboteMs = await fetchVentanaReboteMs(tenantId);
     const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
     // Marcadores corregidos a mano (ver POST /marker-corrections).
     const correccionesMarcadores = await campanaService.fetchCorreccionesMarcadores(db, from, exclusiveEnd, tenantId);
@@ -4623,7 +4630,7 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
 
     const allEvents = [];
     for (const [dateStr, dayCheckins] of checkinsByDate.entries()) {
-      const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, markerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
+      const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, markerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores, ownCheckinBounceMs: ventanaReboteMs });
       // Bug real: AVILA Natalia, legajo 9006, abril 2026 -- una llegada
       // tarde quedaba marcada como "Salida Particular" de 6h+ porque el
       // marcador de Salida lo fichó otra persona justo antes de que Natalia
@@ -4928,6 +4935,8 @@ app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), report
     const siguiente = nextDayStr(fecha);
     const checkins = await fetchMovementCheckins(fecha, siguiente, tenantId);
     const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+    // Ventana de lectura repetida de la empresa (Rebote refinado, movementsCalculations.js).
+    const ventanaReboteMs = await fetchVentanaReboteMs(tenantId);
     const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
     const correccionesMarcadores = await campanaService.fetchCorreccionesMarcadores(db, fecha, siguiente, tenantId);
     const fmt = movementsCalc.fechaHoraLocal;
@@ -4953,7 +4962,7 @@ app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), report
     for (const categoria of ['PARTICULAR', 'OFICIAL', 'HE']) {
       const markerMap = await fetchMarkerMap(categoria, tenantId);
       if (!Object.keys(markerMap).length) continue;
-      const r = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
+      const r = movementsCalc.detectMovements(checkins, markerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores, ownCheckinBounceMs: ventanaReboteMs });
       // La regla AVILA solo la aplica el reporte de Particular/Oficial.
       const descarte = categoria === 'HE'
         ? () => null
@@ -5384,6 +5393,41 @@ app.post('/config/marker-max-gap-seconds', requirePermission('schedules', 'updat
   } catch (err) {
     console.error('ERROR saving marker max gap:', err);
     res.status(500).json({ error: 'Error saving marker max gap' });
+  }
+});
+
+// GET/POST /config/marker-bounce-seconds -- ventana de LECTURA REPETIDA:
+// dos lecturas de la misma persona dentro de estos segundos, sin un marcador
+// nuevo en el medio, son una sola accion (el lector la leyo dos veces).
+// Medido en AVP: el 10 % de las lecturas son dobles. 20 s por defecto. Ver
+// "Rebote refinado" en movementsCalculations.js y MARCADORES_Y_SALIDAS.md.
+app.get('/config/marker-bounce-seconds', requirePermission('schedules', 'read'), async (req, res) => {
+  try {
+    const ms = await fetchVentanaReboteMs(resolveTenantId(req));
+    res.json({ markerBounceSeconds: ms / 1000 });
+  } catch (err) {
+    console.error('ERROR fetching marker bounce:', err);
+    res.status(500).json({ error: 'Error fetching marker bounce' });
+  }
+});
+
+app.post('/config/marker-bounce-seconds', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const seconds = Number(req.body.markerBounceSeconds);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 120) {
+      return res.status(400).json({ error: 'markerBounceSeconds debe ser un número entero entre 1 y 120' });
+    }
+    const tenantId = resolveTenantId(req);
+    // Es una configuracion de UNA empresa: el superadmin tiene que elegirla
+    // (no se guarda un valor "de todas"). Ver AISLAMIENTO_POR_EMPRESA.md.
+    if (req.appUser && tenantId === null) {
+      return res.status(400).json({ error: 'Elegí la empresa: cada empresa tiene su propia configuración.' });
+    }
+    await setAppSetting('markerBounceSeconds', tenantId, String(seconds), db);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving marker bounce:', err);
+    res.status(500).json({ error: 'Error saving marker bounce' });
   }
 });
 

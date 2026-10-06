@@ -204,6 +204,25 @@ y fichó dos veces más (23:02:52 y 23:02:55).
 - Impacto ene-sep 2026 con `reboteRefinado` para PARTICULAR: salidas de
   0 minutos 89 -> 15; sin regreso 981 -> 1.040; +56 h en las cerradas. Para
   HE: +1.060 h (+5,6 %), 495 empleado-mes.
+- **APLICADA 2026-10-06 (aprobada por el dueño): regla universal.** Dos
+  lecturas de la misma persona dentro de la ventana (20 s por defecto,
+  configurable por empresa en Marcadores: `markerBounceSeconds`) son una
+  sola, salvo que entre las dos se haya apretado un marcador más cerca de la
+  segunda ("fichó la salida, apretó el 9 y volvió a fichar"). Vale para
+  todas las categorías y todas las pantallas (es el default de
+  `detectMovements`).
+- **Resguardo transitorio para horas extra "al llegar"**: durante los
+  primeros 2 minutos de una llegada (primera lectura del día, o primera
+  después de > 3 h sin fichar si vino con el 9 apretado) se usa la regla
+  vieja. Protege a quienes aprietan 9/10 para entrar y salir (serenos: NAIN
+  3051, 2451, AGUILAR 3056), que con la regla nueva sumaban el turno entero
+  como horas extra. Sacarlo cuando la plantilla decida si hay horas extra.
+- **Resultado medido (copia de producción, ene-sep 2026, Presentismo):**
+  18.923 h -> 19.743 h de horas extra (+819 h, +4,3 %); suben 86 personas,
+  bajan 4 (correcciones de marcadores mal asignados, ej. 1007 12/03: el 9
+  era de 2451). Los tres serenos quedan exactamente igual. Salidas
+  particulares: +83 días corregidos, ningún caso sospechoso. Ningún evento
+  de más de 10 h.
 - Complemento del lado del aparato: los relojes ZK tienen un ajuste de
   "intervalo de marcaje repetido" que descarta la segunda lectura de la misma
   persona; igual el sistema tiene que ser robusto para cualquier empresa.

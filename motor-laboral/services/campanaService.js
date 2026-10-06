@@ -108,6 +108,17 @@ async function fetchMarkerMap(db, category, tenantId) {
   return markerMap;
 }
 
+// Ventana de lectura repetida: dos lecturas de la MISMA persona dentro de
+// estos segundos (sin un marcador nuevo en el medio) son una sola accion.
+// Configurable por empresa en Marcadores; 20 s por defecto. Ver "Rebote
+// refinado" en movementsCalculations.js y MARCADORES_Y_SALIDAS.md.
+const VENTANA_REBOTE_DEFAULT_S = 20;
+async function fetchVentanaReboteMs(db, tenantId) {
+  const value = await getAppSetting('markerBounceSeconds', tenantId, db);
+  const seconds = value ? Number(value) : VENTANA_REBOTE_DEFAULT_S;
+  return (Number.isFinite(seconds) && seconds > 0 ? seconds : VENTANA_REBOTE_DEFAULT_S) * 1000;
+}
+
 async function fetchMarkerMaxGapMs(db, tenantId) {
   const value = await getAppSetting('markerMaxGapSeconds', tenantId, db);
   const seconds = value ? Number(value) : 30;
@@ -233,6 +244,7 @@ async function detectarCampanas(db, tenantId, from, to, opciones = {}) {
   const soloPuedenConsumir = opciones.ignorarAfectados ? null : await legajosAfectadosACampana(db, tenantId);
   const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, {
     maxMarkerGapMs, todosLosMarcadores, reboteRefinado: true, correccionesMarcadores, soloPuedenConsumir,
+    ownCheckinBounceMs: await fetchVentanaReboteMs(db, tenantId),
   });
 
   const fromDate = new Date(fy, fm - 1, fd);
@@ -306,6 +318,7 @@ module.exports = {
   fetchMovementCheckins,
   fetchMarkerMap,
   fetchMarkerMaxGapMs,
+  fetchVentanaReboteMs,
   fetchCorreccionesMarcadores,
   fetchCampanaSoloAfectados,
   legajosAfectadosACampana,
