@@ -3395,11 +3395,51 @@ async function attendanceRangeHandler(req, res) {
     // Se resuelve una sola vez y se cuelga en la propia fila, para que todo
     // lo que viene despues siga leyendo `c.userId` / `c.employeeId` igual
     // que cuando esto lo devolvia el JOIN.
-    checkins.forEach(c => {
+    const resolverPersona = (c) => {
       const u = clockUserByKey.get(`${c.tenant_id}|${c.USERID}`);
       c.userId = u ? u.USERID : null;
       c.employeeId = u && u.employeeId != null ? u.employeeId : null;
-    });
+    };
+    checkins.forEach(resolverPersona);
+
+    // Fichajes para detectar MARCADORES (salida particular, horas extra 9/10).
+    // Bug real (2026-10-05, al comparar el calendario contra Salidas sobre
+    // datos de produccion): en el detalle de UNA persona solo se traen sus
+    // fichajes y los de los marcadores (ver arriba). Pero un marcador se lo
+    // lleva el SIGUIENTE fichaje real, sea de quien sea: si otra persona
+    // ficho en el medio, aca "no existia" y el marcador se le asignaba a la
+    // persona del detalle (ej. 2542, 01/04/2026: Salidas no le daba la
+    // salida, el calendario si). Afectaba tambien las horas extra por
+    // marcador del detalle.
+    // Arreglo: para DETECTAR marcadores, el detalle usa los fichajes de toda
+    // la empresa en el periodo, como el resumen y como Salidas. Se traen con
+    // una consulta liviana (solo hora, numero y reloj, por el indice
+    // tenant_id+CHECKTIME: ~60 ms un mes, ~300 ms un año en AVP). El calculo
+    // de asistencia de la persona sigue usando solo sus fichajes, asi que la
+    // optimizacion de arriba se mantiene donde importa.
+    // Verificado contra la copia de produccion (abril y agosto 2026, cada
+    // empleado): con esto el calendario coincide exacto con Salidas y las
+    // horas extra del detalle con las del resumen (antes diferian en 13 y 11
+    // empleados). Se probaron dos atajos que NO alcanzaron: traer solo los
+    // fichajes ajenos dentro de la tolerancia de cada marcador (quedaban 7
+    // diferencias por mes) y un JOIN de Checkins contra si misma (30-45 s,
+    // MySQL no usa el indice cuando el rango depende de otra fila).
+    let checkinsParaDeteccion = checkins;
+    if (detailEmployeeId) {
+      const todosParams = [from, exclusiveEndDateStr];
+      let todosQuery = `
+        SELECT DATE(c.CHECKTIME) AS date, c.CHECKTIME, c.USERID, c.tenant_id, c.MACHINE_IP
+        FROM Checkins c
+        WHERE c.CHECKTIME >= ? AND c.CHECKTIME < ?`;
+      if (tenantId !== null) {
+        todosQuery += ` AND c.tenant_id = ?`;
+        todosParams.push(tenantId);
+      }
+      todosQuery += ` ORDER BY c.CHECKTIME`;
+      const [todos] = await db.query(todosQuery, todosParams);
+      todos.forEach(resolverPersona);
+      checkinsParaDeteccion = todos;
+    }
 
     const checkinsByEmployee = {};
     checkins.forEach(c => {
@@ -3553,7 +3593,7 @@ async function attendanceRangeHandler(req, res) {
     // para detectMovements (marcadores de PARTICULAR y de HE), armado una
     // sola vez y reusado para ambos, sin consultas nuevas.
     const checkinsByDateForDetection = new Map();
-    checkins.forEach(c => {
+    checkinsParaDeteccion.forEach(c => {
       if (!checkinsByDateForDetection.has(c.date)) checkinsByDateForDetection.set(c.date, []);
       checkinsByDateForDetection.get(c.date).push({
         checktime: new Date(c.CHECKTIME.replace(' ', 'T')),
@@ -3592,7 +3632,14 @@ async function attendanceRangeHandler(req, res) {
       const todosLosMarcadores = await fetchMarkerMap(null, tenantId);
       for (const [date, dayCheckins] of checkinsByDateForDetection.entries()) {
         const { closedEvents, openEvents, orphanReturns } = movementsCalc.detectMovements(dayCheckins, particularMarkerMap, { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores });
-        closedEvents
+        // Regla AVILA, igual que Salidas: nadie tiene una salida particular
+        // antes de haber llegado. Si el marcador de salida se pego al PRIMER
+        // fichaje del dia, era la llegada (caso real: AVILA, 08/04/2026 y
+        // 14/04/2026, marcador 7-8 s antes de su entrada de las 07:23).
+        // Decision del dueño (2026-10-05). No se resuelve con la tolerancia
+        // en segundos: medido desde junio, 601 marcadores legitimos tardan
+        // 7-10 s, el mismo rango que estos casos.
+        movementsCalc.filterEventsOpenedByFirstCheckinOfDay(closedEvents, dayCheckins)
           .filter(ev => ev.category === 'PARTICULAR')
           .forEach(ev => particularExitByEmployeeDate.add(`${ev.employeeId}|${date}`));
         // Salida SIN regreso (se fue y no volvio a fichar ese dia): Salidas la

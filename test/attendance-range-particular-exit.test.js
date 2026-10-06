@@ -30,6 +30,17 @@ const DATE_EXIT_NO_RETURN = '2026-05-13'; // miercoles
 // autorizaron el dia anterior). Salidas la cuenta como salida particular;
 // decision del dueño (2026-10-05): el calendario tambien.
 const DATE_ENTRY_WITH_RETURN_MARKER = '2026-05-15'; // viernes
+// Regla AVILA: el marcador de salida se pega a su LLEGADA (primer fichaje
+// del dia, caso real 08/04/2026: marcador 07:22:57, llegada 07:23:05).
+// Salidas no lo cuenta como salida; decision del dueño: el calendario tampoco.
+const DATE_MARKER_BEFORE_ARRIVAL = '2026-05-14'; // jueves
+// El marcador se lo lleva OTRA persona que ficha en el medio (bug real:
+// 2542, 01/04/2026). En el detalle de una persona antes solo se traian sus
+// fichajes y los marcadores: la otra persona "no existia" y la salida se le
+// asignaba a la del detalle. Salidas (que ve a todos) no se la daba.
+const DATE_MARKER_TAKEN_BY_OTHER = '2026-05-18'; // lunes
+const OTRO_BADGE = 999965010;
+const OTRO_USERID = 999965010;
 
 let headers;
 
@@ -90,6 +101,27 @@ before(async () => {
     USERID, TENANT_ID, `${DATE_ENTRY_WITH_RETURN_MARKER} 17:00:00`,
   ]);
 
+  await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`, [
+    MARKER_SALIDA_USERID, TENANT_ID, `${DATE_MARKER_BEFORE_ARRIVAL} 07:22:57`,
+    USERID, TENANT_ID, `${DATE_MARKER_BEFORE_ARRIVAL} 07:23:05`,
+    USERID, TENANT_ID, `${DATE_MARKER_BEFORE_ARRIVAL} 13:51:00`,
+  ]);
+
+  const [otroResult] = await db.query(
+    `INSERT INTO employees (employee_id, nombre, tenant_id, fecha_alta, exclude_from_report) VALUES (?, 'Otra Persona Test', ?, '2020-01-01', 0)`,
+    [OTRO_BADGE, TENANT_ID]
+  );
+  await db.query(`INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, 'Otra Persona Test')`, [OTRO_USERID, TENANT_ID, String(OTRO_BADGE)]);
+  await db.query(`INSERT INTO user_employee_map (USERID, tenant_id, employee_id, match_type) VALUES (?, ?, ?, 'test')`, [OTRO_USERID, TENANT_ID, otroResult.insertId]);
+  await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?), (?, ?, ?), (?, ?, ?), (?, ?, ?)`, [
+    USERID, TENANT_ID, `${DATE_MARKER_TAKEN_BY_OTHER} 07:00:00`,
+    OTRO_USERID, TENANT_ID, `${DATE_MARKER_TAKEN_BY_OTHER} 07:01:00`,
+    MARKER_SALIDA_USERID, TENANT_ID, `${DATE_MARKER_TAKEN_BY_OTHER} 10:00:00`,
+    OTRO_USERID, TENANT_ID, `${DATE_MARKER_TAKEN_BY_OTHER} 10:00:02`,
+    USERID, TENANT_ID, `${DATE_MARKER_TAKEN_BY_OTHER} 10:00:04`,
+    USERID, TENANT_ID, `${DATE_MARKER_TAKEN_BY_OTHER} 17:00:00`,
+  ]);
+
   // Dia SIN salida particular: entrada y salida normales nada mas.
   await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME) VALUES (?, ?, ?), (?, ?, ?)`, [
     USERID, TENANT_ID, `${DATE_WITHOUT_EXIT} 07:00:00`,
@@ -143,4 +175,14 @@ test('/attendance-range: una salida particular SIN regreso tambien marca el dia'
 test('/attendance-range: la entrada particular (llega con el marcador de regreso) marca el dia', async () => {
   const day = await diaDe(DATE_ENTRY_WITH_RETURN_MARKER);
   assert.equal(day.hasParticularExit, true);
+});
+
+test('/attendance-range: el marcador pegado a la LLEGADA no es una salida (regla AVILA, igual que Salidas)', async () => {
+  const day = await diaDe(DATE_MARKER_BEFORE_ARRIVAL);
+  assert.equal(day.hasParticularExit, false);
+});
+
+test('/attendance-range (detalle): un marcador que se llevo OTRA persona no es salida de la del detalle', async () => {
+  const day = await diaDe(DATE_MARKER_TAKEN_BY_OTHER);
+  assert.equal(day.hasParticularExit, false);
 });
