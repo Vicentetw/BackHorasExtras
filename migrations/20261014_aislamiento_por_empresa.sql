@@ -16,8 +16,9 @@
 --
 -- Se puede correr mas de una vez: cada paso mira si ya esta hecho.
 -- Solo actua si existe la empresa AVP (id 6, nombre 'avp'); si no, no hace nada.
--- NO toca: la carga manual sin empresa (ManualEntries id 40, 2 h extra del
--- legajo 2926 del 05/06/2026), que espera decision del dueño.
+-- La carga manual sin empresa (ManualEntries id 40, 2 h extra del legajo
+-- 2926 del 05/06/2026, "corte de energia") pasa a AVP: decision del dueño
+-- (2026-10-06). Produccion tiene una sola empresa, asi que es suya.
 -- ============================================================================
 
 SET @avp := (SELECT id FROM tenants WHERE id = 6 AND LOWER(name) = 'avp');
@@ -107,9 +108,17 @@ DELETE FROM vacation_scale WHERE @avp IS NOT NULL AND tenant_id IS NULL;
 -- Restos de importaciones viejas sin empresa (nombres y DNI sin dueño).
 DELETE FROM staging_employees WHERE @avp IS NOT NULL AND tenant_id IS NULL;
 
+-- La carga manual huerfana (id 40) pasa a AVP. No se puede deducir la empresa
+-- por el empleado (su USERID ya no esta en `users`; por eso la migracion
+-- 20260927 la dejo sin empresa), asi que se nombra la fila exacta: id, legajo
+-- y que siga sin empresa. Si algo no coincide, no toca nada.
+UPDATE ManualEntries
+SET tenant_id = @avp
+WHERE @avp IS NOT NULL AND id = 40 AND userId = 2926 AND tenant_id IS NULL;
+
 -- ---------------------------------------------------------------- Control
 -- Lo que deberia quedar sin empresa despues de correr esto: solo el usuario
--- superadmin, los 4 valores de plataforma y la carga manual id 40.
+-- los 4 valores de plataforma (app_settings) y nada mas.
 SELECT 'holidays' AS tabla, COUNT(*) AS sin_empresa FROM holidays WHERE tenant_id IS NULL
 UNION ALL SELECT 'companyschedule', COUNT(*) FROM companyschedule WHERE tenant_id IS NULL
 UNION ALL SELECT 'ciudades', COUNT(*) FROM ciudades WHERE tenant_id IS NULL
@@ -119,4 +128,5 @@ UNION ALL SELECT 'day_type_overtime_rules', COUNT(*) FROM day_type_overtime_rule
 UNION ALL SELECT 'payroll_regime_settings', COUNT(*) FROM payroll_regime_settings WHERE tenant_id IS NULL
 UNION ALL SELECT 'vacation_scale', COUNT(*) FROM vacation_scale WHERE tenant_id IS NULL
 UNION ALL SELECT 'staging_employees', COUNT(*) FROM staging_employees WHERE tenant_id IS NULL
+UNION ALL SELECT 'ManualEntries', COUNT(*) FROM ManualEntries WHERE tenant_id IS NULL
 UNION ALL SELECT 'app_settings (solo plataforma)', COUNT(*) FROM app_settings WHERE tenant_id IS NULL;

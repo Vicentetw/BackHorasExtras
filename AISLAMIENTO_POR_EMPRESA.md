@@ -4,15 +4,17 @@
 > (backend y frontend), NO publicados. Falta: (1) el dueño corre
 > `migrations/20261014_aislamiento_por_empresa.sql` en producción, (2) unir el
 > backend a `main` (Render publica), (3) publicar el frontend. En ese orden.**
-> Verificado en la copia de producción: la migración deja una sola fila sin
-> empresa (la carga manual id 40, a propósito), y AVP da IDÉNTICO antes y
+> Verificado en la copia de producción: la migración no deja datos de empresa
+> sin empresa, y AVP da IDÉNTICO antes y
 > después (5.776 filas: Presentismo de 9 meses, 50 calendarios, Salidas,
 > liquidación, vacaciones, configuración), con el código viejo y con el nuevo.
 > Únicas diferencias, buscadas: la pantalla de Feriados ahora MUESTRA el 02/04
 > y el 03/04 (antes se aplicaban sin verse). Suite: 903/903.
-> J (catálogos para copiar) queda para más adelante. Pendiente de decisión del
-> dueño: la carga manual id 40 (2 h extra del legajo 2926, 05/06/2026, sin
-> empresa, hoy no se cuenta).
+> J (catálogos para copiar) queda para más adelante. Carga manual id 40 (2 h
+> extra del legajo 2926, 05/06/2026, sin empresa, hasta ahora no se contaba):
+> **el dueño decidió (2026-10-06) que pasa a AVP**; lo hace esta misma
+> migración. Es el ÚNICO cambio buscado en los números de AVP: esas 2 h
+> empiezan a verse. Control esperado: todo en 0 salvo app_settings = 3 (los de plataforma).
 >
 > Pedido del dueño: "cada empresa debe tener todo propio" (ej. el 05/10, Día
 > del Camino, es feriado solo para AVP). **Plan propuesto, NO aplicado:**
@@ -34,7 +36,7 @@ cargó sin empresa (lo cargó el superadmin sin elegir empresa):
 | `payroll_regime_settings` | 1 | Régimen mensual, cortes 1 y 16 | AVP no tiene propio: usa este |
 | `employee_categories` | 1 | "campaña" | De AVP |
 | `staging_employees` | 3.037 | Restos de una importación vieja, sin empresa | Datos personales sin dueño |
-| `ManualEntries` | 1 | Fila sin empresa | Revisar |
+| `ManualEntries` | 1 | Fila sin empresa | Pasa a AVP (decisión del dueño) |
 
 Además, el horario de AVP (07:00 a 13:40, corte 13:40) está **escrito en el
 código** como valor de reserva en unos 12 lugares del backend.
