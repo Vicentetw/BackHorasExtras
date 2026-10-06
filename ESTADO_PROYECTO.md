@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-03)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-06)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
@@ -190,6 +190,15 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-06 — Decisiones del dueño + arreglo visual.** (1) Carga manual
+>   id 40 (2 h HE, legajo 2926) pasa a AVP: agregado a la migración
+>   `20261014_aislamiento_por_empresa.sql` en la rama `aislamiento-por-empresa`
+>   (empujada, NO unida a main; el dueño corre la migración primero; control
+>   esperado: todo 0 salvo app_settings = 3). (2) Licencias largas: tienen fin
+>   (mandato votado) y el premio depende del convenio → propuesta ajustada
+>   A, C+D, E en `LICENCIAS_LARGAS.md`, ESPERA APROBACIÓN. (3) Diálogo de
+>   marcador en el celular: el texto de ayuda se montaba sobre el campo de
+>   abajo; arreglado y publicado (front 2f1bf10).
 > - **2026-10-06 — Lectura repetida como regla universal (aprobada A/B/C).**
 >   El 10 % de las lecturas del reloj son dobles; la 2da cerraba lo que abría
 >   la 1ra (MENDOZA 9467: salida particular "de 0 min"; 1496: 3 h 14 min de
