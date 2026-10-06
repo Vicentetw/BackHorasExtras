@@ -3,6 +3,9 @@
 > ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-03)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
+> (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
+> y manda acá. Si vas a tocar Presentismo, Salidas, horas extra o el portal:
+> leé también `MARCADORES_Y_SALIDAS.md`.)
 > Las conversaciones se cortan y la siguiente no sabe en qué estábamos. Este
 > bloque es la memoria del proyecto. **Regla del dueño: al terminar cada
 > bloque de trabajo se actualiza acá** el estado, las metas y la bitácora.
@@ -180,9 +183,17 @@
 > | Campaña | `CAMPANA.md` |
 > | Seguridad del agente que sube fichajes | `SEGURIDAD_AGENTE.md` |
 > | Seguridad de la web: CORS, cabeceras, CSP, librerías | `SEGURIDAD_WEB.md` |
+> | **Marcadores: salidas particulares y horas extra. Reglas que no se pueden romper y cómo verificarlas** | `MARCADORES_Y_SALIDAS.md` |
+> | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-05 — Documentación para no repetir errores.** Nuevo
+>   `MARCADORES_Y_SALIDAS.md` (cómo funcionan los marcadores, las 5 reglas,
+>   los errores reales con datos y cómo verificar). Nuevo `CLAUDE.md` en el
+>   backend y aviso en el `CLAUDE.md` del frontend: Claude Code los carga
+>   solos y mandan a este bloque. En el monorepo viejo quedó un `CLAUDE.md`
+>   local (sin commitear) que dice que está obsoleto y adónde ir.
 > - **2026-10-05 — Salida particular sin regreso en el calendario.** Bug
 >   real (PERROTTA, 2525, 29/09): el calendario del detalle mensual solo
 >   marcaba salidas completas; ahora también las que Salidas muestra como
