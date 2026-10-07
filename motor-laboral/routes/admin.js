@@ -458,9 +458,29 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
+  // AISLAMIENTO (auditoria 2026-10-07, hallazgo A): los bloques no tienen
+  // empresa propia, son de una plantilla. Antes estas 4 rutas no miraban de
+  // quien era la plantilla, y un admin de cualquier empresa podia leer,
+  // crear, cambiar o borrar los horarios de otra probando numeros
+  // (comprobado en vivo). Ahora: plantilla de otra empresa = 404, igual que
+  // si no existiera. El superadmin (sin empresa elegida) sigue viendo todo.
+  async function plantillaPropia(req, templateId) {
+    const effectiveTenantId = resolveTenantId(req);
+    const [[t]] = await db.query('SELECT id, tenant_id FROM work_schedule_templates WHERE id = ?', [templateId]);
+    if (!t) return null;
+    if (effectiveTenantId !== null && t.tenant_id !== effectiveTenantId) return null;
+    return t;
+  }
+  async function bloquePropio(req, blockId) {
+    const [[b]] = await db.query('SELECT id, template_id FROM shift_blocks WHERE id = ?', [blockId]);
+    if (!b) return null;
+    return (await plantillaPropia(req, b.template_id)) ? b : null;
+  }
+
   router.get('/templates/:id/blocks', requirePermission('schedules', 'read'), async (req, res) => {
     try {
       const { id } = req.params;
+      if (!(await plantillaPropia(req, id))) return res.status(404).json({ error: 'Plantilla no encontrada' });
       // Bug real reportado: "modifico un horario y no guarda los cambios" --
       // este endpoint devolvia las columnas crudas de la tabla
       // (block_name, block_type), pero el frontend (ShiftBlock en
@@ -500,6 +520,7 @@ function createMotorLaboralAdminRoutes(db) {
       if (day_of_week === undefined || !start_time || !end_time || !type) {
         return res.status(400).json({ error: 'day_of_week, start_time, end_time y type son requeridos' });
       }
+      if (!(await plantillaPropia(req, id))) return res.status(404).json({ error: 'Plantilla no encontrada' });
 
       const [result] = await db.query(
         `INSERT INTO shift_blocks (template_id, day_of_week, block_name, start_time, end_time, block_type, crosses_midnight, active)
@@ -529,6 +550,7 @@ function createMotorLaboralAdminRoutes(db) {
       if (day_of_week === undefined || !start_time || !end_time || !type) {
         return res.status(400).json({ error: 'day_of_week, start_time, end_time y type son requeridos' });
       }
+      if (!(await bloquePropio(req, id))) return res.status(404).json({ error: 'Bloque no encontrado' });
 
       const [result] = await db.query(
         `UPDATE shift_blocks SET day_of_week = ?, block_name = ?, start_time = ?, end_time = ?, block_type = ?, crosses_midnight = ?, active = ? WHERE id = ?`,
@@ -544,6 +566,7 @@ function createMotorLaboralAdminRoutes(db) {
   router.delete('/blocks/:id', requirePermission('schedules', 'delete'), async (req, res) => {
     try {
       const { id } = req.params;
+      if (!(await bloquePropio(req, id))) return res.status(404).json({ error: 'Bloque no encontrado' });
       const [result] = await db.query(`DELETE FROM shift_blocks WHERE id = ?`, [id]);
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {
@@ -557,6 +580,13 @@ function createMotorLaboralAdminRoutes(db) {
       const { categoryId } = req.query;
       const params = [];
       let where = 'WHERE (e.activo = 1 OR e.activo IS NULL)';
+      // AISLAMIENTO (auditoria 2026-10-07, hallazgo B): antes devolvia los
+      // empleados de TODAS las empresas a cualquiera con "ver empleados".
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        where += ' AND e.tenant_id = ?';
+        params.push(effectiveTenantId);
+      }
       if (categoryId) {
         where += ' AND e.category_id = ?';
         params.push(categoryId);
@@ -598,9 +628,18 @@ function createMotorLaboralAdminRoutes(db) {
         return res.status(400).json({ error: 'employeeIds (array) y categoryId son requeridos' });
       }
 
+      // AISLAMIENTO (auditoria 2026-10-07, hallazgo C): antes cambiaba la
+      // categoria de cualquier empleado por numero, de cualquier empresa, y
+      // aceptaba una categoria de otra empresa. Ahora solo empleados y
+      // categorias de la empresa de quien llama.
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[cat]] = await db.query('SELECT id FROM employee_categories WHERE id = ? AND tenant_id = ?', [categoryId, effectiveTenantId]);
+        if (!cat) return res.status(404).json({ error: 'Categoría no encontrada' });
+      }
       const [result] = await db.query(
-        `UPDATE employees SET category_id = ? WHERE id IN (?)`,
-        [categoryId, employeeIds]
+        `UPDATE employees SET category_id = ? WHERE id IN (?)${effectiveTenantId !== null ? ' AND tenant_id = ?' : ''}`,
+        effectiveTenantId !== null ? [categoryId, employeeIds, effectiveTenantId] : [categoryId, employeeIds]
       );
 
       res.json({ ok: true, affectedRows: result.affectedRows });
