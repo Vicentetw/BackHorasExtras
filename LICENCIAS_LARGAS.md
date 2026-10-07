@@ -2,7 +2,9 @@
 
 > Pedido del dueño: "cómo agregar una justificación, por ejemplo una licencia
 > gremial, para que no aparezca como ausente, porque suelen durar años".
-> **Análisis y propuesta; NADA implementado.** Cada letra espera aprobación.
+> **ESTADO (2026-10-06): A, D y E HECHOS** (aprobados por el dueño). C quedó
+> resuelta como "Excusado + motivo" (sin opción nueva). B y F en espera.
+> Detalle de lo hecho al final, en "Lo que se implementó".
 
 ## Cómo funciona hoy
 
@@ -110,3 +112,49 @@ producción que AVP no cambie (por defecto todo sigue como hoy).
 - **B** queda en espera (no hace falta para la gremial). **F** después.
 
 Orden: A → C+D → E, verificando cada paso contra la copia de producción.
+
+## Lo que se implementó (2026-10-06)
+
+Decisiones del dueño: "A sí", "C: hay un filtro que es excusados, deja
+excusado + motivo", "D: en el resumen debe aparecer como licencia gremial",
+"E sí".
+
+- **A. Lista de Licencias** (`routes/employeeEvents.js`): el filtro por año es
+  ahora de superposición (`fecha_desde <= 31/12 AND fecha_hasta >= 01/01`).
+  Año no numérico = 400; desde 1 y no desde 1900 porque la pantalla recarga
+  mientras se escribe ("20" camino a "2026" da lista vacía, no error).
+- **C. Sin opción nueva.** El día sigue siendo "Excusado" (el filtro y todos
+  los números quedan igual) y se muestra el motivo, que ya viajaba en cada día
+  (`eventTypeDescripcion`; el calendario del Detalle ya decía "Excusado
+  (Licencia gremial)"). La opción "cuenta como trabajado para premios" queda
+  para cuando el sistema calcule premios: hoy no hay nada que la use.
+- **D. Resumen por motivo.** `/attendance-range` suma a cada fila
+  `excusedPorMotivo: [{ motivo, dias }]` (campo nuevo; suma exactamente
+  `excused`; las campañas en modo excusado figuran como "Campaña"). En
+  Presentismo mensual/anual, debajo del número de Excusado: "Licencia gremial:
+  22". Así lo hacen los sistemas de RRHH conocidos (Factorial, BambooHR, Buk,
+  Humand): la ausencia se cuenta por tipo, no en un "otros" único. El Excel y
+  el PDF NO cambiaron (agregar una columna cambia el archivo que alguien
+  puede estar procesando; se decide aparte).
+- **E. Avisos de vencimiento** (`motor-laboral/repositories/licenciasLargasRepository.js`,
+  `GET /api/employee-events/vencimientos`). Entran al sistema de avisos de
+  Presentismo que ya existía (chip en la fila, filtro "Licencias por vencer",
+  orden por gravedad):
+  - *por vencer*: licencia de `licenciaLargaDesde` días o más (default 60)
+    que termina dentro de `licenciaPorVencerDias` (default 30);
+  - *vencida, no volvió* (rojo): terminó hace hasta 90 días, no hay otra
+    licencia que la continúe y no fichó desde entonces.
+  Se calcula contra HOY, no contra el período elegido. Los dos umbrales están
+  en "Configurar avisos" (los edita el administrador de cada empresa; vacío =
+  apagado). Una pantalla vieja que guarda sin mandar las claves nuevas no las
+  apaga (`/config/avisos-asistencia` conserva lo que no viene).
+  - Igual que los avisos de cupos: el superadmin sin empresa elegida no los
+    ve (la consulta es por empresa).
+
+**Verificado.** Tests nuevos `test/licencias-largas.test.js` (A, D, E, config,
+aislamiento); suite completa 907/907. Sobre `horas_prod_copia`: en 479
+empleados de AVP y 9 meses el desglose suma siempre igual que Excusado; con
+los valores por defecto AVP hoy no tiene ningún aviso de licencias (solo hay
+2 licencias cargadas en 2026); con una licencia de prueba que vence en 10
+días se vio el aviso y el motivo en Chrome (escritorio y celular) y Firefox.
+

@@ -3787,6 +3787,14 @@ async function attendanceRangeHandler(req, res) {
       let late = 0;
       let lateJustified = 0;
       let excused = 0;
+      // Los mismos dias de `excused`, separados por motivo ("Licencia
+      // gremial" 22, "Artículo 55" 1...). El total no cambia: es para que el
+      // resumen diga POR QUE esta excusado (LICENCIAS_LARGAS.md, letra D).
+      const excusadoPorMotivo = new Map();
+      const sumarExcusado = (motivo) => {
+        excused++;
+        excusadoPorMotivo.set(motivo, (excusadoPorMotivo.get(motivo) || 0) + 1);
+      };
       let partialAbsence = 0;
       let overtimeMinutes = 0;
       let personalLeaveMinutes = 0;
@@ -3938,7 +3946,7 @@ async function attendanceRangeHandler(req, res) {
           // respetan igual que en cualquier otro dia.
           campaignDays++;
           if (campanaModo === 'trabajado') daysWorked++;
-          else excused++;
+          else sumarExcusado('Campaña');
           const manualKeyRegreso = u.USERID ? `${u.USERID}_${date}` : null;
           const manualMinutesRegreso = manualKeyRegreso ? (manualMinutesByUserDate.get(manualKeyRegreso) || 0) : 0;
           if (manualMinutesRegreso > 0) overtimeMinutes += manualMinutesRegreso;
@@ -4371,7 +4379,8 @@ async function attendanceRangeHandler(req, res) {
             });
           }
         } else if (exclusion || leaveEvent) {
-          excused++;
+          sumarExcusado((leaveEvent ? leaveEvent.eventTypeDescripcion : exclusion.eventTypeDescripcion)
+            || (leaveEvent ? 'Licencia sin motivo' : 'Justificación sin motivo'));
           // Una licencia manual (HE/Licencia) puede caer en un dia sin
           // fichajes -- no requiere marcar reloj, se suma igual.
           const manualKeyExcused = u.USERID ? `${u.USERID}_${date}` : null;
@@ -4396,7 +4405,7 @@ async function attendanceRangeHandler(req, res) {
           // (campanaPresentismoModo); la cantidad de horas no se inventa.
           campaignDays++;
           if (campanaModo === 'trabajado') daysWorked++;
-          else excused++;
+          else sumarExcusado('Campaña');
           const manualKeyCampaign = u.USERID ? `${u.USERID}_${date}` : null;
           const manualMinutesCampaign = manualKeyCampaign ? (manualMinutesByUserDate.get(manualKeyCampaign) || 0) : 0;
           if (manualMinutesCampaign > 0) overtimeMinutes += manualMinutesCampaign;
@@ -4476,6 +4485,10 @@ async function attendanceRangeHandler(req, res) {
         late,
         lateJustified,
         excused,
+        // Mas dias primero. Suma exactamente `excused`.
+        excusedPorMotivo: [...excusadoPorMotivo]
+          .map(([motivo, dias]) => ({ motivo, dias }))
+          .sort((a, b) => b.dias - a.dias || a.motivo.localeCompare(b.motivo)),
         partialAbsence,
         overtimeHours: (overtimeMinutes / 60).toFixed(2),
         personalLeaveHours: (personalLeaveMinutes / 60).toFixed(2),
@@ -5011,6 +5024,11 @@ app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), report
 //                          (default: apagado)
 //   cupoPorAgotarsePct     avisar "por agotarse" desde este % del cupo de un
 //                          motivo (default 80). Vacio = solo agotado/superado.
+//   licenciaLargaDesde     una licencia de N dias o mas es "larga" y se avisa
+//                          cuando vence (default 60). Vacio = sin avisos de
+//                          licencias. Ver licenciasLargasRepository.
+//   licenciaPorVencerDias  avisar N dias antes de que venza (default 30).
+//                          Vacio = solo avisar la vencida sin volver a fichar.
 // Vacio (null) en cualquiera = ese aviso apagado. Los avisos solo se
 // MUESTRAN: no cambian ningun numero de Presentismo.
 //
@@ -5018,9 +5036,16 @@ app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), report
 // una llamada (el abandono de trabajo empieza asi, y actuar tarde complica
 // cualquier intimacion); los topes por periodo dependen mucho de cada
 // empresa y de su convenio, asi que arrancan apagados.
-const AVISOS_ASISTENCIA_DEFAULT = { faltasSeguidas: 2, faltasSinAvisoPeriodo: null, justificadasPeriodo: null, cupoPorAgotarsePct: 80 };
+// Licencias: una licencia gremial o un cargo electivo duran meses o años;
+// 60 dias deja afuera vacaciones y enfermedades comunes. 30 dias de
+// anticipacion da tiempo a cargar la reeleccion antes de que figure Ausente.
+const AVISOS_ASISTENCIA_DEFAULT = {
+  faltasSeguidas: 2, faltasSinAvisoPeriodo: null, justificadasPeriodo: null, cupoPorAgotarsePct: 80,
+  licenciaLargaDesde: 60, licenciaPorVencerDias: 30,
+};
 const AVISOS_ASISTENCIA_RANGOS = {
   faltasSeguidas: [1, 60], faltasSinAvisoPeriodo: [1, 366], justificadasPeriodo: [1, 366], cupoPorAgotarsePct: [1, 100],
+  licenciaLargaDesde: [1, 3650], licenciaPorVencerDias: [1, 365],
 };
 
 async function fetchAvisosAsistencia(tenantId) {
@@ -5042,9 +5067,14 @@ app.get('/config/avisos-asistencia', requirePermission('attendance', 'read'), as
 app.post('/config/avisos-asistencia', requirePermission('schedules', 'update'), async (req, res) => {
   try {
     const limpio = {};
+    // Una clave que NO viene en el pedido conserva su valor: asi una pantalla
+    // vieja (que no conoce las opciones nuevas) no las apaga al guardar.
+    // Vacio o null, en cambio, si es "apagar ese aviso".
+    const actual = await fetchAvisosAsistencia(resolveTenantId(req));
     for (const [clave, [min, max]] of Object.entries(AVISOS_ASISTENCIA_RANGOS)) {
       const v = req.body[clave];
-      if (v === null || v === undefined || v === '') { limpio[clave] = null; continue; }
+      if (v === undefined) { limpio[clave] = actual[clave]; continue; }
+      if (v === null || v === '') { limpio[clave] = null; continue; }
       const n = Number(v);
       if (!Number.isInteger(n) || n < min || n > max) {
         return res.status(400).json({ error: `${clave} debe ser un número entero entre ${min} y ${max}, o vacío` });

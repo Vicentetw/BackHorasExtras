@@ -190,6 +190,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-06 — Licencias largas A, D y E hechas** (C = "Excusado +
+>   motivo", sin opción nueva). Lista de Licencias muestra los años del medio;
+>   el resumen de Presentismo dice "Licencia gremial: 22" debajo de Excusado;
+>   avisos de licencia larga por vencer / vencida sin volver, configurables en
+>   "Configurar avisos" (60 y 30 días por defecto). Sin migración. Detalle y
+>   verificación en `LICENCIAS_LARGAS.md` ("Lo que se implementó").
 > - **2026-10-06 — Decisiones del dueño + arreglo visual.** (1) Las cargas
 >   manuales sin empresa pasan a AVP, sin más análisis: agregado a la migración
 >   `20261014_aislamiento_por_empresa.sql` en la rama `aislamiento-por-empresa`

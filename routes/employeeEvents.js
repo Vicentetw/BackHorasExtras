@@ -1,7 +1,9 @@
 const express = require('express');
-const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
+const { resolveTenantId, requirePermission, requireAnyPermission } = require('../appUserMiddleware');
 const eventTypeCountModeRepository = require('../motor-laboral/repositories/eventTypeCountModeRepository');
 const cupoMotivoRepository = require('../motor-laboral/repositories/cupoMotivoRepository');
+const licenciasLargasRepository = require('../motor-laboral/repositories/licenciasLargasRepository');
+const { hoyDeEmpresa } = require('../motor-laboral/services/hoyEmpresa');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -27,8 +29,18 @@ module.exports = function (db) {
         params.push(employeeId);
       }
       if (year) {
-        sql += ' AND (YEAR(ee.fecha_desde) = ? OR YEAR(ee.fecha_hasta) = ?)';
-        params.push(year, year);
+        // Toda licencia que TOQUE el año: empieza antes de que termine y
+        // termina despues de que empieza. Antes era "año de inicio O año de
+        // fin", y una licencia 2025-2028 no aparecia al mirar 2026 o 2027
+        // (aunque si se aplicaba en Presentismo). Ver LICENCIAS_LARGAS.md, A.
+        // Desde 1, no desde 1900: la pantalla recarga mientras se escribe, y
+        // "20" camino a "2026" tiene que dar lista vacia, no un error.
+        const anio = Number(year);
+        if (!Number.isInteger(anio) || anio < 1 || anio > 9999) {
+          return res.status(400).json({ success: false, error: 'Año inválido' });
+        }
+        sql += ' AND ee.fecha_desde <= ? AND ee.fecha_hasta >= ?';
+        params.push(`${anio}-12-31`, `${anio}-01-01`);
       }
       const effectiveTenantId = resolveTenantId(req);
       if (effectiveTenantId !== null) {
@@ -84,6 +96,38 @@ module.exports = function (db) {
     } catch (err) {
       console.error('ERROR previewing dias:', err);
       res.status(500).json({ success: false, error: 'Error calculando los días' });
+    }
+  });
+
+  // ==========================
+  // 2b. VENCIMIENTO DE LICENCIAS LARGAS (avisos de Presentismo)
+  // GET /api/employee-events/vencimientos?largaDesde=&porVencerDias=&fecha=
+  //   largaDesde     desde cuantos dias una licencia es "larga" (vacio = apagado)
+  //   porVencerDias  avisar cuantos dias antes (vacio = solo las vencidas)
+  //   fecha          por defecto, hoy de la empresa
+  // Los valores los manda Presentismo desde /config/avisos-asistencia (mismo
+  // patron que /api/event-types/cupos/estado). Ver licenciasLargasRepository.
+  // ==========================
+  router.get('/vencimientos', requireAnyPermission([['attendance', 'read'], ['leaves', 'read']]), async (req, res) => {
+    try {
+      const tenantId = resolveTenantId(req);
+      if (tenantId == null) return res.json({ success: true, filas: [] });
+      const entero = (v, min, max) => {
+        if (v === undefined || v === null || v === '') return null;
+        const n = Number(v);
+        return Number.isInteger(n) && n >= min && n <= max ? n : undefined;
+      };
+      const largaDesde = entero(req.query.largaDesde, 1, 3650);
+      const porVencerDias = entero(req.query.porVencerDias, 1, 365);
+      if (largaDesde === undefined || porVencerDias === undefined) {
+        return res.status(400).json({ success: false, error: 'largaDesde (1-3650) y porVencerDias (1-365) deben ser enteros, o vacíos' });
+      }
+      const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : await hoyDeEmpresa(db, tenantId);
+      const filas = await licenciasLargasRepository.vencimientosDeLicencias(db, tenantId, { fecha, largaDesde, porVencerDias });
+      res.json({ success: true, fecha, filas });
+    } catch (err) {
+      console.error('ERROR fetching vencimientos de licencias:', err);
+      res.status(500).json({ success: false, error: 'Error calculando los vencimientos de licencias' });
     }
   });
 
