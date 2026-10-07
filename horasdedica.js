@@ -5095,6 +5095,8 @@ app.get('/api/ver-reloj', requirePermission('attendance', 'read'), reportesRateL
       [tenantId]);
     const porUserId = new Map(marcadores.map((m) => [String(m.userId), m]));
     const porTarjeta = new Map(marcadores.map((m) => [String(m.badgeNumber), m]));
+    // Lo que de verdad reconoce el motor (incluye el alias por tarjeta).
+    const delMotor = await fetchMarkerMap(null, tenantId);
     const TEXTO_MARCADOR = {
       PARTICULAR: { SALIDA: 'Salida particular', REGRESO: 'Regreso particular' },
       OFICIAL: { SALIDA: 'Salida oficial', REGRESO: 'Regreso oficial' },
@@ -5133,7 +5135,7 @@ app.get('/api/ver-reloj', requirePermission('attendance', 'read'), reportesRateL
           texto: (TEXTO_MARCADOR[m.category] || {})[m.direction] || `${m.category} ${m.direction}`,
           // El motor busca por el numero tal como llega: si solo coincide
           // con la tarjeta, ese marcador no se esta usando.
-          reconocido: porUserId.has(raw) };
+          reconocido: delMotor[raw] !== undefined };
       }
       return { ...base, tipo: 'desconocido', numero: raw };
     });
@@ -5416,6 +5418,18 @@ app.get('/marker-corrections', requirePermission('attendance', 'read'), async (r
        ORDER BY mc.marker_time`,
       [tenantId, from, nextDayStr(to)]
     );
+    // Respaldo: el reloj puede grabar el NUMERO DE TARJETA del marcador
+    // (ver fetchMarkerMap, "tambien por tarjeta"). Se resuelve aca y no con
+    // un JOIN: comparar badgeNumber contra un numero en SQL choca por la
+    // collation de la columna.
+    if (rows.some((r) => r.markerBadge == null)) {
+      const [porTarjeta] = await db.query('SELECT badgeNumber, name FROM specialusers WHERE tenant_id = ?', [tenantId]);
+      const deTarjeta = new Map(porTarjeta.map((m) => [String(m.badgeNumber), m]));
+      rows.forEach((r) => {
+        const m = r.markerBadge == null ? deTarjeta.get(String(r.markerUserId)) : null;
+        if (m) { r.markerBadge = m.badgeNumber; r.markerName = m.name; }
+      });
+    }
     res.json({ rows });
   } catch (err) {
     console.error('ERROR fetching marker corrections:', err);
@@ -5444,11 +5458,10 @@ app.post('/marker-corrections', requirePermission('attendance', 'update'), async
 
     // El marcador tiene que ser de esta empresa y tiene que existir ese
     // fichaje: no se corrigen marcadores inventados.
-    const [[marcador]] = await db.query(
-      'SELECT userId FROM specialusers WHERE tenant_id = ? AND userId = ? AND direction IS NOT NULL LIMIT 1',
-      [tenantId, markerUserId]
-    );
-    if (!marcador) return res.status(400).json({ error: 'Ese usuario no es un marcador de la empresa' });
+    // Se acepta el numero tal como lo grabo el reloj: el USERID del marcador
+    // o su numero de tarjeta (ver fetchMarkerMap, "tambien por tarjeta").
+    const marcadoresDeLaEmpresa = await fetchMarkerMap(null, tenantId);
+    if (!marcadoresDeLaEmpresa[markerUserId]) return res.status(400).json({ error: 'Ese usuario no es un marcador de la empresa' });
     const [[fichaje]] = await db.query(
       'SELECT MACHINE_IP AS machineIp FROM Checkins WHERE tenant_id = ? AND USERID = ? AND CHECKTIME = ? LIMIT 1',
       [tenantId, markerUserId, markerAt]

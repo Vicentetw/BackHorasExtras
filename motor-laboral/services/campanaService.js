@@ -105,6 +105,34 @@ async function fetchMarkerMap(db, category, tenantId) {
   const [rows] = await db.query(query, params);
   const markerMap = {};
   rows.forEach(m => { markerMap[m.userId] = { category: m.category, direction: m.direction, badgeNumber: m.badgeNumber }; });
+
+  // EL MARCADOR TAMBIEN SE RECONOCE POR SU NUMERO DE TARJETA (2026-10-07)
+  // ----------------------------------------------------------------------
+  // Hay relojes que en Checkins graban el NUMERO DE TARJETA y no el USERID
+  // interno. Para las personas eso ya se resolvia (ver fetchMovementCheckins:
+  // primero por USERID, si no por Badgenumber); para los marcadores no. Caso
+  // real AVP: el marcador 10 (fin de horas extra) esta cargado con USERID 2 y
+  // tarjeta 10, el reloj lo manda como 10, y el motor nunca lo reconocio
+  // (1.251 lecturas solo en septiembre de 2026).
+  //
+  // Solo si ese numero NO es el USERID de nadie en la empresa: si una persona
+  // real tiene USERID 10, sus fichajes se tomarian como marcador.
+  if (tenantId !== undefined && tenantId !== null) {
+    const alias = rows.filter((m) => m.badgeNumber != null && String(m.badgeNumber) !== String(m.userId)
+      && /^\d+$/.test(String(m.badgeNumber)) && markerMap[m.badgeNumber] === undefined);
+    if (alias.length) {
+      const [ocupados] = await db.query(
+        'SELECT USERID FROM users WHERE tenant_id = ? AND USERID IN (?)',
+        [tenantId, alias.map((m) => Number(m.badgeNumber))]
+      );
+      const tomados = new Set(ocupados.map((u) => String(u.USERID)));
+      alias.forEach((m) => {
+        if (!tomados.has(String(m.badgeNumber))) {
+          markerMap[m.badgeNumber] = { category: m.category, direction: m.direction, badgeNumber: m.badgeNumber };
+        }
+      });
+    }
+  }
   return markerMap;
 }
 

@@ -2,8 +2,10 @@
 // diaria, mensual y configuracion). Reproduce los casos reales del 07/10/2026:
 //   BELCARO: marcador 4, ficha, marcador 4 otra vez, ficha -- a las 05:08 con
 //            plantilla de 07:00 a 13:40.
-//   El 10 de AVP: el marcador esta cargado con USERID 2 y el reloj lo manda
-//            como 10 -> el sistema no lo toma; "Ver el reloj" tiene que decirlo.
+//   El 10 de AVP: el marcador esta cargado con USERID 2 (tarjeta 10) y el
+//            reloj lo manda como 10. Desde el 2026-10-07 se reconoce tambien
+//            por tarjeta (fetchMarkerMap), salvo que ese numero sea el USERID
+//            de alguien: ese caso se muestra como "no lo esta tomando".
 //
 // Requiere el backend local corriendo (node horasdedica.js, puerto 3000).
 // Tenants descartables propios (999939/999949), NUNCA AVP.
@@ -30,7 +32,7 @@ const lectura = (userId, cuando) => db.query('INSERT INTO Checkins (USERID, tena
 
 async function cleanup() {
   await db.query('DELETE sb FROM shift_blocks sb JOIN work_schedule_templates w ON w.id = sb.template_id WHERE w.tenant_id = ?', [T]);
-  for (const t of ['employee_work_calendars', 'work_schedule_templates', 'specialusers', 'Checkins', 'user_employee_map', 'users', 'employees']) {
+  for (const t of ['marker_correction_log', 'marker_corrections', 'employee_work_calendars', 'work_schedule_templates', 'specialusers', 'Checkins', 'user_employee_map', 'users', 'employees']) {
     await db.query(`DELETE FROM ${t} WHERE tenant_id = ?`, [T]);
   }
   await db.query('DELETE FROM app_settings WHERE tenant_id IN (?, ?)', [T, OTRA]);
@@ -41,7 +43,7 @@ before(async () => {
     await db.query('INSERT INTO tenants (id, name, code) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name)', [id, `${code} (test)`, code]);
   }
   await cleanup();
-  const permisos = ['attendance:read', 'schedules:read', 'schedules:update'];
+  const permisos = ['attendance:read', 'attendance:update', 'schedules:read', 'schedules:update'];
   headers = await getTestAuthHeaders(UID, { isSuperadmin: false, tenantId: T, permissions: permisos });
   headersOtra = await getTestAuthHeaders(UID_OTRA, { isSuperadmin: false, tenantId: OTRA, permissions: permisos });
 
@@ -55,8 +57,10 @@ before(async () => {
   await db.query(`INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from) VALUES (?, ?, ?, '2026-01-01')`, [emp.insertId, T, tpl.insertId]);
   // Marcadores: el 4 bien configurado (USERID 4); el "10" cargado con USERID 2
   // y numero de tarjeta 10, tal cual esta en AVP.
-  await db.query(`INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (4, ?, '4', '4'), (2, ?, '10', '10')`, [T, T]);
-  await db.query(`INSERT INTO specialusers (userId, tenant_id, badgeNumber, name, category, direction, isActive) VALUES (4, ?, '4', '4', 'OFICIAL', 'SALIDA', 1), (2, ?, '10', '10', 'HE', 'REGRESO', 1)`, [T, T]);
+  // Y un marcador "33" (USERID 3) cuyo numero de tarjeta es el USERID de OTRO
+  // usuario del reloj: ese no se puede reconocer por tarjeta.
+  await db.query(`INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (4, ?, '4', '4'), (2, ?, '10', '10'), (3, ?, '33', '33'), (33, ?, '9933', 'OTRO')`, [T, T, T, T]);
+  await db.query(`INSERT INTO specialusers (userId, tenant_id, badgeNumber, name, category, direction, isActive) VALUES (4, ?, '4', '4', 'OFICIAL', 'SALIDA', 1), (2, ?, '10', '10', 'HE', 'REGRESO', 1), (3, ?, '33', '33', 'PARTICULAR', 'SALIDA', 1)`, [T, T, T]);
 
   // Lunes 04/05/2026: el gesto de BELCARO, a las 05:08.
   await lectura(4, '2026-05-04 05:08:20');
@@ -67,6 +71,9 @@ before(async () => {
   await lectura(10, '2026-05-05 07:04:10');
   await lectura(USERID, '2026-05-05 07:04:13');
   await lectura(USERID, '2026-05-05 13:45:00');
+  // Miercoles 06/05: el 33 llega como 33 (que es el USERID de otro usuario).
+  await lectura(33, '2026-05-06 07:00:00');
+  await lectura(USERID, '2026-05-06 07:00:05');
 });
 
 after(async () => {
@@ -95,11 +102,30 @@ test('ver el reloj: muestra los dos marcadores 4, sus lecturas y como las tomo e
   assert.ok(body.avisos.includes('Nadie más usó este reloj en esos minutos.'));
 });
 
-test('ver el reloj: un marcador que el sistema no toma (el 10 cargado como 2) se muestra y se avisa', async () => {
+test('el marcador 10 cargado como USERID 2 (tarjeta 10) se reconoce por tarjeta', async () => {
   const { body } = await verReloj('2026-05-05 07:04:13');
   const diez = body.lecturas.find((l) => l.tipo === 'marcador');
-  assert.deepEqual([diez.numero, diez.texto, diez.reconocido], ['10', 'Fin de horas extra', false]);
+  assert.deepEqual([diez.numero, diez.texto, diez.reconocido], ['10', 'Fin de horas extra', true]);
+  assert.ok(!body.avisos.some((a) => /no se toma en cuenta/.test(a)));
+  // Y el motor lo usa: su fichaje queda como "Fin de horas extra".
+  const f = await (await fetch(`${BASE_URL}/api/fichajes-del-dia?fecha=2026-05-05&employeeId=${LEGAJO}`, { headers })).json();
+  assert.ok(f.empleados[String(LEGAJO)][0].tipos.some((t) => t.texto.startsWith('Fin de horas extra')));
+});
+
+test('un numero de tarjeta que es el USERID de otro NO se toma como marcador, y ver el reloj lo avisa', async () => {
+  const { body } = await verReloj('2026-05-06 07:00:05');
+  const l33 = body.lecturas.find((l) => l.numero === '33');
+  assert.equal(l33.tipo, 'marcador');
+  assert.equal(l33.reconocido, false);
   assert.ok(body.avisos.some((a) => /no se toma en cuenta/.test(a)));
+});
+
+test('corregir marcador acepta el numero tal como lo grabo el reloj (el 10)', async () => {
+  const r = await post('/marker-corrections', { markerUserId: 10, markerAt: '2026-05-05 07:04:10', fromEmployeeId: LEGAJO, toEmployeeId: null, reason: 'prueba' });
+  assert.equal(r.status, 200, await r.text());
+  const lista = await (await fetch(`${BASE_URL}/marker-corrections?from=2026-05-01&to=2026-05-31`, { headers })).json();
+  assert.equal(lista.rows.length, 1);
+  assert.equal(lista.rows[0].markerBadge, '10', 'el historial muestra el marcador aunque se haya grabado por tarjeta');
 });
 
 test('ver el reloj: pide los datos, no encuentra fichajes inventados, y otra empresa no ve nada', async () => {
