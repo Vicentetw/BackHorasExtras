@@ -194,6 +194,22 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-07 — Auditoría general + 2 arreglos.** (1) Auditoría de seguridad
+>   y QA de las 248 rutas (informe LOCAL `AUDITORIA_2026-10-07.md`, fuera de git
+>   a propósito: el repo es público). Tres fugas entre empresas en
+>   `motor-laboral/routes/admin.js` (bloques de horario, lista de empleados,
+>   categoría en lote) **corregidas y publicadas** (`32e7f9f`, test nuevo
+>   `aislamiento-motor-laboral.test.js`). Quedan D–O esperando aprobación.
+>   (2) Marcador entre dos lecturas propias ("salida + 9 + dedo"): regla
+>   "nadie más en el medio" en la rama `marcador-nadie-en-el-medio`, **SIN
+>   publicar, espera el OK del dueño con los números** (+273,6 h HE ene-sep,
+>   56 suben, ninguna baja, serenos igual). Ver `MARCADORES_Y_SALIDAS.md`
+>   Regla 6 (en esa rama). (3) La base de tests `horas_dedica2` se recargó con
+>   el backup de producción del 07/10 + empresa 4; los tests de valores
+>   conocidos se reajustaron en la misma rama (en `main` fallan 5 hasta unirla).
+>   OJO: un servidor local con las variables de producción cargadas en la
+>   terminal (`MYSQL_ADDON_*`) usa la base de PRODUCCIÓN aunque el `.env` diga
+>   otra cosa.
 > - **2026-10-06 — Licencias largas A, D y E hechas** (C = "Excusado +
 >   motivo", sin opción nueva). Lista de Licencias muestra los años del medio;
 >   el resumen de Presentismo dice "Licencia gremial: 22" debajo de Excusado;
