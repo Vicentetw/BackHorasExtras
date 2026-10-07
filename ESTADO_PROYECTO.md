@@ -190,8 +190,8 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
-> - **2026-10-06 — Decisiones del dueño + arreglo visual.** (1) Carga manual
->   id 40 (2 h HE, legajo 2926) pasa a AVP: agregado a la migración
+> - **2026-10-06 — Decisiones del dueño + arreglo visual.** (1) Las cargas
+>   manuales sin empresa pasan a AVP, sin más análisis: agregado a la migración
 >   `20261014_aislamiento_por_empresa.sql` en la rama `aislamiento-por-empresa`
 >   (empujada, NO unida a main; el dueño corre la migración primero; control
 >   esperado: todo 0 salvo app_settings = 3). (2) Licencias largas: tienen fin
@@ -844,7 +844,8 @@ código** para que el filtro de empresa y el log empiecen a actuar.
 Todavía no hay pantalla para *ver* el historial: una vez desplegado los
 datos se guardan, pero por ahora se consultan por SQL.
 
-**Una fila quedó sin empresa** y hay que decidir qué hacer:
+**Una fila quedó sin empresa** (RESUELTO 2026-10-06: las cargas manuales
+sin empresa pasan a AVP en la migración `20261014_aislamiento_por_empresa.sql`):
 `ManualEntries` id 40 — `userId` 2926, 2 h de HE del 2026-06-05, nota
 "corte de energía". Su `USERID` no existe en `users`, por eso el backfill
 no pudo resolverla. Como producción tiene **una sola empresa** (id 6,
