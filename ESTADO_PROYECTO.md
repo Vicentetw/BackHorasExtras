@@ -69,11 +69,15 @@
 >
 > ### Qué tiene que hacer el dueño (pendiente)
 >
+> **Para saber qué migraciones hay en producción** no adivinar ni usar
+> `horas_prod_copia` (es una foto vieja): mirar el backup diario de
+> producción en `C:\Users\EURO\Backups\HorasDedica` (uno por noche, ~23:14;
+> el `.zip` trae el `.sql` completo), o que el dueño corra
+> `DIAGNOSTICO_MIGRACIONES.sql` (solo lectura) en phpMyAdmin.
+>
 > | Qué | Para qué |
 > |---|---|
-> | Correr `migrations/20261012_solicitudes_de_alta.sql` | Sin ella no se puede aprobar ni rechazar solicitudes de alta |
-> | Correr `migrations/20261010_portal_empleado.sql` (si no la corrió) | Portal del empleado |
-> | Confirmar que corrió `20261008` y `20261009` | Cierre de mes y ajustes |
+> | ~~Migraciones~~ | **Ninguna pendiente (2026-10-07).** Verificado en el backup de producción del 07/10: aplicadas de la `20261004` a la `20261013`; la `20261014` la corrió el dueño ese día. |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
 > | Decir cuál de las dos landing usa y dónde está publicada la separada | Hoy hay dos copias |
@@ -90,7 +94,7 @@
 >
 > | # | Qué | Quién | Estado |
 > |---|---|---|---|
-> | 1 | Correr las migraciones `20261010`, `20261012` y `20261013` en producción (y confirmar `20261008` y `20261009`) | Dueño | Pendiente |
+> | 1 | Correr las migraciones `20261010`, `20261012` y `20261013` en producción (y confirmar `20261008` y `20261009`) | Dueño | ✅ Hecho (verificado en el backup del 07/10) |
 > | 2 | Elegir `tupctw@gmail.com` como titular de AVP en Empresas | Dueño | Pendiente |
 > | 3 | Publicar la landing en su propia dirección (ver abajo) | Los dos | Pendiente: falta elegir el nombre |
 > | 4 | Agregar esa dirección al `CORS_ORIGINS` del backend (Render) y a los dominios del widget de Turnstile (Cloudflare) | Dueño | Pendiente |
