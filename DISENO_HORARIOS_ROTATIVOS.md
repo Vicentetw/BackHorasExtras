@@ -85,10 +85,25 @@ ciclo manda**: si le tocaba trabajar y fichó, es "trabajó feriado" (como
 hoy). En una semanal, como hoy. Más adelante, opción por plantilla si alguna
 empresa lo necesita distinto.
 
-## 5. Esquema de tablas (propuesto)
+## 5. Esquema de tablas
+
+> **Etapa 1 implementada (2026-10-07)**, migración
+> `migrations/20261015_horarios_rotativos.sql`. Dos cambios respecto de la
+> propuesta original, los dos por cosas que aparecieron al implementar:
+>
+> - **Turnos con tramos** (`shift_definition_tramos`), no con un solo
+>   inicio/fin: el dueño pidió turnos partidos ("un comercio de 07 a 12 y de
+>   16 a 20"). Un turno tiene de 1 a 4 tramos, en orden; solo el último puede
+>   terminar al día siguiente.
+> - **Columna `modo` ('SEMANAL' | 'ROTATIVO')**, no `type = 'CYCLE'`: `type`
+>   (FIXED/FLEXIBLE) ya significa la *tolerancia* de la plantilla y lo usan el
+>   cálculo y las pantallas; reutilizarlo habría mezclado dos cosas.
+>
+> Las columnas `es_temporal`, `motivo` y `created_by` de la asignación y la
+> tabla `employee_day_schedule` quedan para las etapas 2 y 3.
 
 Todo **aditivo**: tablas y columnas nuevas, nada se borra ni se renombra. Las
-plantillas semanales actuales (`type = 'FIXED'` + `shift_blocks`) siguen
+plantillas semanales actuales (`modo = 'SEMANAL'` + `shift_blocks`) siguen
 igual.
 
 ```sql
@@ -96,21 +111,28 @@ igual.
 CREATE TABLE shift_definitions (
   id INT AUTO_INCREMENT PRIMARY KEY,
   tenant_id INT NOT NULL,
-  nombre VARCHAR(60) NOT NULL,          -- "Mañana", "Noche"
-  inicio TIME NOT NULL,                 -- 23:00
-  fin TIME NOT NULL,                    -- 07:00
-  cruza_medianoche TINYINT(1) NOT NULL, -- 1 si fin <= inicio (se calcula al guardar)
+  nombre VARCHAR(60) NOT NULL,          -- "Mañana", "Noche", "Comercio"
   color VARCHAR(7) NULL,                -- para el calendario
   activo TINYINT(1) NOT NULL DEFAULT 1,
   created_by INT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_turno (tenant_id, nombre),
-  FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+  UNIQUE KEY uq_turno (tenant_id, nombre)
+);
+-- Los tramos del turno: uno (corrido) o varios (partido).
+CREATE TABLE shift_definition_tramos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  shift_id INT NOT NULL,
+  orden TINYINT NOT NULL,
+  inicio TIME NOT NULL,                 -- 23:00
+  fin TIME NOT NULL,                    -- 07:00
+  cruza_medianoche TINYINT(1) NOT NULL, -- 1 si fin <= inicio (se calcula al guardar)
+  UNIQUE KEY uq_tramo (shift_id, orden),
+  FOREIGN KEY (shift_id) REFERENCES shift_definitions(id) ON DELETE CASCADE
 );
 
--- Plantilla rotativa: el tipo nuevo y el largo del ciclo.
+-- Plantilla rotativa: el modo y el largo del ciclo.
 ALTER TABLE work_schedule_templates
-  ADD COLUMN cycle_length SMALLINT NULL;  -- solo type = 'CYCLE' (2 a 60 dias)
--- type: 'FIXED' (semanal, lo de hoy) | 'CYCLE' (rotativa)
+  ADD COLUMN modo ENUM('SEMANAL','ROTATIVO') NOT NULL DEFAULT 'SEMANAL',
+  ADD COLUMN cycle_length SMALLINT NULL;  -- solo modo ROTATIVO (2 a 60 dias)
 
 -- Los dias del ciclo: dia 1..N -> un turno, o NULL = sin turno.
 CREATE TABLE template_cycle_days (
@@ -180,6 +202,22 @@ CREATE TABLE employee_day_schedule (
 6. Verificación: "Fuera de horario" pasa de 80 días a los pocos que son
    excepciones reales.
 
+**Medido el 2026-10-07** (copia local del backup de producción, con las dos
+plantillas y asignaciones de arriba, borradas después): "fuera de horario"
+de abril al 07/10 bajó de **58 a 25 días**. Abril a julio quedan en 0–1 por
+mes. Agosto empeora (8 → 12) porque el patrón real se corrió respecto del
+4x1 supuesto. Eso es justamente lo que resuelven los cambios puntuales de la
+etapa 2, o una asignación nueva con otro "día 1".
+
+**Error encontrado al medir y corregido:** el cálculo *estimado* de horas
+extra (sin marcador) tomaba como corte la salida del turno (07:00) **del mismo
+día de la entrada**. En un turno de noche (23:00 a 07:00) eso daba ~24 horas
+extra por noche (junio: 113 h en vez de 1,4 h). Ahora, si el turno de ese día
+cruza la medianoche y el corte es anterior a la entrada, el corte es del día
+siguiente (`overtimeCalculations.corteAlDiaSiguiente`). Ninguna plantilla de
+producción cruza la medianoche hoy, así que no cambia nada de lo publicado
+(verificado: 0 diferencias en 12.906 estados diarios de AVP).
+
 ## 7. Pantallas
 
 | Pantalla | Qué tiene |
@@ -212,7 +250,10 @@ datos nuevos da exactamente lo mismo.
 
 - ¿El empleado puede **pedir** un cambio de turno desde su portal (y el
   encargado lo aprueba)? Sería una etapa posterior.
-- Turnos partidos dentro de una rotativa (ej. "Mañana partida 7–11 y
-  15–19"): ¿hace falta? El turno se podría definir con varios tramos.
+- ~~Turnos partidos dentro de una rotativa~~: resuelto, el turno tiene
+  tramos (pedido del dueño, 2026-10-07).
+- En el celular, las tablas de Plantillas y de Horarios de empleados se pasan
+  del ancho de la pantalla (ya pasaba antes de esta etapa). Pendiente de
+  decidir si se arreglan.
 - ¿Avisar al encargado los días de un rotativo que no tienen nadie asignado
   (cobertura)? Es otra funcionalidad ("dotación"), no de este diseño.

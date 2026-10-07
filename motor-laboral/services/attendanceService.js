@@ -289,7 +289,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
         entrada: userSchedule.timeEntrance,
         salida: userSchedule.timeExit,
         cruzaMedianoche: (userSchedule.blocks || []).some((b) => Number(b.crosses_midnight) === 1),
-        plantilla: userSchedule.template ? userSchedule.template.name : null,
+        plantilla: userSchedule.template ? userSchedule.template.name + (userSchedule.turnoNombre ? ` · ${userSchedule.turnoNombre}` : '') : null,
         umbralMinutos: opciones.umbralFueraDeHorario ?? null,
       }),
       firstCheckin,

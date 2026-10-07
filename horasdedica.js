@@ -8,6 +8,8 @@ const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const { securityMiddlewares, apiKeyWarning, reportesRateLimiter } = require('./security');
 const { evaluarFueraDeHorario } = require('./motor-laboral/services/fueraDeHorario');
+const { esRotativa } = require('./motor-laboral/services/cicloDeTurnos');
+const turnosRepository = require('./motor-laboral/repositories/turnosRepository');
 const { resolveTenantId, requirePermission, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
 // Auditoria de cargas manuales (horas extra, licencias, exclusiones): quien
 // las creo/modifico/borro y que decian antes. Ver auditLog.js y la migracion
@@ -3079,7 +3081,8 @@ async function attendanceRangeHandler(req, res) {
       entrada: schedule && schedule.timeEntrance,
       salida: schedule && schedule.timeExit,
       cruzaMedianoche: ((schedule && schedule.blocks) || []).some((b) => Number(b.crosses_midnight) === 1),
-      plantilla: schedule && schedule.template ? schedule.template.name : null,
+      // Rotativa: "Sereno 4x1 · Noche" (la plantilla y el turno de ese dia).
+      plantilla: schedule && schedule.template ? schedule.template.name + (schedule.turnoNombre ? ` · ${schedule.turnoNombre}` : '') : null,
       umbralMinutos: umbralFueraDeHorario,
     });
     const personalLeaveLimitValue = await getAppSetting('personalLeaveMonthlyLimitMinutes', tenantId, db);
@@ -3201,6 +3204,10 @@ async function attendanceRangeHandler(req, res) {
       ...Object.values(assignedCalendarRowsByEmployee).flat().map(r => r.id)
     ];
     const blocksByTemplate = await scheduleRepository.getShiftBlocksByTemplate(involvedTemplateIds, db);
+    // Plantillas ROTATIVAS (DISENO_HORARIOS_ROTATIVOS.md): sus ciclos y turnos,
+    // de una sola vez para todo el rango. Sin rotativas, no consulta nada.
+    const datosCiclos = await turnosRepository.cargarCiclos(db,
+      Object.values(assignedCalendarRowsByEmployee).flat().filter(esRotativa).map((r) => r.id));
 
     // Etapa 12/14: el motor nuevo corre para cualquier plantilla en modo
     // 'shadow' (informativo, Legacy sigue siendo el oficial) O 'active'
@@ -3259,6 +3266,9 @@ async function attendanceRangeHandler(req, res) {
     const scheduleSegmentsCache = new WeakMap();
 
     const scheduleFromTemplate = (template, date) => {
+      // Rotativa: el turno del dia del ciclo (la fila trae el "dia 1" de la
+      // asignacion). Semanal: el dia de la semana, como siempre.
+      if (esRotativa(template)) return scheduleRepository.scheduleRotativo(template, date, datosCiclos);
       const dow = scheduleRepository.getLocalDayOfWeek(date);
       const blocks = (blocksByTemplate[template.id] && blocksByTemplate[template.id][dow]) || [];
       return scheduleRepository.buildScheduleFromBlocks(template, blocks, date);
@@ -4032,9 +4042,12 @@ async function attendanceRangeHandler(req, res) {
           // horario (ver resolveOvertimeCutoffMinutes).
           const effectiveCutoffMinutes = overtimeCalc.resolveOvertimeCutoffMinutes(schedule, overtimeSettings.cutoffMinutes);
           const effectiveCapMinutes = overtimeCalc.resolveOvertimeCapMinutes(schedule, overtimeSettings.capMinutes);
+          // Turno de noche: el corte (su salida) es del dia siguiente.
+          const cutoffNextDay = overtimeCalc.corteAlDiaSiguiente(schedule, effectiveCutoffMinutes);
           const overtimeResult = overtimeCalc.resolveDailyOvertime(heInterval, overtimeChecks, {
             cutoffMinutes: effectiveCutoffMinutes,
             capMinutes: effectiveCapMinutes,
+            cutoffNextDay,
             // Solo el corte CARGADO en la plantilla recorta las HE por marcador
             // (ver resolveDailyOvertime).
             explicitCutoffMinutes: schedule && schedule.overtimeCutoffTime ? timeToMinutes(schedule.overtimeCutoffTime) : null
@@ -4192,7 +4205,7 @@ async function attendanceRangeHandler(req, res) {
             const fuente = politicaDelDia.fuente || 'MARCADORES_O_ESTIMADO';
             let candidato = overtimeResult;
             if (fuente === 'MARCADORES' && candidato && candidato.source !== 'marker') candidato = null;
-            if (fuente === 'FICHAJES') candidato = overtimeCalc.computeDailyOvertime(overtimeChecks, { cutoffMinutes: effectiveCutoffMinutes, capMinutes: effectiveCapMinutes });
+            if (fuente === 'FICHAJES') candidato = overtimeCalc.computeDailyOvertime(overtimeChecks, { cutoffMinutes: effectiveCutoffMinutes, capMinutes: effectiveCapMinutes, cutoffNextDay });
             const inicio = candidato && (candidato.markerStart || candidato.start);
             const dow = scheduleRepository.getLocalDayOfWeek(date);
             diasRegimen.push({

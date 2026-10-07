@@ -1,10 +1,28 @@
+const { esRotativa, bloquesDelCiclo } = require('../services/cicloDeTurnos');
+const turnosRepository = require('./turnosRepository');
+
 function getLocalDayOfWeek(dateString) {
   const [year, month, day] = dateString.split('-').map(Number);
   if (![year, month, day].every(Number.isFinite)) return new Date(dateString).getDay();
   return new Date(year, month - 1, day).getDay();
 }
 
-async function buildTemplateSchedule(template, date, db) {
+// Plantilla ROTATIVA (DISENO_HORARIOS_ROTATIVOS.md): los bloques salen del
+// turno que cae ese dia del ciclo, con el mismo formato que los de una
+// semanal. `datosCiclos` = turnosRepository.cargarCiclos(...) ya traido.
+function scheduleRotativo(template, date, datosCiclos) {
+  const { bloques, dia, turno } = bloquesDelCiclo(template, date, datosCiclos);
+  const schedule = buildScheduleFromBlocks(template, bloques, date);
+  schedule.cicloDia = dia;
+  schedule.turnoNombre = turno ? turno.nombre : null;
+  return schedule;
+}
+
+async function buildTemplateSchedule(template, date, db, datosCiclos = null) {
+  if (esRotativa(template)) {
+    const datos = datosCiclos || await turnosRepository.cargarCiclos(db, [template.id]);
+    return scheduleRotativo(template, date, datos);
+  }
   const dayOfWeek = getLocalDayOfWeek(date);
   const [blocks] = await db.query(
     `SELECT * FROM shift_blocks WHERE template_id = ? AND day_of_week = ? AND active = 1 ORDER BY start_time ASC`,
@@ -65,8 +83,11 @@ async function findAssignedScheduleMapForDate(date, employeeIds, db, tenantId) {
   // tenantId null (superadmin, calculo cross-empresa) queda como antes.
   const tenantClause = tenantId != null ? 'AND e.tenant_id = ?' : '';
   const params = tenantId != null ? [safeIds, tenantId, date, date] : [safeIds, date, date];
+  // c.* trae la fecha de inicio y el "dia 1" del ciclo (cycle_start_date, si
+  // ya se corrio la migracion 20261015); t.* va despues y pisa id/tenant_id
+  // con los de la PLANTILLA, que es lo que el resto del codigo espera.
   const [rows] = await db.query(
-    `SELECT e.employee_id AS employeeId, t.*
+    `SELECT e.employee_id AS employeeId, c.*, t.*
      FROM employee_work_calendars c
      JOIN employees e ON e.id = c.employee_id
      JOIN work_schedule_templates t ON t.id = c.template_id
@@ -79,10 +100,11 @@ async function findAssignedScheduleMapForDate(date, employeeIds, db, tenantId) {
     params
   );
 
+  const datosCiclos = await turnosRepository.cargarCiclos(db, rows.filter(esRotativa).map((r) => r.id));
   const map = {};
   for (const row of rows) {
     if (!map[row.employeeId]) {
-      map[row.employeeId] = await buildTemplateSchedule(row, date, db);
+      map[row.employeeId] = await buildTemplateSchedule(row, date, db, datosCiclos);
     }
   }
   return map;
@@ -100,7 +122,7 @@ async function findAssignedCalendarRowsForRange(fromDate, toDate, employeeIds, d
   const tenantClause = tenantId != null ? 'AND e.tenant_id = ?' : '';
   const params = tenantId != null ? [employeeIds, tenantId, toDate, fromDate] : [employeeIds, toDate, fromDate];
   const [rows] = await db.query(
-    `SELECT e.employee_id AS employeeId, c.valid_from, c.valid_to, t.*
+    `SELECT e.employee_id AS employeeId, c.*, t.*
      FROM employee_work_calendars c
      JOIN employees e ON e.id = c.employee_id
      JOIN work_schedule_templates t ON t.id = c.template_id
@@ -127,15 +149,18 @@ async function findTenantTemplate(date, tenantId, db) {
   // ultima activa). Ya no cae en una plantilla "global" (tenant_id 0): una
   // empresa sin plantillas no hereda el horario de otra
   // (AISLAMIENTO_POR_EMPRESA.md, C).
+  // Una plantilla ROTATIVA nunca es la "por defecto": sin una asignacion no
+  // hay "dia 1" desde donde contar el ciclo. Se filtra aca (y no en SQL)
+  // para funcionar igual sin la migracion 20261015.
   const templateQuery = hasTenantId
     ? `SELECT * FROM work_schedule_templates
          WHERE tenant_id = ? AND active = 1
-         ORDER BY is_default DESC, id DESC LIMIT 1`
-    : `SELECT * FROM work_schedule_templates WHERE tenant_id = 0 AND active = 1 ORDER BY is_default DESC, id DESC LIMIT 1`;
+         ORDER BY is_default DESC, id DESC`
+    : `SELECT * FROM work_schedule_templates WHERE tenant_id = 0 AND active = 1 ORDER BY is_default DESC, id DESC`;
   const templateParams = hasTenantId ? [tenantId] : [];
 
   const [templates] = await db.query(templateQuery, templateParams);
-  return templates[0] || null;
+  return templates.find((t) => !esRotativa(t)) || null;
 }
 
 async function findByDate(date, tenantId, db) {
@@ -181,6 +206,7 @@ module.exports = {
   findTenantTemplate,
   getShiftBlocksByTemplate,
   buildScheduleFromBlocks,
+  scheduleRotativo,
   getLocalDayOfWeek
 };
 

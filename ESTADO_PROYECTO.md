@@ -77,7 +77,7 @@
 >
 > | Qué | Para qué |
 > |---|---|
-> | ~~Migraciones~~ | **Ninguna pendiente (2026-10-07).** Verificado en el backup de producción del 07/10: aplicadas de la `20261004` a la `20261013`; la `20261014` la corrió el dueño ese día. |
+> | **Migración `20261015_horarios_rotativos.sql`** | Habilita Turnos y plantillas rotativas. Sin ella todo lo demás sigue igual y esas pantallas avisan "Falta correr la migración 20261015". Es idempotente (se puede correr dos veces). Hasta la `20261014` ya estaban aplicadas (backup del 07/10). |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
 > | Decir cuál de las dos landing usa y dónde está publicada la separada | Hoy hay dos copias |
@@ -195,6 +195,18 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-07 — Horarios rotativos, etapa 1 (publicada; falta la migración
+>   20261015 en producción).** Turnos por empresa con 1 a 4 tramos (turno
+>   partido, noche que termina al día siguiente), plantilla "Ciclo rotativo"
+>   de N días (columna `modo`, no `type`), y "Día 1 del ciclo" al asignar, con
+>   vista previa. Una rotativa produce los mismos bloques del día que una
+>   semanal: tardanza, HE, noche y "fuera de horario" no cambiaron. También se
+>   corrigió el corte de HE estimada en turnos de noche (contaba ~24 h por
+>   noche). Verificado: 948/948; AVP idéntico (0 de 12.906 estados); sin la
+>   migración responde 503 con aviso claro; navegador Chrome y Firefox a 1280
+>   y 390. Con AGUILAR en 4x1 + 2-2-2, "fuera de horario" bajó de 58 a 25
+>   días (abr–oct). Detalle en `DISENO_HORARIOS_ROTATIVOS.md`. Sigue la
+>   etapa 2 (calendario del empleado y cambios por día).
 > - **2026-10-07 — Marcador por número de tarjeta PUBLICADO** (aprobado). El
 >   10 de AVP (USERID 2, tarjeta 10, el reloj manda 10) ahora se reconoce, igual
 >   que las personas; solo si ese número no es el USERID de nadie. HE sin

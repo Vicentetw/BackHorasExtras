@@ -16,6 +16,8 @@ const { computeAttendanceResult } = require('../services/timeClassifier');
 const { DAY_TYPES } = require('../services/dayTypeRuleResolver');
 const templateConfigHistoryRepository = require('../repositories/templateConfigHistoryRepository');
 const { MODULOS, modulosDe, setModulo } = require('../services/modulos');
+const turnosRepository = require('../repositories/turnosRepository');
+const { cruzaMedianoche } = require('../services/cicloDeTurnos');
 
 // Mismo motivo que ya documenta /attendance-range en horasdedica.js:
 // toISOString() usa UTC, y en un servidor con huso horario negativo
@@ -575,6 +577,211 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
+  // ============ TURNOS Y PLANTILLAS ROTATIVAS (DISENO_HORARIOS_ROTATIVOS.md) ============
+  //
+  // Turno = horario con nombre, reutilizable, de UNA empresa: "Mañana 07-15",
+  // "Noche 23-07", "Comercio 07-12 y 16-20" (varios tramos = turno partido).
+  // Plantilla rotativa = ciclo de N dias; cada dia, un turno o "sin turno".
+  // Todo aislado por empresa: un turno o una plantilla de otra empresa
+  // responde como si no existiera (404).
+
+  const FALTA_MIGRACION = 'Falta correr la migración 20261015 (horarios rotativos).';
+  const HORA_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const responderSinMigracion = (res, err) => {
+    if (turnosRepository.SIN_TABLA.has(err.code)) { res.status(503).json({ error: FALTA_MIGRACION }); return true; }
+    return false;
+  };
+  // La empresa sobre la que se trabaja: la propia, o la que eligio el superadmin.
+  const empresaONada = (req, res) => {
+    const t = resolveTenantId(req) ?? (req.body && (req.body.tenant_id ?? req.body.tenantId) != null ? Number(req.body.tenant_id ?? req.body.tenantId) : null);
+    if (t == null) { res.status(400).json({ error: 'Elegí una empresa' }); return null; }
+    return t;
+  };
+
+  // Valida { nombre, color, tramos:[{inicio,fin}] }. Devuelve un mensaje de error o null.
+  function validarTurno(body) {
+    const nombre = String(body.nombre || '').trim();
+    if (!nombre || nombre.length > 60) return 'El nombre es obligatorio (hasta 60 letras)';
+    const tramos = Array.isArray(body.tramos) ? body.tramos : [];
+    if (tramos.length < 1 || tramos.length > 4) return 'Un turno tiene entre 1 y 4 tramos';
+    for (const t of tramos) {
+      if (!HORA_RE.test(String(t.inicio || '')) || !HORA_RE.test(String(t.fin || ''))) return 'Cada tramo necesita hora de inicio y de fin (HH:MM)';
+      if (t.inicio === t.fin) return 'Un tramo no puede empezar y terminar a la misma hora';
+    }
+    // Tramos en orden y sin superponerse (los que cruzan medianoche, al final).
+    for (let i = 1; i < tramos.length; i++) {
+      const ant = tramos[i - 1];
+      if (cruzaMedianoche(ant.inicio, ant.fin)) return 'Solo el último tramo puede terminar al día siguiente';
+      if (tramos[i].inicio < ant.fin) return 'Los tramos tienen que ir en orden y sin superponerse';
+    }
+    if (body.color != null && body.color !== '' && !/^#[0-9a-fA-F]{6}$/.test(String(body.color))) return 'Color inválido';
+    return null;
+  }
+
+  async function guardarTramos(conn, shiftId, tramos) {
+    await conn.query('DELETE FROM shift_definition_tramos WHERE shift_id = ?', [shiftId]);
+    let orden = 1;
+    for (const t of tramos) {
+      await conn.query(
+        'INSERT INTO shift_definition_tramos (shift_id, orden, inicio, fin, cruza_medianoche) VALUES (?, ?, ?, ?, ?)',
+        [shiftId, orden++, t.inicio, t.fin, cruzaMedianoche(t.inicio, t.fin) ? 1 : 0]);
+    }
+  }
+
+  async function turnoPropio(tenantId, id) {
+    const [[t]] = await db.query('SELECT id, tenant_id FROM shift_definitions WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+    return t || null;
+  }
+
+  router.get('/turnos', requirePermission('schedules', 'read'), async (req, res) => {
+    const tenantId = empresaONada(req, res); if (tenantId == null) return;
+    try {
+      res.json(await turnosRepository.listarTurnos(db, tenantId));
+    } catch (err) {
+      if (responderSinMigracion(res, err)) return;
+      console.error('ERROR listando turnos:', err);
+      res.status(500).json({ error: 'Error al leer los turnos' });
+    }
+  });
+
+  router.post('/turnos', requirePermission('schedules', 'create'), async (req, res) => {
+    const tenantId = empresaONada(req, res); if (tenantId == null) return;
+    const error = validarTurno(req.body || {});
+    if (error) return res.status(400).json({ error });
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [r] = await conn.query('INSERT INTO shift_definitions (tenant_id, nombre, color, created_by) VALUES (?, ?, ?, ?)',
+        [tenantId, String(req.body.nombre).trim(), req.body.color || null, req.appUser ? req.appUser.id : null]);
+      await guardarTramos(conn, r.insertId, req.body.tramos);
+      await conn.commit();
+      res.status(201).json({ ok: true, id: r.insertId });
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      if (responderSinMigracion(res, err)) return;
+      if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Ya hay un turno con ese nombre' });
+      console.error('ERROR creando turno:', err);
+      res.status(500).json({ error: 'Error al crear el turno' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.put('/turnos/:id', requirePermission('schedules', 'update'), async (req, res) => {
+    const tenantId = empresaONada(req, res); if (tenantId == null) return;
+    const error = validarTurno(req.body || {});
+    if (error) return res.status(400).json({ error });
+    const conn = await db.getConnection();
+    try {
+      if (!(await turnoPropio(tenantId, req.params.id))) return res.status(404).json({ error: 'Turno no encontrado' });
+      await conn.beginTransaction();
+      await conn.query('UPDATE shift_definitions SET nombre = ?, color = ?, activo = ? WHERE id = ?',
+        [String(req.body.nombre).trim(), req.body.color || null, req.body.activo === false ? 0 : 1, req.params.id]);
+      await guardarTramos(conn, Number(req.params.id), req.body.tramos);
+      await conn.commit();
+      res.json({ ok: true });
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      if (responderSinMigracion(res, err)) return;
+      if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Ya hay un turno con ese nombre' });
+      console.error('ERROR editando turno:', err);
+      res.status(500).json({ error: 'Error al editar el turno' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  router.delete('/turnos/:id', requirePermission('schedules', 'delete'), async (req, res) => {
+    const tenantId = empresaONada(req, res); if (tenantId == null) return;
+    try {
+      if (!(await turnoPropio(tenantId, req.params.id))) return res.status(404).json({ error: 'Turno no encontrado' });
+      // Borrarlo cambiaria en silencio el horario de quien tenga una
+      // rotativa que lo usa: primero hay que sacarlo de esos ciclos.
+      const [usos] = await db.query(
+        `SELECT DISTINCT w.name FROM template_cycle_days d JOIN work_schedule_templates w ON w.id = d.template_id WHERE d.shift_id = ?`,
+        [req.params.id]);
+      if (usos.length) {
+        return res.status(409).json({ error: `No se puede eliminar: lo usa ${usos.map((u) => `"${u.name}"`).join(', ')}. Sacalo de esos ciclos primero.` });
+      }
+      await db.query('DELETE FROM shift_definitions WHERE id = ?', [req.params.id]);
+      res.json({ ok: true });
+    } catch (err) {
+      if (responderSinMigracion(res, err)) return;
+      console.error('ERROR borrando turno:', err);
+      res.status(500).json({ error: 'Error al eliminar el turno' });
+    }
+  });
+
+  // El ciclo de una plantilla rotativa: { modo, largo, dias: [turnoId|null, ...] }
+  router.get('/templates/:id/ciclo', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const t = await plantillaPropia(req, req.params.id);
+      if (!t) return res.status(404).json({ error: 'Plantilla no encontrada' });
+      const [[fila]] = await db.query('SELECT * FROM work_schedule_templates WHERE id = ?', [t.id]);
+      const largo = fila.modo === 'ROTATIVO' ? Number(fila.cycle_length) || 0 : 0;
+      const dias = new Array(largo).fill(null);
+      if (largo) {
+        const [filas] = await db.query('SELECT day_number, shift_id FROM template_cycle_days WHERE template_id = ?', [t.id]);
+        filas.forEach((d) => { if (d.day_number >= 1 && d.day_number <= largo) dias[d.day_number - 1] = d.shift_id; });
+      }
+      res.json({ modo: fila.modo || 'SEMANAL', largo, dias });
+    } catch (err) {
+      if (responderSinMigracion(res, err)) return;
+      console.error('ERROR leyendo ciclo:', err);
+      res.status(500).json({ error: 'Error al leer el ciclo' });
+    }
+  });
+
+  // Guardar el ciclo convierte la plantilla en rotativa. { largo, dias }
+  router.put('/templates/:id/ciclo', requirePermission('schedules', 'update'), async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+      const t = await plantillaPropia(req, req.params.id);
+      if (!t) return res.status(404).json({ error: 'Plantilla no encontrada' });
+      const largo = Number(req.body.largo);
+      const dias = Array.isArray(req.body.dias) ? req.body.dias : [];
+      if (!Number.isInteger(largo) || largo < 2 || largo > 60) return res.status(400).json({ error: 'El ciclo tiene entre 2 y 60 días' });
+      if (dias.length !== largo) return res.status(400).json({ error: 'Falta definir qué pasa cada día del ciclo' });
+      if (!dias.some((d) => d != null)) return res.status(400).json({ error: 'El ciclo necesita al menos un día con turno' });
+      // Los turnos tienen que ser de la MISMA empresa que la plantilla.
+      const usados = [...new Set(dias.filter((d) => d != null).map(Number))];
+      const [propios] = await db.query('SELECT id FROM shift_definitions WHERE tenant_id = ? AND id IN (?)', [t.tenant_id, usados]);
+      if (propios.length !== usados.length) return res.status(400).json({ error: 'Hay un turno que no existe en esta empresa' });
+
+      await conn.beginTransaction();
+      await conn.query("UPDATE work_schedule_templates SET modo = 'ROTATIVO', cycle_length = ? WHERE id = ?", [largo, t.id]);
+      await conn.query('DELETE FROM template_cycle_days WHERE template_id = ?', [t.id]);
+      for (let i = 0; i < largo; i++) {
+        await conn.query('INSERT INTO template_cycle_days (template_id, day_number, shift_id) VALUES (?, ?, ?)',
+          [t.id, i + 1, dias[i] == null ? null : Number(dias[i])]);
+      }
+      await conn.commit();
+      res.json({ ok: true });
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      if (responderSinMigracion(res, err)) return;
+      console.error('ERROR guardando ciclo:', err);
+      res.status(500).json({ error: 'Error al guardar el ciclo' });
+    } finally {
+      conn.release();
+    }
+  });
+
+  // Volver a semanal (sus bloques por dia de la semana siguen ahi).
+  router.delete('/templates/:id/ciclo', requirePermission('schedules', 'update'), async (req, res) => {
+    try {
+      const t = await plantillaPropia(req, req.params.id);
+      if (!t) return res.status(404).json({ error: 'Plantilla no encontrada' });
+      await db.query("UPDATE work_schedule_templates SET modo = 'SEMANAL', cycle_length = NULL WHERE id = ?", [t.id]);
+      await db.query('DELETE FROM template_cycle_days WHERE template_id = ?', [t.id]);
+      res.json({ ok: true });
+    } catch (err) {
+      if (responderSinMigracion(res, err)) return;
+      console.error('ERROR quitando ciclo:', err);
+      res.status(500).json({ error: 'Error al quitar el ciclo' });
+    }
+  });
+
   router.get('/employees', requirePermission('employees', 'read'), async (req, res) => {
     try {
       const { categoryId } = req.query;
@@ -649,6 +856,27 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
+  // "Dia 1" del ciclo de una plantilla rotativa (cycle_start_date). Ausente o
+  // vacio = null (se usa la fecha de inicio de la asignacion); invalido =
+  // undefined (400).
+  function diaUnoDelBody(body) {
+    const v = body.cycle_start_date ?? body.cycleStartDate;
+    if (v === undefined || v === null || v === '') return null;
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? String(v) : undefined;
+  }
+  // Solo se nombra la columna nueva si hace falta: sin "dia 1", la consulta
+  // es la de siempre y funciona aunque la migracion 20261015 no se haya corrido.
+  async function insertarAsignacion({ employeeId, tenantId, templateId, validFrom, validTo, diaUno }) {
+    const [result] = diaUno
+      ? await db.query(
+        `INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to, cycle_start_date)
+         VALUES (?, ?, ?, ?, ?, ?)`, [employeeId, tenantId, templateId, validFrom, validTo || null, diaUno])
+      : await db.query(
+        `INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to)
+         VALUES (?, ?, ?, ?, ?)`, [employeeId, tenantId, templateId, validFrom, validTo || null]);
+    return result;
+  }
+
   // ============ ASIGNACIÓN MASIVA DE HORARIOS ============
 
   /**
@@ -664,6 +892,8 @@ function createMotorLaboralAdminRoutes(db) {
       if (!Array.isArray(employeeIds) || employeeIds.length === 0 || !template_id || !valid_from) {
         return res.status(400).json({ error: 'employeeIds (array), template_id y valid_from son requeridos' });
       }
+      const diaUno = diaUnoDelBody(req.body);
+      if (diaUno === undefined) return res.status(400).json({ error: 'El día 1 del ciclo tiene que ser una fecha (AAAA-MM-DD)' });
 
       const [templateRows] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [template_id]);
       if (templateRows.length === 0) {
@@ -715,17 +945,14 @@ function createMotorLaboralAdminRoutes(db) {
           [valid_from, employeeId, valid_from]
         );
 
-        const [result] = await db.query(
-          `INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to)
-           VALUES (?, ?, ?, ?, ?)`,
-          [employeeId, empTenantId, template_id, valid_from, valid_to || null]
-        );
+        const result = await insertarAsignacion({ employeeId, tenantId: empTenantId, templateId: template_id, validFrom: valid_from, validTo: valid_to, diaUno });
 
         results.assigned.push({ employeeId, calendarId: result.insertId });
       }
 
       res.status(201).json(results);
     } catch (err) {
+      if (err.code === 'ER_BAD_FIELD_ERROR') return res.status(503).json({ error: FALTA_MIGRACION });
       console.error('Motor Laboral admin bulk-assign-calendar error:', err);
       res.status(500).json({ error: 'Error al asignar horarios en bloque' });
     }
@@ -747,7 +974,7 @@ function createMotorLaboralAdminRoutes(db) {
         }
       }
       const [calendars] = await db.query(`
-        SELECT id, employee_id, tenant_id, template_id, valid_from, valid_to, created_at, updated_at
+        SELECT *
         FROM employee_work_calendars
         WHERE employee_id = ?
         ORDER BY valid_from DESC, created_at DESC
@@ -767,6 +994,8 @@ function createMotorLaboralAdminRoutes(db) {
       if (!template_id || !valid_from) {
         return res.status(400).json({ error: 'template_id y valid_from requeridos' });
       }
+      const diaUno = diaUnoDelBody(req.body);
+      if (diaUno === undefined) return res.status(400).json({ error: 'El día 1 del ciclo tiene que ser una fecha (AAAA-MM-DD)' });
 
       const [emp] = await db.query('SELECT id, tenant_id FROM employees WHERE id = ?', [employeeId]);
       if (emp.length === 0) {
@@ -813,11 +1042,7 @@ function createMotorLaboralAdminRoutes(db) {
         [valid_from, employeeId, valid_from]
       );
 
-      const [result] = await db.query(
-        `INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to)
-         VALUES (?, ?, ?, ?, ?)`,
-        [employeeId, empTenantId, template_id, valid_from, valid_to || null]
-      );
+      const result = await insertarAsignacion({ employeeId, tenantId: empTenantId, templateId: template_id, validFrom: valid_from, validTo: valid_to, diaUno });
 
       res.status(201).json({
         id: result.insertId,
@@ -828,6 +1053,7 @@ function createMotorLaboralAdminRoutes(db) {
         valid_to: valid_to || null
       });
     } catch (err) {
+      if (err.code === 'ER_BAD_FIELD_ERROR') return res.status(503).json({ error: FALTA_MIGRACION });
       console.error('Motor Laboral admin save employee calendar error:', err);
       res.status(500).json({ error: 'Error al guardar calendario del empleado' });
     }

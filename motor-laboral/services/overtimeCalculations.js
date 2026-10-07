@@ -75,16 +75,58 @@ function resolveOvertimeCapMinutes(schedule, globalCapMinutes) {
   return globalCapMinutes ?? DEFAULT_CAP_MINUTES;
 }
 
+// Turno de noche (23:00 a 07:00): el corte de HE (su salida, 07:00) cae al
+// DIA SIGUIENTE del que empezo la jornada. Sin esto, el calculo estimado
+// tomaba las 07:00 del mismo dia de la entrada y contaba ~24 horas extra
+// (encontrado al probar horarios rotativos con los fichajes reales de un
+// sereno, 2026-10-07). Solo aplica si la plantilla de ese dia tiene un tramo
+// que cruza la medianoche y el corte es anterior a la entrada: ninguna
+// plantilla diurna cambia.
+function corteAlDiaSiguiente(schedule, cutoffMinutes) {
+  if (!schedule || !schedule.timeEntrance) return false;
+  const cruza = (schedule.blocks || []).some((b) => b.block_type === 'WORK' && Number(b.crosses_midnight) === 1);
+  return cruza && cutoffMinutes <= timeToMinutes(schedule.timeEntrance);
+}
+
+// Version del calculo estimado para un turno que termina al dia siguiente.
+// Las reglas son las mismas, pero sobre el momento real del corte (fecha y
+// hora) en vez de la hora del dia:
+//   - "hubo jornada": algun fichaje antes del corte (en vez de 07 a 14);
+//   - post-corte: fichajes posteriores al corte del dia siguiente;
+//   - sin reingreso claro, la HE arranca en el corte y se marca para revisar.
+function computeNightOvertime(sorted, cutoffMinutes, capMinutes) {
+  const base = sorted[0];
+  const corte = new Date(base.getFullYear(), base.getMonth(), base.getDate() + 1, Math.floor(cutoffMinutes / 60), Math.floor(cutoffMinutes % 60), 0);
+  if (!sorted.some((d) => d < corte)) return null;
+  const postCutoff = sorted.filter((d) => d > corte);
+  const lastCheckin = sorted[sorted.length - 1];
+  let start;
+  let needsVerification;
+  if (postCutoff.length >= 2 && postCutoff[1] !== lastCheckin) {
+    start = postCutoff[1];
+    needsVerification = false;
+  } else {
+    start = corte;
+    needsVerification = true;
+  }
+  const minutes = Math.round((lastCheckin - start) / 60000);
+  if (minutes <= 0) return null;
+  return { needsVerification, start, end: lastCheckin, minutes, cappedMinutes: Math.min(minutes, capMinutes), overCap: minutes > capMinutes };
+}
+
 // checkins: Date[] -- todos los fichajes de UN empleado en UN dia (no hace
 // falta que vengan ordenados). Devuelve null si ese dia no genera hora extra
 // (sin actividad normal, o duracion resultante <= 0), o:
 //   { needsVerification, start, end, minutes, cappedMinutes, overCap }
+// options.cutoffNextDay: el corte es del dia siguiente (turno de noche, ver
+// corteAlDiaSiguiente).
 function computeDailyOvertime(checkins, options = {}) {
   const cutoffMinutes = options.cutoffMinutes ?? DEFAULT_CUTOFF_MINUTES;
   const capMinutes = options.capMinutes ?? DEFAULT_CAP_MINUTES;
 
   if (!checkins || checkins.length === 0) return null;
   const sorted = checkins.slice().sort((a, b) => a - b);
+  if (options.cutoffNextDay) return computeNightOvertime(sorted, cutoffMinutes, capMinutes);
 
   const huboActividadNormal = sorted.some(d => {
     const m = minutesSinceMidnight(d);
@@ -229,5 +271,6 @@ module.exports = {
   computeDailyOvertime,
   resolveDailyOvertime,
   resolveOvertimeCutoffMinutes,
-  resolveOvertimeCapMinutes
+  resolveOvertimeCapMinutes,
+  corteAlDiaSiguiente
 };
