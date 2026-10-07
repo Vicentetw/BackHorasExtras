@@ -16,9 +16,8 @@
 --
 -- Se puede correr mas de una vez: cada paso mira si ya esta hecho.
 -- Solo actua si existe la empresa AVP (id 6, nombre 'avp'); si no, no hace nada.
--- La carga manual sin empresa (ManualEntries id 40, 2 h extra del legajo
--- 2926 del 05/06/2026, "corte de energia") pasa a AVP: decision del dueño
--- (2026-10-06). Produccion tiene una sola empresa, asi que es suya.
+-- Las cargas manuales de horas sin empresa pasan a AVP (decision del dueño,
+-- 2026-10-06): produccion tiene una sola empresa, asi que son suyas.
 -- ============================================================================
 
 SET @avp := (SELECT id FROM tenants WHERE id = 6 AND LOWER(name) = 'avp');
@@ -108,13 +107,11 @@ DELETE FROM vacation_scale WHERE @avp IS NOT NULL AND tenant_id IS NULL;
 -- Restos de importaciones viejas sin empresa (nombres y DNI sin dueño).
 DELETE FROM staging_employees WHERE @avp IS NOT NULL AND tenant_id IS NULL;
 
--- La carga manual huerfana (id 40) pasa a AVP. No se puede deducir la empresa
--- por el empleado (su USERID ya no esta en `users`; por eso la migracion
--- 20260927 la dejo sin empresa), asi que se nombra la fila exacta: id, legajo
--- y que siga sin empresa. Si algo no coincide, no toca nada.
+-- Cargas manuales de horas sin empresa: pasan a AVP. (La migracion 20260927
+-- no pudo deducirles la empresa porque el empleado ya no esta en `users`.)
 UPDATE ManualEntries
 SET tenant_id = @avp
-WHERE @avp IS NOT NULL AND id = 40 AND userId = 2926 AND tenant_id IS NULL;
+WHERE @avp IS NOT NULL AND tenant_id IS NULL;
 
 -- ---------------------------------------------------------------- Control
 -- Lo que deberia quedar sin empresa despues de correr esto: solo el usuario
