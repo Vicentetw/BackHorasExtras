@@ -188,6 +188,7 @@
 > | Seguridad del agente que sube fichajes | `SEGURIDAD_AGENTE.md` |
 > | Seguridad de la web: CORS, cabeceras, CSP, librerías | `SEGURIDAD_WEB.md` |
 > | Licencias largas (gremial, cargo electivo…): análisis y propuesta A–F | `LICENCIAS_LARGAS.md` |
+> | **Horarios rotativos: turnos, plantillas por ciclo, asignación, cambios por día (diseño)** | `DISENO_HORARIOS_ROTATIVOS.md` |
 > | **Aislamiento por empresa: qué es global, qué debería ser propio, plan A–J** | `AISLAMIENTO_POR_EMPRESA.md` |
 > | **Marcadores: salidas particulares y horas extra. Reglas que no se pueden romper y cómo verificarlas** | `MARCADORES_Y_SALIDAS.md` |
 > | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
