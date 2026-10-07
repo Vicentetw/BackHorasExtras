@@ -194,6 +194,11 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-07 — Marcador por número de tarjeta PUBLICADO** (aprobado). El
+>   10 de AVP (USERID 2, tarjeta 10, el reloj manda 10) ahora se reconoce, igual
+>   que las personas; solo si ese número no es el USERID de nadie. HE sin
+>   cambio ene-sep; una salida oficial menos. También: la etiqueta "Repetido"
+>   usa la ventana configurada en Marcadores (antes fija en 20 s). 937/937.
 > - **2026-10-07 — Marcador "nadie más en el medio" PUBLICADO** (rama
 >   `marcador-nadie-en-el-medio` unida a `main`, aprobado por el dueño). El
 >   marcador entre dos lecturas propias es de esa persona si nadie más leyó en

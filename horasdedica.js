@@ -5030,7 +5030,11 @@ async function calcularFichajesDelDia(tenantId, fecha, soloLegajo = null) {
     const empleados = {};
     for (const legajo of legajos) {
       const propios = checkins.filter(c => c.employeeId === legajo).map(c => fmt(c.checktime));
-      empleados[legajo] = tiposDeFichaje.clasificarFichajesDelDia({ fichajes: propios, marcas: marcasPorLegajo.get(legajo) });
+      // "Repetido" con la MISMA ventana de la empresa que usa el motor
+      // (Marcadores > Lectura repetida); antes quedaba fija en 20 s.
+      empleados[legajo] = tiposDeFichaje.clasificarFichajesDelDia({
+        fichajes: propios, marcas: marcasPorLegajo.get(legajo), reboteSegundos: ventanaReboteMs / 1000,
+      });
     }
     return empleados;
 }
