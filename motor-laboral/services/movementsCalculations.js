@@ -97,22 +97,19 @@ const PAUSA_QUE_HACE_LLEGADA_MS = 3 * 60 * 60 * 1000;
 // EL PRINCIPIO
 // ------------
 // Dos lecturas de la misma persona dentro de la ventana de rebote son UNA
-// accion, salvo que entre las dos se haya apretado un marcador y ese
-// marcador este al menos tan cerca de la segunda lectura como de la primera.
-// Eso es una accion nueva y deliberada: apretar el marcador y poner el dedo.
+// accion, salvo que entre las dos se haya apretado un marcador en ese reloj
+// y NADIE MAS haya leido entre el marcador y la segunda lectura. Eso es una
+// accion nueva y deliberada: apretar el marcador y poner el dedo.
 //
 //   - Forma A: la lectura 2 no tiene marcador en el medio -> es rebote, y un
 //     rebote NO cierra lo que la lectura 1 acaba de abrir.
-//   - Forma B: el marcador esta a 6 s de la lectura 1 y a 3 s de la 2 -> es
-//     de la lectura 2, que lo consume.
+//   - Forma B: hay un marcador entre la 1 y la 2 y nadie mas leyo -> es de la
+//     lectura 2, que lo consume (sin importar los segundos: ver el cambio
+//     del 2026-10-07 en marcadorEsDeEstaLectura).
 //
-// El caso SANTIBAÑEZ (18/08/2026) sigue protegido: 13:37:29 ficha, 13:37:34
-// marcador 8, 13:37:41 ficha. El marcador esta a 5 s de la primera y a 7 s
-// de la segunda -> mas cerca de la primera -> la segunda sigue siendo rebote.
-// (Con la ventana de 6 s de AVP, ademas, el marcador ya habria vencido.)
-//
-// En los 50 casos visibles del diagnostico, marcador -> lectura 2 fue de 3 a
-// 6 s y siempre <= lectura 1 -> marcador. Ver DIAGNOSTICO_CAMPANA_REBOTE_DETALLE.sql.
+// Hasta el 2026-10-07 la forma B exigia ademas que el marcador estuviera mas
+// cerca de la 2da lectura (por el caso SANTIBAÑEZ 18/08/2026); se saco
+// porque le hacia perder el 9 al 29 % de quienes empiezan horas extra.
 //
 // DESDE 2026-10-06 ES EL COMPORTAMIENTO DE SIEMPRE (para todas las
 // categorias: particular, oficial, horas extra, campaña)
@@ -128,10 +125,32 @@ const PAUSA_QUE_HACE_LLEGADA_MS = 3 * 60 * 60 * 1000;
 // La ventana (20 s por defecto) es configurable por empresa en Marcadores
 // (`markerBounceSeconds`, se pasa como ownCheckinBounceMs).
 // Se puede apagar pasando `reboteRefinado: false` (solo para comparar).
-function marcadorEsDeEstaLectura(marcador, lecturaAnterior, ahora) {
+//
+// CAMBIO 2026-10-07: "NADIE MAS EN EL MEDIO", NO "MAS CERCA DE LA 2DA"
+// --------------------------------------------------------------------
+// La version anterior pedia que el marcador estuviera mas cerca de la 2da
+// lectura que de la 1ra. Fallaba en el gesto mas comun de AVP para empezar
+// horas extra: fichar la salida, apretar el 9 y volver a fichar. La gente
+// tarda un poco mas en poner el dedo que en apretar la tecla, asi que el
+// marcador queda "mas cerca de la 1ra" y se descartaba. Medido en la copia de
+// produccion (ene-oct 2026): 4.057 veces ese gesto con el 9 dentro de 20 s,
+// y en 1.160 (29 %) se perdia el marcador. Peor: el marcador perdido quedaba
+// suelto y se lo llevaba la PROXIMA persona que fichaba (PERROTTA 2525,
+// 02/10/2026: su salida se tomo como "inicio de horas extra" con el 9 que
+// habia apretado AGOGLIA 3097 25 s antes).
+//
+// El caso SANTIBAÑEZ, que motivo la regla de la distancia, resulto ser un 8
+// apretado POR EL MISMO (nadie mas ficho en el medio; ver CAMPANA.md): no
+// habia forma de distinguirlo por los segundos. La regla nueva mira lo que
+// si distingue "es mio" de "es de otro": si alguien MAS leyo en ese reloj
+// despues del marcador, el marcador era de esa otra persona.
+function marcadorEsDeEstaLectura(marcador, lecturaAnterior, ahora, employeeId) {
   if (!marcador || lecturaAnterior == null) return false;
-  if (marcador.markedAt <= lecturaAnterior) return false;
-  return (ahora - marcador.markedAt) <= (marcador.markedAt - lecturaAnterior);
+  if (marcador.markedAt <= lecturaAnterior || marcador.markedAt > ahora) return false;
+  const lectores = marcador.lectores;
+  if (!lectores) return true;
+  for (const otro of lectores) if (otro !== employeeId) return false;
+  return true;
 }
 
 // ============================================================================
@@ -335,6 +354,9 @@ function detectMovements(checkins, markerMap, options = {}) {
       marcadoresPorReloj.set(claveReloj(row.machineIp), {
         category: marker.category, direction: marker.direction,
         markedAt: row.checktime, userId: row.userId,
+        // Quienes leyeron en este reloj despues de apretarse (sin llevarselo).
+        // Ver marcadorEsDeEstaLectura.
+        lectores: new Set(),
       });
       continue;
     }
@@ -421,7 +443,14 @@ function detectMovements(checkins, markerMap, options = {}) {
     const reglaViejaParaHE = (cat) => llegando && cat === 'HE';
     const marcadorNuevoEnElMedio = reservado != null
       || (reboteRefinado && !(marcadorAplicable && reglaViejaParaHE(marcadorAplicable.category))
-          && marcadorEsDeEstaLectura(marcadorAplicable, previousOwnCheckin, row.checktime));
+          && marcadorEsDeEstaLectura(marcadorAplicable, previousOwnCheckin, row.checktime, row.employeeId));
+    // Esta persona ya leyo en este reloj con el marcador pendiente: si no se
+    // lo lleva ahora, una 2da lectura de OTRA persona ya no puede decir que
+    // "nadie mas leyo en el medio". (Si se lo lleva, el marcador desaparece
+    // y esto no importa.) Se anota aunque no pueda usar la cola (campaña
+    // solo para afectados): igual estuvo frente al reloj.
+    const enEsteReloj = marcadorDelReloj(marcadoresPorReloj, row.machineIp ?? null);
+    if (enEsteReloj && enEsteReloj.marcador.lectores) enEsteReloj.marcador.lectores.add(row.employeeId);
 
     const open = openEvents.get(row.employeeId);
     // Mismo resguardo: una hora extra abierta mientras la persona llegaba no

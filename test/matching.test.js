@@ -48,6 +48,9 @@ test('/api/matching/diagnosis/report: usuarios con fichajes reales aparecen prim
   // Actualizado 2026-09-28: '2837' -> '2454'. El 2837 (CARRO) ya esta
   // vinculado a un empleado, asi que salio de esta lista, que es justo lo
   // que se espera cuando alguien resuelve un vinculo pendiente.
-  assert.equal(top.Badgenumber, '2454', 'el usuario con mas fichajes reales sin vincular');
+  // Actualizado 2026-10-07: '2454' -> '556'. Con la base recargada del
+  // backup de produccion del 07/10, el 2454 (BEHR) ya esta vinculado (lo
+  // vincularon en produccion), asi que salio de la lista. 556 = "NN-556".
+  assert.equal(top.Badgenumber, '556', 'el usuario con mas fichajes reales sin vincular');
   assert.ok(Number(top.checkinCount) >= 15, 'el conteo de fichajes de este usuario no deberia bajar con el tiempo');
 });

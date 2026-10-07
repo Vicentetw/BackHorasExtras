@@ -138,10 +138,38 @@ alguien que fichó en el `.30`. Los fichajes viejos sin reloj guardado no se
 pueden comparar y siguen la regla anterior. Detalle y datos:
 `ANALISIS_MARCADORES_MULTIRELOJ.md`.
 
+### Regla 6 — Marcador entre dos lecturas propias: es tuyo si nadie más leyó (2026-10-07)
+
+El gesto de siempre para empezar horas extra es **fichar la salida, apretar
+el 9 y volver a fichar**, todo en pocos segundos. Las dos lecturas quedan
+dentro de la ventana de "lectura repetida" (20 s), así que el motor tiene que
+decidir si la segunda es un rebote del lector o una acción nueva.
+
+- **Regla:** si entre las dos lecturas se apretó un marcador en ese reloj y
+  **nadie más leyó** entre el marcador y la segunda lectura, el marcador es de
+  esa persona y la segunda lectura lo consume. No importan los segundos.
+- **Antes** se pedía además que el marcador estuviera "más cerca de la
+  segunda lectura" (por el caso SANTIBAÑEZ). Falló en el 29 % de los casos
+  (1.160 de 4.057 con el 9, ene-oct 2026): la gente tarda más en poner el dedo
+  que en apretar la tecla. Y el marcador perdido **se lo llevaba la persona
+  siguiente**. Caso real: PERROTTA 2525, 02/10/2026 — su salida de las
+  13:38:45 quedó como "inicio de horas extra" con el 9 que había apretado
+  AGOGLIA (3097) a las 13:38:20, y su inicio real como "fin".
+- **SANTIBAÑEZ (18/08/2026)** resultó ser un 8 apretado por él mismo (nadie
+  más leyó en el medio): ahora se registra lo que apretó, y si fue un error se
+  corrige con "corregir marcador".
+- **Medido sobre el backup de producción del 07/10 (ene-sep 2026):** +273,6 h
+  de horas extra (+1,4 %), 56 personas suben y **ninguna baja**; serenos (3051,
+  2451, 3056) sin cambio; salidas particulares 2.400 → 2.402 y oficiales
+  2.273 → 2.284 (marcadores 3/4/5/6 recuperados).
+- Tests: `movements-calculations.test.js` ("salida + 9 + dedo", con el reloj
+  real del 02/10; "si OTRA persona leyó después del marcador…").
+
 ### Otras protecciones que ya existen (no duplicarlas)
 
 - **Rebote** (`ownCheckinBounceMs`, 20 s): si la misma persona ficha dos veces
-  seguidas, el segundo fichaje no consume otro marcador.
+  seguidas sin marcador en el medio (o con un marcador que alguien más tuvo
+  enfrente), el segundo fichaje no consume ningún marcador (ver Regla 6).
 - **Marcadores corregidos a mano** (`POST /marker-corrections`): valen igual
   en todas las pantallas.
 

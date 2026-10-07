@@ -33,7 +33,8 @@ after(async () => {
 
 test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async (t) => {
   if (await saltarSinDatosReales(t)) return;
-  const res = await fetch(`${BASE_URL}/attendance-range?from=2026-06-01&to=2026-06-30`, { headers });
+  // ?tenantId=6: ver la nota del 2026-10-07 abajo.
+  const res = await fetch(`${BASE_URL}/attendance-range?from=2026-06-01&to=2026-06-30&tenantId=6`, { headers });
   assert.equal(res.status, 200);
 
   const json = await res.json();
@@ -102,13 +103,27 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   // de la misma persona ya no cierra la hora extra que abrio la primera
   // (ej. legajo 1496, 07/04: 3 h 14 min que contaban 0). Verificado sobre
   // la copia de produccion, empleado por empleado.
-  assert.equal(sumOvertime.toFixed(2), '2814.59', 'suma total de horas extras del mes');
-  assert.equal(withOvertime, 129, 'cantidad de empleados con horas extras > 0');
+  //
+  // Actualizado 2026-10-07: 2814.59 -> 2576.66 y 129 -> 113. NO es un cambio
+  // de logica: la base local de tests se recargo con el backup de produccion
+  // del 07/10. La anterior tenia los fichajes de junio reimportados a mano
+  // el 18/09 (ver arriba) y no coincidia con produccion. Comprobado: la copia
+  // de produccion de septiembre da con el MISMO codigo 2587.27 / 113; la
+  // diferencia de ~10 h son asignaciones de plantilla cargadas despues.
+  // Incluye el cambio del marcador "nadie mas en el medio" (2026-10-07):
+  // con el codigo anterior, sobre estos mismos datos, da 2537.82.
+  // Se pide con ?tenantId=6: desde el aislamiento por empresa, la
+  // configuracion de AVP (corte de HE, limites, campaña) es de la empresa 6.
+  // Los valores de Perrotta (test siguiente) no cambiaron: 40.30 h, 21 dias.
+  assert.equal(sumOvertime.toFixed(2), '2576.66', 'suma total de horas extras del mes');
+  assert.equal(withOvertime, 113, 'cantidad de empleados con horas extras > 0');
 });
 
 test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conocidos', async (t) => {
   if (await saltarSinDatosReales(t)) return;
-  const res = await fetch(`${BASE_URL}/attendance-range?from=2026-06-01&to=2026-06-30`, { headers });
+  // Con la empresa elegida: el limite de salidas particulares (4 h) es una
+  // configuracion de AVP, y sin empresa el superadmin no la ve.
+  const res = await fetch(`${BASE_URL}/attendance-range?from=2026-06-01&to=2026-06-30&tenantId=6`, { headers });
   const json = await res.json();
   const perrotta = json.data.find((e) => String(e.employeeId) === '2525');
 
