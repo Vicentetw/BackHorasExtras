@@ -184,8 +184,11 @@ router.get('/employees/preview/:batchId', requirePermission('employees', 'create
   // en milisegundos -- sin filtrar por tenant_id, alguien que coincidiera
   // (o adivinara) el batchId de otra empresa mientras esta sin confirmar
   // podia ver sus datos (nombre, DNI) antes de que esa empresa los cargue.
+  // Solo los lotes de la propia empresa. Antes tambien entraban los lotes
+  // sin empresa (restos de importaciones viejas, con nombres y DNI), que
+  // veia cualquiera (AISLAMIENTO_POR_EMPRESA.md, I).
   const effectiveTenantId = resolveTenantId(req);
-  const tenantClause = effectiveTenantId !== null ? 'AND (tenant_id IS NULL OR tenant_id = ?)' : '';
+  const tenantClause = effectiveTenantId !== null ? 'AND tenant_id = ?' : '';
   const tenantParams = effectiveTenantId !== null ? [batchId, effectiveTenantId] : [batchId];
 
   const [rows] = await db.query(`
@@ -213,7 +216,7 @@ router.post('/employees/confirm/:batchId', requirePermission('employees', 'creat
     const effectiveTenantId = req.appUser && !req.appUser.isSuperadmin
       ? req.appUser.tenantId
       : (req.body?.tenant_id || null);
-    const stagingTenantClause = effectiveTenantId !== null ? 'AND (tenant_id IS NULL OR tenant_id = ?)' : '';
+    const stagingTenantClause = effectiveTenantId !== null ? 'AND tenant_id = ?' : '';
     const stagingParams = effectiveTenantId !== null ? [batchId, effectiveTenantId] : [batchId];
 
     // Obtener datos del batch

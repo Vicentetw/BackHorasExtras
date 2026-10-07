@@ -1,5 +1,17 @@
 const express = require('express');
-const { resolveTenantId, requirePermission } = require('../appUserMiddleware');
+const { resolveTenantId, resolveTenantForWrite, MENSAJE_ELEGIR_EMPRESA, requirePermission } = require('../appUserMiddleware');
+
+// Escala de vacaciones de la Ley de Contrato de Trabajo (art. 150): la que
+// usa una empresa que todavia no cargo la suya. Antes se usaba una escala
+// "global" de la base, que en realidad era la de AVP (14/21/25/30 dias): una
+// empresa nueva heredaba dias de vacaciones de otra empresa
+// (AISLAMIENTO_POR_EMPRESA.md, F). Cada empresa puede cargar la suya.
+const ESCALA_LCT = [
+  { id: null, min_years: 0, max_years: 5, days: 14 },
+  { id: null, min_years: 5, max_years: 10, days: 21 },
+  { id: null, min_years: 10, max_years: 20, days: 28 },
+  { id: null, min_years: 20, max_years: null, days: 35 }
+];
 
 module.exports = function (db) {
   const router = express.Router();
@@ -37,9 +49,7 @@ module.exports = function (db) {
         [tenantForScale]
       );
       if (scaleRows.length === 0) {
-        [scaleRows] = await db.query(
-          `SELECT min_years, max_years, days FROM vacation_scale WHERE tenant_id IS NULL ORDER BY min_years ASC`
-        );
+        scaleRows = ESCALA_LCT;
       }
 
       const referenceDate = new Date(year, 0, 1); // antiguedad al 1/enero del anio del saldo
@@ -71,14 +81,12 @@ module.exports = function (db) {
           [effectiveTenantId]
         );
         if (rows.length === 0) {
-          [rows] = await db.query(
-            `SELECT id, min_years, max_years, days FROM vacation_scale WHERE tenant_id IS NULL ORDER BY min_years ASC`
-          );
+          // Todavia no cargo la suya: la de la ley, marcada como tal.
+          return res.json({ success: true, scale: ESCALA_LCT, esLaDeLaLey: true });
         }
       } else {
-        [rows] = await db.query(
-          `SELECT id, min_years, max_years, days, tenant_id AS tenantId FROM vacation_scale WHERE tenant_id IS NULL ORDER BY min_years ASC`
-        );
+        // Superadmin sin empresa elegida: no hay escala "de todos".
+        return res.json({ success: true, scale: ESCALA_LCT, esLaDeLaLey: true });
       }
       res.json({ success: true, scale: rows });
     } catch (err) {
@@ -99,7 +107,12 @@ module.exports = function (db) {
         }
       }
 
-      const effectiveTenantId = resolveTenantId(req);
+      // Siempre la escala de UNA empresa: la propia, o la que eligio el
+      // superadmin (ya no se guarda una escala "global").
+      const effectiveTenantId = resolveTenantForWrite(req);
+      if (req.appUser && effectiveTenantId === null) {
+        return res.status(400).json({ success: false, error: MENSAJE_ELEGIR_EMPRESA });
+      }
       const conn = await db.getConnection();
       try {
         await conn.beginTransaction();

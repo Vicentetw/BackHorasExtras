@@ -1,5 +1,5 @@
 const express = require('express');
-const { requirePermission, requireAnyPermission, resolveTenantId } = require('../appUserMiddleware');
+const { requirePermission, requireAnyPermission, resolveTenantId, resolveTenantForWrite, MENSAJE_ELEGIR_EMPRESA } = require('../appUserMiddleware');
 
 // Leer sucursales tambien hace falta desde el dialogo compartido de
 // Ciudades/Sucursales cuando se abre desde Feriados (ciudades es un
@@ -30,9 +30,8 @@ module.exports = function (db) {
         : 'SELECT s.* FROM sucursales s JOIN ciudades c ON c.id = s.ciudad_id WHERE s.active = 1 AND c.active = 1';
       const params = [];
       if (effectiveTenantId !== null) {
-        // tenant_id IS NULL = sucursal global (bajo una ciudad global) --
-        // visible ademas de las propias de la empresa. Mismo criterio que ciudades.
-        sql += ' AND (s.tenant_id = ? OR s.tenant_id IS NULL)';
+        // Solo las sucursales de la empresa (AISLAMIENTO_POR_EMPRESA.md, D).
+        sql += ' AND s.tenant_id = ?';
         params.push(effectiveTenantId);
       }
       if (ciudadId) {
@@ -55,6 +54,13 @@ module.exports = function (db) {
   router.get('/:id/usage', canRead, async (req, res) => {
     try {
       const { id } = req.params;
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null) {
+        const [[existing]] = await db.query('SELECT tenant_id FROM sucursales WHERE id = ?', [id]);
+        if (!existing || existing.tenant_id !== effectiveTenantId) {
+          return res.status(404).json({ success: false, error: 'Sucursal no encontrada' });
+        }
+      }
       const [[{ employees }]] = await db.query('SELECT COUNT(*) AS employees FROM employees WHERE sucursal_id = ?', [id]);
       res.json({ success: true, usage: { employees } });
     } catch (err) {
@@ -63,14 +69,12 @@ module.exports = function (db) {
     }
   });
 
-  // Chequea que la ciudad exista y sea de la empresa de quien pide, O sea
-  // una ciudad global (tenant_id NULL, cargada por un superadmin) -- una
-  // sucursal de una empresa puntual puede vivir bajo una ciudad global sin
-  // problema, no hace falta que la ciudad tambien sea de esa empresa.
+  // Chequea que la ciudad exista y sea de la empresa de la sucursal. Ya no
+  // hay ciudades globales (AISLAMIENTO_POR_EMPRESA.md, D).
   async function findCiudadOrNull(db, ciudadId, effectiveTenantId) {
     const [[row]] = await db.query('SELECT id, tenant_id FROM ciudades WHERE id = ?', [ciudadId]);
     if (!row) return null;
-    if (effectiveTenantId !== null && row.tenant_id !== null && row.tenant_id !== effectiveTenantId) return null;
+    if (effectiveTenantId !== null && row.tenant_id !== effectiveTenantId) return null;
     return row;
   }
 
@@ -88,9 +92,11 @@ module.exports = function (db) {
         return res.status(400).json({ success: false, error: 'ciudad_id es requerido' });
       }
 
-      const tenantId = req.appUser && !req.appUser.isSuperadmin
-        ? req.appUser.tenantId
-        : (req.body.tenant_id ?? req.body.tenantId ?? null);
+      // Siempre de UNA empresa: la propia, o la que eligio el superadmin.
+      const tenantId = resolveTenantForWrite(req);
+      if (req.appUser && tenantId === null) {
+        return res.status(400).json({ success: false, error: MENSAJE_ELEGIR_EMPRESA });
+      }
 
       const ciudad = await findCiudadOrNull(db, resolvedCiudadId, tenantId);
       if (!ciudad) {

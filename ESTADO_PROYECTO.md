@@ -217,8 +217,13 @@
 >   pero: fecha de fin obligatoria, la lista de Licencias no la muestra en los
 >   años del medio (bug), avisos falsos si ficha, infla "Excusado", sin aviso al
 >   vencer. Ver `LICENCIAS_LARGAS.md`.
-> - **2026-10-06 — Aislamiento por empresa: relevamiento y plan A–J, ESPERA
->   APROBACIÓN.** Casi todo lo "global" es dato de AVP (feriados que se aplican
+> - **2026-10-07 — Aislamiento por empresa PUBLICADO.** El dueño corrió la
+>   migración `20261014` en producción (control: todo 0 salvo app_settings = 3,
+>   como se esperaba; 3.037 filas de `staging_employees` sin empresa borradas y
+>   la carga manual id 40 pasó a AVP). Después se unió la rama al `main` del
+>   backend y del frontend. Detalle en `AISLAMIENTO_POR_EMPRESA.md`. Control:
+>   `node scripts/verificar-aislamiento.js` (solo lee; avisa filas sin empresa).
+> - **2026-10-06 — Aislamiento por empresa: relevamiento y plan A–J (aprobado).** Casi todo lo "global" es dato de AVP (feriados que se aplican
 >   pero no se ven, horario 07–13:40, escala de vacaciones, ciudades…), y tres
 >   consultas de `companyschedule` no filtran por empresa. Ver
 >   `AISLAMIENTO_POR_EMPRESA.md`. Nada cambiado.

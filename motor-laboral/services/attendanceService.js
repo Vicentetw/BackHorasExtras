@@ -463,10 +463,11 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
     throw new Error('Fecha inválida');
   }
 
-  const [dayConfig] = await db.query(
-    `SELECT * FROM companyschedule WHERE scheduleDate = ?`,
-    [normalizedDate]
-  );
+  // Solo el horario de la empresa (antes leia el de cualquiera).
+  // AISLAMIENTO_POR_EMPRESA.md, C.
+  const [dayConfig] = tenantId !== undefined && tenantId !== null
+    ? await db.query(`SELECT * FROM companyschedule WHERE scheduleDate = ? AND tenant_id = ?`, [normalizedDate, tenantId])
+    : await db.query(`SELECT * FROM companyschedule WHERE scheduleDate = ?`, [normalizedDate]);
 
   const config = dayConfig[0] || {
     timeEntrance: '07:00:00',
@@ -476,12 +477,16 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
 
   // Bug real (Fase 21, mismo hallazgo que ya se corrigio en holidayRepository
   // para el motor diario): esta consulta nunca filtraba por tenant_id -- una
-  // empresa veia el feriado de otra. tenant_id = ? OR tenant_id IS NULL
-  // preserva el feriado GLOBAL (solo lo carga un superadmin).
+  // empresa veia el feriado de otra.
+  // Aislamiento por empresa (2026-10-06, AISLAMIENTO_POR_EMPRESA.md letra B):
+  // solo los feriados de la empresa. Antes tambien entraban los "globales"
+  // (tenant_id NULL), que en la practica eran feriados de AVP cargados sin
+  // empresa (ej. "Dia de Rawson"): se aplicaban a CUALQUIER empresa y la
+  // pantalla de Feriados ni siquiera los mostraba.
   const holidayParams = [normalizedDate, normalizedDate];
   let holidayTenantClause = '';
   if (tenantId !== undefined && tenantId !== null) {
-    holidayTenantClause = ' AND (tenant_id = ? OR tenant_id IS NULL)';
+    holidayTenantClause = ' AND tenant_id = ?';
     holidayParams.push(tenantId);
   }
   const [holidayRows] = await db.query(

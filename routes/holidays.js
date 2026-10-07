@@ -1,5 +1,5 @@
 const express = require('express');
-const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const { requirePermission, resolveTenantId, resolveTenantForWrite, MENSAJE_ELEGIR_EMPRESA } = require('../appUserMiddleware');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -13,13 +13,12 @@ module.exports = function (db) {
   }
 
   // Mismo criterio que sucursales.js: la ciudad tiene que existir y ser de
-  // la empresa de quien pide, O ser una ciudad global (tenant_id NULL,
-  // cargada por un superadmin) -- un feriado de una empresa puntual puede
-  // acotarse a una ciudad global sin problema.
+  // la empresa del feriado. Ya no hay ciudades globales
+  // (AISLAMIENTO_POR_EMPRESA.md, D).
   async function findCiudadOrNull(ciudadId, effectiveTenantId) {
     const [[row]] = await db.query('SELECT id, tenant_id FROM ciudades WHERE id = ?', [ciudadId]);
     if (!row) return null;
-    if (effectiveTenantId !== null && row.tenant_id !== null && row.tenant_id !== effectiveTenantId) return null;
+    if (effectiveTenantId !== null && row.tenant_id !== effectiveTenantId) return null;
     return row;
   }
 
@@ -137,16 +136,16 @@ module.exports = function (db) {
       }
 
       const year = new Date(date).getFullYear();
-      // Un usuario normal crea siempre para su propia empresa; solo el
-      // superadmin puede crear un feriado global (tenant_id NULL, visible
-      // para todas las empresas) o para una empresa puntual.
-      const tenantId = req.appUser && !req.appUser.isSuperadmin
-        ? req.appUser.tenantId
-        : (req.body.tenant_id ?? req.body.tenantId ?? null);
+      // Siempre de UNA empresa: la propia, o la que eligio el superadmin.
+      // Ya no se crean feriados globales (AISLAMIENTO_POR_EMPRESA.md, B): un
+      // feriado como el Dia del Camino es de AVP, no de todas.
+      const tenantId = resolveTenantForWrite(req);
+      if (req.appUser && tenantId === null) {
+        return res.status(400).json({ success: false, error: MENSAJE_ELEGIR_EMPRESA });
+      }
 
-      const effectiveTenantId = resolveTenantId(req);
       if (ciudadId) {
-        const ciudad = await findCiudadOrNull(ciudadId, effectiveTenantId);
+        const ciudad = await findCiudadOrNull(ciudadId, tenantId);
         if (!ciudad) {
           return res.status(404).json({ success: false, error: 'Ciudad no encontrada' });
         }
@@ -210,7 +209,9 @@ module.exports = function (db) {
       }
 
       if (ciudadId) {
-        const ciudad = await findCiudadOrNull(ciudadId, effectiveTenantId);
+        // La ciudad tiene que ser de la empresa DEL FERIADO (tambien cuando
+        // edita el superadmin).
+        const ciudad = await findCiudadOrNull(ciudadId, existing.tenant_id);
         if (!ciudad) {
           return res.status(404).json({ success: false, error: 'Ciudad no encontrada' });
         }
@@ -291,9 +292,11 @@ module.exports = function (db) {
 
       let imported = 0;
       let skipped = 0;
-      const tenantId = req.appUser && !req.appUser.isSuperadmin
-        ? req.appUser.tenantId
-        : (req.body.tenant_id ?? req.body.tenantId ?? null);
+      // Siempre de UNA empresa (ver CREAR FERIADO).
+      const tenantId = resolveTenantForWrite(req);
+      if (req.appUser && tenantId === null) {
+        return res.status(400).json({ success: false, error: MENSAJE_ELEGIR_EMPRESA });
+      }
 
       for (const h of holidays) {
         if (!h.date || !h.name) {
@@ -303,11 +306,11 @@ module.exports = function (db) {
 
         const year = new Date(h.date).getFullYear();
 
-        // Upsert: actualizar si existe, insertar si no -- acotado al
-        // propio tenant (o a filas globales), para no pisar por error el
-        // feriado de otra empresa que caiga en la misma fecha.
+        // Upsert: actualizar si existe, insertar si no -- acotado SOLO a la
+        // propia empresa. Antes tambien buscaba entre los globales: importar
+        // en una empresa podia MODIFICAR un feriado que veian todas.
         const [existing] = tenantId !== null
-          ? await db.query('SELECT id FROM holidays WHERE date = ? AND (tenant_id = ? OR tenant_id IS NULL)', [h.date, tenantId])
+          ? await db.query('SELECT id FROM holidays WHERE date = ? AND tenant_id = ?', [h.date, tenantId])
           : await db.query('SELECT id FROM holidays WHERE date = ? AND tenant_id IS NULL', [h.date]);
 
         if (existing.length > 0) {

@@ -125,6 +125,8 @@ async function main() {
       console.log(`Se borraron los datos, pero la empresa queda: tiene ${u.n} usuario(s). Borralos en Usuarios y Roles y volvé a correr --borrar.`);
     } else {
       await db.query('DELETE FROM app_settings WHERE tenant_id = ?', [empresa.id]);
+      await db.query('DELETE FROM vacation_scale WHERE tenant_id = ?', [empresa.id]).catch(() => {});
+      await db.query('DELETE FROM payroll_regime_settings WHERE tenant_id = ?', [empresa.id]).catch(() => {});
       await db.query('DELETE FROM tenant_subscriptions WHERE tenant_id = ?', [empresa.id]);
       await db.query('DELETE FROM tenants WHERE id = ?', [empresa.id]);
       console.log('Empresa de demostración borrada del todo.');

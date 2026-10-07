@@ -1,6 +1,7 @@
 const express = require('express');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../../appUserMiddleware');
 const { getAppSetting, setAppSetting } = require('../repositories/appSettingsRepository');
+const { darKitInicial } = require('../services/kitInicialEmpresa');
 const { consultarConRegimeId } = require('../repositories/regimeIdOpcional');
 const { parseList } = require('../services/countryFirewallService');
 const {
@@ -110,6 +111,9 @@ function createMotorLaboralAdminRoutes(db) {
         `INSERT INTO tenants (name, code, timezone) VALUES (?, ?, ?)`,
         [name, code, timezone || 'America/Argentina/Buenos_Aires']
       );
+
+      // Sus propios valores desde el primer dia (ver kitInicialEmpresa.js).
+      await darKitInicial(db, result.insertId);
 
       res.status(201).json({ ok: true, id: result.insertId, name, code, timezone: timezone || 'America/Argentina/Buenos_Aires' });
     } catch (err) {
@@ -253,6 +257,10 @@ function createMotorLaboralAdminRoutes(db) {
           error: `No se puede eliminar: tiene ${employeeCount.c} empleado(s) y ${templateCount.c} plantilla(s) asociadas. Reasignalos primero.`
         });
       }
+      // El kit inicial (kitInicialEmpresa.js) es de la empresa: se va con ella.
+      // vacation_scale tiene FK a tenants; sin esto el borrado fallaria.
+      await db.query('DELETE FROM vacation_scale WHERE tenant_id = ?', [id]);
+      await db.query('DELETE FROM payroll_regime_settings WHERE tenant_id = ?', [id]);
       const [result] = await db.query(`DELETE FROM tenants WHERE id = ?`, [id]);
       res.json({ ok: true, affectedRows: result.affectedRows });
     } catch (err) {

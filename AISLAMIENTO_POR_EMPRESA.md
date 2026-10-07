@@ -1,5 +1,19 @@
 # Aislamiento por empresa — relevamiento y plan (2026-10-06)
 
+> **ESTADO (2026-10-07): A–I PUBLICADOS.** El dueño corrió
+> `migrations/20261014_aislamiento_por_empresa.sql` en producción (control:
+> todo 0 salvo app_settings = 3, lo esperado); después se unieron las ramas
+> `aislamiento-por-empresa` al `main` del backend y del frontend.
+> Verificado en la copia de producción: la migración no deja datos de empresa
+> sin empresa, y AVP da IDÉNTICO antes y
+> después (5.776 filas: Presentismo de 9 meses, 50 calendarios, Salidas,
+> liquidación, vacaciones, configuración), con el código viejo y con el nuevo.
+> Únicas diferencias, buscadas: la pantalla de Feriados ahora MUESTRA el 02/04
+> y el 03/04 (antes se aplicaban sin verse). Suite: 903/903.
+> J (catálogos para copiar) queda para más adelante. Las cargas manuales de
+> horas sin empresa pasan a AVP en esta misma migración (decisión del dueño).
+> Control esperado: todo en 0 salvo app_settings = 3 (los de plataforma).
+>
 > Pedido del dueño: "cada empresa debe tener todo propio" (ej. el 05/10, Día
 > del Camino, es feriado solo para AVP). **Plan propuesto, NO aplicado:**
 > cada letra espera aprobación. Regla: no romper nada de lo que funciona.
@@ -20,7 +34,7 @@ cargó sin empresa (lo cargó el superadmin sin elegir empresa):
 | `payroll_regime_settings` | 1 | Régimen mensual, cortes 1 y 16 | AVP no tiene propio: usa este |
 | `employee_categories` | 1 | "campaña" | De AVP |
 | `staging_employees` | 3.037 | Restos de una importación vieja, sin empresa | Datos personales sin dueño |
-| `ManualEntries` | 1 | Fila sin empresa | Revisar |
+| `ManualEntries` | 1 | Fila sin empresa | Pasa a AVP |
 
 Además, el horario de AVP (07:00 a 13:40, corte 13:40) está **escrito en el
 código** como valor de reserva en unos 12 lugares del backend.
@@ -61,7 +75,7 @@ tocar nada de otra; `test/full-tenant-isolation.test.js` lo verifica.
   tocan empresas existentes.
 - **H.** Sacar el horario de AVP del código: una empresa sin plantilla ve un
   aviso "configurá tu horario", no el horario de AVP.
-- **I.** Limpieza: borrar `staging_employees` sin empresa y revisar la fila
-  huérfana de `ManualEntries`.
+- **I.** Limpieza: borrar `staging_employees` sin empresa y pasar a AVP las
+  cargas manuales sin empresa.
 - **J.** (Después) Catálogos para copiar: feriados nacionales del año y
   plantillas modelo.

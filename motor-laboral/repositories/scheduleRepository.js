@@ -123,12 +123,14 @@ async function findAssignedCalendarRowsForRange(fromDate, toDate, employeeIds, d
 
 async function findTenantTemplate(date, tenantId, db) {
   const hasTenantId = tenantId !== undefined && tenantId !== null;
-  // Prefer tenant-specific default templates when present, then tenant-specific active templates,
-  // then global defaults, then global active templates.
+  // La plantilla por defecto de la empresa (o, si no marco ninguna, la
+  // ultima activa). Ya no cae en una plantilla "global" (tenant_id 0): una
+  // empresa sin plantillas no hereda el horario de otra
+  // (AISLAMIENTO_POR_EMPRESA.md, C).
   const templateQuery = hasTenantId
     ? `SELECT * FROM work_schedule_templates
-         WHERE (tenant_id = ? OR tenant_id = 0) AND active = 1
-         ORDER BY tenant_id DESC, is_default DESC, id DESC LIMIT 1`
+         WHERE tenant_id = ? AND active = 1
+         ORDER BY is_default DESC, id DESC LIMIT 1`
     : `SELECT * FROM work_schedule_templates WHERE tenant_id = 0 AND active = 1 ORDER BY is_default DESC, id DESC LIMIT 1`;
   const templateParams = hasTenantId ? [tenantId] : [];
 
@@ -142,7 +144,11 @@ async function findByDate(date, tenantId, db) {
     return [await buildTemplateSchedule(template, date, db)];
   }
 
-  const [rows] = await db.query(`SELECT * FROM companyschedule WHERE scheduleDate = ?`, [date]);
+  // Solo el horario de la empresa (antes no filtraba: leia el de cualquiera).
+  // AISLAMIENTO_POR_EMPRESA.md, C.
+  const [rows] = tenantId !== undefined && tenantId !== null
+    ? await db.query(`SELECT * FROM companyschedule WHERE scheduleDate = ? AND tenant_id = ?`, [date, tenantId])
+    : await db.query(`SELECT * FROM companyschedule WHERE scheduleDate = ?`, [date]);
   return rows;
 }
 
