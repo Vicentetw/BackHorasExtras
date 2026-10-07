@@ -1,5 +1,21 @@
 const express = require('express');
 const { resolveTenantId, requirePermission } = require('../../appUserMiddleware');
+const { getAppSetting } = require('../repositories/appSettingsRepository');
+
+// Umbral del aviso "Fuera de su horario" de la empresa (Configurar avisos,
+// /config/avisos-asistencia). Default 60 min; null = apagado. Si no se puede
+// leer, no se avisa: un aviso nunca puede romper el informe.
+const UMBRAL_FUERA_DE_HORARIO_DEFAULT = 60;
+async function umbralFueraDeHorario(db, tenantId) {
+  try {
+    const raw = await getAppSetting('avisosAsistencia', tenantId, db);
+    const cfg = raw ? JSON.parse(raw) : {};
+    return cfg.fueraDeHorarioMinutos === undefined ? UMBRAL_FUERA_DE_HORARIO_DEFAULT : cfg.fueraDeHorarioMinutos;
+  } catch (err) {
+    console.error('Aviso fuera de horario: no se pudo leer la configuracion:', err.message);
+    return null;
+  }
+}
 
 function extractTime(datetimeStr) {
   if (!datetimeStr) return null;
@@ -58,7 +74,9 @@ function createMotorLaboralRoutes({ db, attendanceService }) {
         ? Number(req.query.templateId)
         : null;
 
-      const result = await attendanceService.calculateDailyAttendance({ date, tenantId, templateId });
+      const result = await attendanceService.calculateDailyAttendance({
+        date, tenantId, templateId, umbralFueraDeHorario: await umbralFueraDeHorario(db, tenantId),
+      });
 
       res.json(result);
     } catch (err) {

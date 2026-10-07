@@ -106,14 +106,14 @@ test('un dia justificado corta la racha', async () => {
 
 test('umbrales: defaults sensatos, validacion y aislamiento por empresa', async () => {
   const def = await (await fetch(`${BASE_URL}/config/avisos-asistencia`, { headers })).json();
-  assert.deepEqual(def, { faltasSeguidas: 2, faltasSinAvisoPeriodo: null, justificadasPeriodo: null, cupoPorAgotarsePct: 80, licenciaLargaDesde: 60, licenciaPorVencerDias: 30 });
+  assert.deepEqual(def, { faltasSeguidas: 2, faltasSinAvisoPeriodo: null, justificadasPeriodo: null, cupoPorAgotarsePct: 80, licenciaLargaDesde: 60, licenciaPorVencerDias: 30, fueraDeHorarioMinutos: 60 });
 
   assert.equal((await post('/config/avisos-asistencia', { faltasSeguidas: 0 })).status, 400);
   const ok = await post('/config/avisos-asistencia', { faltasSeguidas: 3, faltasSinAvisoPeriodo: 4, justificadasPeriodo: '', cupoPorAgotarsePct: 50 });
   assert.equal(ok.status, 200);
   const guardado = await (await fetch(`${BASE_URL}/config/avisos-asistencia`, { headers })).json();
   // Las claves de licencias no se mandaron: conservan su valor (ver licencias-largas.test.js).
-  assert.deepEqual(guardado, { faltasSeguidas: 3, faltasSinAvisoPeriodo: 4, justificadasPeriodo: null, cupoPorAgotarsePct: 50, licenciaLargaDesde: 60, licenciaPorVencerDias: 30 });
+  assert.deepEqual(guardado, { faltasSeguidas: 3, faltasSinAvisoPeriodo: 4, justificadasPeriodo: null, cupoPorAgotarsePct: 50, licenciaLargaDesde: 60, licenciaPorVencerDias: 30, fueraDeHorarioMinutos: 60 });
 
   const otra = await (await fetch(`${BASE_URL}/config/avisos-asistencia`, { headers: headersOtra })).json();
   assert.equal(otra.faltasSeguidas, 2, 'la otra empresa sigue con los defaults');

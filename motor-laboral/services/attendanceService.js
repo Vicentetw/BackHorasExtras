@@ -9,6 +9,7 @@ const {
   stripOvernightCarryover
 } = require('./attendanceCalculations');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./holidayScope');
+const { evaluarFueraDeHorario } = require('./fueraDeHorario');
 
 function isDefaultWorkday(dateString) {
   const dayOfWeek = getLocalDayOfWeek(dateString);
@@ -108,7 +109,9 @@ function getScheduleEntryOrNull(assignedScheduleMap, tenantScheduleMap, employee
 // -- quienes estan adentro de una campaña ese dia, y quienes vuelven ese dia
 // despues de la hora de corte (campanaService.empleadosEnCampanaElDia).
 // null = la empresa no interpreta campañas (modo 'ignorar'): nada cambia.
-function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents = [], assignedScheduleMapYesterday = null, tenantScheduleMapYesterday = null, campana = null) {
+// opciones.umbralFueraDeHorario: minutos del aviso "Fuera de su horario"
+// (ver fueraDeHorario.js); null/undefined = no se evalua.
+function buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents = [], assignedScheduleMapYesterday = null, tenantScheduleMapYesterday = null, campana = null, opciones = {}) {
   checkins.forEach(c => {
     const entry = usersMap.get(String(c.employeeId));
     if (entry) {
@@ -275,6 +278,20 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
         exitMinutes: userSchedule.timeExit ? timeToMinutes(String(userSchedule.timeExit).substring(0, 5)) : null,
         toleranceMinutes: toleranceMin,
       }),
+      // Aviso, no cambia el estado: los fichajes no coinciden con su
+      // plantilla (rotativo mal cargado, salida al campo de madrugada...).
+      // No aplica al regreso de campaña ni a un inactivo (ese ya tiene su
+      // propio aviso).
+      fueraDeHorario: (status === 'Campaign' || !u.active) ? null : evaluarFueraDeHorario({
+        fichajes: checkinsSorted,
+        esDiaDeTrabajo: !!Number(userSchedule.isWorkDay),
+        esFeriado: isHoliday,
+        entrada: userSchedule.timeEntrance,
+        salida: userSchedule.timeExit,
+        cruzaMedianoche: (userSchedule.blocks || []).some((b) => Number(b.crosses_midnight) === 1),
+        plantilla: userSchedule.template ? userSchedule.template.name : null,
+        umbralMinutos: opciones.umbralFueraDeHorario ?? null,
+      }),
       firstCheckin,
       lastCheckin,
       totalCheckins: checkinsSorted.length,
@@ -314,11 +331,13 @@ function buildSummary(attendance) {
     // dia) -- faltó marcar entrada y/o salida de alguna de sus visitas, pero
     // no de todas (si no, ya cuenta como Absent). Ver evaluateMultiVisitDay.
     partialAbsence: attendance.filter(a => a.status === 'PartialAbsence').length,
+    // Aviso: fichajes que no coinciden con su plantilla (fueraDeHorario.js).
+    fueraDeHorario: attendance.filter(a => a.fueraDeHorario).length,
     total: attendance.length
   };
 }
 
-async function calculateDailyAttendance({ date, tenantId, templateId, repositories }) {
+async function calculateDailyAttendance({ date, tenantId, templateId, repositories, umbralFueraDeHorario = null }) {
   const normalizedDate = normalizeDate(date);
   if (!normalizedDate) {
     throw new Error('Fecha inválida');
@@ -424,7 +443,7 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
     ? await repositories.campana.empleadosEnCampanaElDia(normalizedDate, tenantId)
     : null;
 
-  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana);
+  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana, { umbralFueraDeHorario });
   const summary = buildSummary(attendance);
   const anyMotorSchedule = attendance.some(a => a.schedule.source === 'motor');
   const usedMotorSchedule = schedule.source === 'motor' || anyMotorSchedule;

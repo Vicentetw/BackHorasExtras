@@ -7,6 +7,7 @@ const multer = require('multer');
 // unico uso en este archivo.
 const { parse } = require('csv-parse/sync');
 const { securityMiddlewares, apiKeyWarning, reportesRateLimiter } = require('./security');
+const { evaluarFueraDeHorario } = require('./motor-laboral/services/fueraDeHorario');
 const { resolveTenantId, requirePermission, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
 // Auditoria de cargas manuales (horas extra, licencias, exclusiones): quien
 // las creo/modifico/borro y que decian antes. Ver auditLog.js y la migracion
@@ -3067,6 +3068,20 @@ async function attendanceRangeHandler(req, res) {
     const nextDayAfterRangeStr = formatLocalDate(dayAfterRange);
 
     const tenantId = resolveTenantId(req);
+    // Aviso "Fuera de su horario" (fueraDeHorario.js): umbral de la empresa.
+    // Si no se puede leer, no se avisa: un aviso nunca rompe el informe.
+    const umbralFueraDeHorario = await fetchAvisosAsistencia(tenantId)
+      .then((cfg) => cfg.fueraDeHorarioMinutos)
+      .catch((err) => { console.error('Aviso fuera de horario:', err.message); return null; });
+    const fueraDeHorarioDe = (schedule, checks, esDiaDeTrabajo) => evaluarFueraDeHorario({
+      fichajes: checks,
+      esDiaDeTrabajo,
+      entrada: schedule && schedule.timeEntrance,
+      salida: schedule && schedule.timeExit,
+      cruzaMedianoche: ((schedule && schedule.blocks) || []).some((b) => Number(b.crosses_midnight) === 1),
+      plantilla: schedule && schedule.template ? schedule.template.name : null,
+      umbralMinutos: umbralFueraDeHorario,
+    });
     const personalLeaveLimitValue = await getAppSetting('personalLeaveMonthlyLimitMinutes', tenantId, db);
     const personalLeaveMonthlyLimitMinutes = personalLeaveLimitValue ? Number(personalLeaveLimitValue) : 0;
     const distinctMonthsInRange = new Set(dateRange.map(d => d.slice(0, 7))).size;
@@ -3793,6 +3808,8 @@ async function attendanceRangeHandler(req, res) {
       let late = 0;
       let lateJustified = 0;
       let excused = 0;
+      // Dias con el aviso "Fuera de su horario" (no cambia ningun contador).
+      let fueraDeHorarioDays = 0;
       // Los mismos dias de `excused`, separados por motivo ("Licencia
       // gremial" 22, "Artículo 55" 1...). El total no cambia: es para que el
       // resumen diga POR QUE esta excusado (LICENCIAS_LARGAS.md, letra D).
@@ -3883,6 +3900,10 @@ async function attendanceRangeHandler(req, res) {
           const manualKeyNonWork = u.USERID ? `${u.USERID}_${date}` : null;
           const manualMinutesNonWork = manualKeyNonWork ? (manualMinutesByUserDate.get(manualKeyNonWork) || 0) : 0;
           if (manualMinutesNonWork > 0) overtimeMinutes += manualMinutesNonWork;
+          // Afuera de `if (days)`: el listado mensual (sin detalle) tambien
+          // tiene que contar los dias.
+          const fueraNoLaborable = employeeActivo ? fueraDeHorarioDe(schedule, checks, false) : null;
+          if (fueraNoLaborable) fueraDeHorarioDays++;
           if (days) {
             // Bug real reportado: un fin de semana DENTRO de unas vacaciones
             // (ej. 05/01 a 27/01, un sabado/domingo en el medio) volvia
@@ -3899,6 +3920,7 @@ async function attendanceRangeHandler(req, res) {
             days.push({
               date,
               status: 'NonWorkDay',
+              fueraDeHorario: fueraNoLaborable,
               overtimeManualMinutes: manualMinutesNonWork,
               eventTypeCode: leaveEventNonWork ? (leaveEventNonWork.eventTypeCode || null) : undefined,
               eventTypeDescripcion: leaveEventNonWork ? (leaveEventNonWork.eventTypeDescripcion || null) : undefined,
@@ -4314,6 +4336,9 @@ async function attendanceRangeHandler(req, res) {
             };
           }
 
+          // Afuera de `if (days)`: ver el dia no laborable, arriba.
+          const fueraDelDia = employeeActivo ? fueraDeHorarioDe(schedule, checks, true) : null;
+          if (fueraDelDia) fueraDeHorarioDays++;
           if (days) {
             let status = 'OnTime';
             if (isPartialAbsence) status = 'PartialAbsence';
@@ -4324,6 +4349,7 @@ async function attendanceRangeHandler(req, res) {
             days.push({
               date,
               status,
+              fueraDeHorario: fueraDelDia,
               firstCheckin: extractTime(first),
               lastCheckin: extractTime(last),
               totalCheckins: checks.length,
@@ -4511,6 +4537,8 @@ async function attendanceRangeHandler(req, res) {
         // Dias en que fichó teniendo una licencia cargada -- a revisar, igual
         // que inactiveWarningDays: visible en el listado sin abrir el detalle.
         leaveConflictDays,
+        // Dias con fichajes que no coinciden con su plantilla (aviso).
+        fueraDeHorarioDays,
         // Faltas seguidas sin aviso: la racha mas larga del periodo, y la que
         // sigue abierta al ultimo dia (la que pide actuar YA). Ver
         // rachaFaltas arriba.
@@ -4943,14 +4971,7 @@ app.post('/config/campana-presentismo-modo', requirePermission('schedules', 'upd
 // Un solo pedido para todo el dia (no uno por empleado): la deteccion ya
 // recorre todos los fichajes del dia de una vez, asi que es barato aunque
 // la empresa tenga miles de empleados.
-app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
-  try {
-    const tenantId = resolveTenantId(req);
-    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
-    const fecha = String(req.query.fecha || '');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ error: 'fecha (AAAA-MM-DD) es requerida' });
-    const soloLegajo = req.query.employeeId ? String(req.query.employeeId) : null;
-
+async function calcularFichajesDelDia(tenantId, fecha, soloLegajo = null) {
     const siguiente = nextDayStr(fecha);
     const checkins = await fetchMovementCheckins(fecha, siguiente, tenantId);
     const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
@@ -5011,10 +5032,138 @@ app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), report
       const propios = checkins.filter(c => c.employeeId === legajo).map(c => fmt(c.checktime));
       empleados[legajo] = tiposDeFichaje.clasificarFichajesDelDia({ fichajes: propios, marcas: marcasPorLegajo.get(legajo) });
     }
+    return empleados;
+}
+
+app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const fecha = String(req.query.fecha || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ error: 'fecha (AAAA-MM-DD) es requerida' });
+    const soloLegajo = req.query.employeeId ? String(req.query.employeeId) : null;
+    const empleados = await calcularFichajesDelDia(tenantId, fecha, soloLegajo);
     res.json({ fecha, empleados });
   } catch (err) {
     console.error('ERROR fetching fichajes del dia:', err);
     res.status(500).json({ error: 'Error calculando los tipos de fichaje' });
+  }
+});
+
+// ============================================================================
+// "Ver el reloj": que paso en ese aparato alrededor de un fichaje
+// ============================================================================
+//
+// GET /api/ver-reloj?legajo=2107&en=2026-10-07 05:08:23[&margen=120]
+//
+// Pedido del dueño (2026-10-07): "poder solo VER que ocurrio". Devuelve todas
+// las lecturas de ESE reloj desde `margen` segundos antes hasta `margen`
+// despues (personas, marcadores, numeros que no son de nadie), y para las
+// personas, como las interpreto el sistema: el MISMO calculo que la vista
+// diaria (calcularFichajesDelDia), no uno aparte. SOLO LECTURA.
+//
+// Marcadores: se reconoce el numero tal como llega del reloj, igual que el
+// motor (markerMap por USERID). Si el numero coincide con el NUMERO DE
+// TARJETA de un marcador pero no con su USERID, se muestra igual y se avisa
+// que el sistema no lo esta tomando (caso real: el 10 de AVP, cargado con
+// USERID 2, llega como 10).
+app.get('/api/ver-reloj', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const legajo = String(req.query.legajo || '');
+    const en = String(req.query.en || '');
+    if (!legajo || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(en)) {
+      return res.status(400).json({ error: 'legajo y en (AAAA-MM-DD HH:MM:SS) son requeridos' });
+    }
+    const margen = Math.min(Math.max(Number(req.query.margen) || 120, 10), 600);
+    const fecha = en.slice(0, 10);
+    const centro = new Date(en.replace(' ', 'T')).getTime();
+    const fmt = movementsCalc.fechaHoraLocal;
+    const desde = fmt(new Date(centro - margen * 1000));
+    const hasta = fmt(new Date(centro + margen * 1000 + 1000));
+
+    const lecturasVentana = await fetchMovementCheckins(desde, hasta, tenantId);
+    const propia = lecturasVentana.find((c) => c.employeeId === legajo && fmt(c.checktime) === en);
+    if (!propia) return res.status(404).json({ error: 'No se encontró ese fichaje' });
+    const ip = propia.machineIp ?? null;
+    const delReloj = lecturasVentana.filter((c) => (c.machineIp ?? null) === ip);
+
+    // Marcadores de la empresa (todas las categorias, activos).
+    const [marcadores] = await db.query(
+      'SELECT userId, badgeNumber, category, direction FROM specialusers WHERE tenant_id = ? AND isActive = TRUE AND direction IS NOT NULL',
+      [tenantId]);
+    const porUserId = new Map(marcadores.map((m) => [String(m.userId), m]));
+    const porTarjeta = new Map(marcadores.map((m) => [String(m.badgeNumber), m]));
+    const TEXTO_MARCADOR = {
+      PARTICULAR: { SALIDA: 'Salida particular', REGRESO: 'Regreso particular' },
+      OFICIAL: { SALIDA: 'Salida oficial', REGRESO: 'Regreso oficial' },
+      HE: { SALIDA: 'Inicio de horas extra', REGRESO: 'Fin de horas extra' },
+      CAMPANA: { SALIDA: 'Salida a campaña', REGRESO: 'Regreso de campaña' },
+    };
+
+    // Nombres de las personas que aparecen.
+    const legajos = [...new Set(delReloj.filter((c) => c.employeeId).map((c) => c.employeeId))];
+    const nombres = new Map();
+    if (legajos.length) {
+      const [emps] = await db.query('SELECT employee_id, nombre FROM employees WHERE tenant_id = ? AND employee_id IN (?)', [tenantId, legajos.map(Number)]);
+      emps.forEach((e) => nombres.set(String(e.employee_id), e.nombre));
+    }
+
+    // Interpretacion del sistema, del mismo calculo que la vista diaria.
+    const interpretacion = await calcularFichajesDelDia(tenantId, fecha);
+    const textoDe = (leg, cuando) => {
+      const f = (interpretacion[leg] || []).find((x) => x.en === cuando);
+      if (!f) return null;
+      const tipos = f.tipos.map((t) => t.texto + (t.descartado ? ` (no se cuenta: ${t.descartado})` : ''));
+      return tipos.length ? `${f.base} · ${tipos.join(' + ')}` : f.base;
+    };
+
+    const lecturas = delReloj.map((c) => {
+      const cuando = fmt(c.checktime);
+      const raw = String(c.userId);
+      const base = { en: cuando, hora: cuando.slice(11), segundos: Math.round((c.checktime.getTime() - centro) / 1000) };
+      if (c.employeeId) {
+        return { ...base, tipo: 'persona', legajo: c.employeeId, nombre: nombres.get(c.employeeId) || null,
+          esLaPersona: c.employeeId === legajo, sistema: textoDe(c.employeeId, cuando) };
+      }
+      const m = porUserId.get(raw) || porTarjeta.get(raw);
+      if (m) {
+        return { ...base, tipo: 'marcador', numero: m.badgeNumber, categoria: m.category, direccion: m.direction,
+          texto: (TEXTO_MARCADOR[m.category] || {})[m.direction] || `${m.category} ${m.direction}`,
+          // El motor busca por el numero tal como llega: si solo coincide
+          // con la tarjeta, ese marcador no se esta usando.
+          reconocido: porUserId.has(raw) };
+      }
+      return { ...base, tipo: 'desconocido', numero: raw };
+    });
+
+    // Resumen para la persona: por cada marcador en la ventana, quien fue la
+    // siguiente persona en poner el dedo en ese reloj.
+    const avisos = [];
+    lecturas.forEach((l, i) => {
+      if (l.tipo !== 'marcador') return;
+      const siguiente = lecturas.slice(i + 1).find((x) => x.tipo === 'persona');
+      if (!siguiente) return;
+      const quien = siguiente.esLaPersona ? 'esta persona' : (siguiente.nombre || `legajo ${siguiente.legajo}`);
+      avisos.push(`Después del marcador ${l.numero} (${l.texto}, ${l.hora}) el siguiente en fichar fue ${quien} (${siguiente.hora}, ${siguiente.segundos - l.segundos} s después).`);
+      if (!l.reconocido) avisos.push(`Atención: el marcador ${l.numero} llega del reloj con un número que el sistema no tiene configurado, así que hoy no se toma en cuenta. Revisalo en Marcadores.`);
+    });
+    const otras = lecturas.filter((l) => l.tipo === 'persona' && !l.esLaPersona).length;
+    if (!otras) avisos.unshift('Nadie más usó este reloj en esos minutos.');
+
+    let reloj = { ip, nombre: null };
+    try {
+      const [[r]] = await db.query('SELECT nombre FROM agent_sync_status WHERE tenant_id = ? AND machine_ip = ? LIMIT 1', [tenantId, ip]);
+      if (r) reloj = { ip, nombre: r.nombre || null };
+    } catch (err) {
+      if (err.code !== 'ER_BAD_FIELD_ERROR') throw err; // sin la migracion 20261013: sin nombre
+    }
+
+    res.json({ legajo, en, margen, reloj, lecturas, avisos });
+  } catch (err) {
+    console.error('ERROR ver reloj:', err);
+    res.status(500).json({ error: 'Error leyendo el reloj' });
   }
 });
 
@@ -5035,6 +5184,9 @@ app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), report
 //                          licencias. Ver licenciasLargasRepository.
 //   licenciaPorVencerDias  avisar N dias antes de que venza (default 30).
 //                          Vacio = solo avisar la vencida sin volver a fichar.
+//   fueraDeHorarioMinutos  "Fuera de su horario": fichajes a mas de N minutos
+//                          de su plantilla (default 60). Vacio = apagado. Ver
+//                          motor-laboral/services/fueraDeHorario.js.
 // Vacio (null) en cualquiera = ese aviso apagado. Los avisos solo se
 // MUESTRAN: no cambian ningun numero de Presentismo.
 //
@@ -5048,10 +5200,12 @@ app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), report
 const AVISOS_ASISTENCIA_DEFAULT = {
   faltasSeguidas: 2, faltasSinAvisoPeriodo: null, justificadasPeriodo: null, cupoPorAgotarsePct: 80,
   licenciaLargaDesde: 60, licenciaPorVencerDias: 30,
+  fueraDeHorarioMinutos: 60,
 };
 const AVISOS_ASISTENCIA_RANGOS = {
   faltasSeguidas: [1, 60], faltasSinAvisoPeriodo: [1, 366], justificadasPeriodo: [1, 366], cupoPorAgotarsePct: [1, 100],
   licenciaLargaDesde: [1, 3650], licenciaPorVencerDias: [1, 365],
+  fueraDeHorarioMinutos: [5, 720],
 };
 
 async function fetchAvisosAsistencia(tenantId) {

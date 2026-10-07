@@ -194,6 +194,21 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-07 — "Ver el reloj" y aviso "Fuera de su horario" (publicados).**
+>   (1) Lupa en cada fichaje de Presentismo: muestra todas las lecturas de ese
+>   reloj ±2 min (personas, marcadores, cómo las interpretó el sistema) —
+>   `GET /api/ver-reloj`, solo lectura, usa el MISMO cálculo que la vista
+>   diaria (`calcularFichajesDelDia`). (2) Aviso "Fuera de su horario"
+>   (`motor-laboral/services/fueraDeHorario.js`): fichajes lejos de su
+>   plantilla (no coincide / llegó mucho antes / día sin turno), umbral por
+>   empresa en Configurar avisos (60 min por defecto). Medido ene-sep: ~8
+>   avisos por día hábil; los primeros (IBAÑEZ 142 días, HARO 111…) tienen
+>   una plantilla que no es la suya. No cambia ningún número.
+>   **HALLAZGO, sin tocar (espera decisión):** el marcador 10 (fin de HE) está
+>   cargado con USERID 2 y el reloj lo manda como 10 → el motor NUNCA lo
+>   reconoció (1.251 lecturas solo en septiembre). Las HE igual cierran con la
+>   lectura siguiente; lo que falla es el 10 de los serenos y "gana el
+>   último". "Ver el reloj" lo muestra como "el sistema no lo está tomando".
 > - **2026-10-07 — Auditoría general + 2 arreglos.** (1) Auditoría de seguridad
 >   y QA de las 248 rutas (informe LOCAL `AUDITORIA_2026-10-07.md`, fuera de git
 >   a propósito: el repo es público). Tres fugas entre empresas en
