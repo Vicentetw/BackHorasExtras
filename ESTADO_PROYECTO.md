@@ -195,6 +195,16 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-07 — Tutorial animado de horarios rotativos (publicado, front
+>   `3b32d35`) + plantilla de AGUILAR medida.** Botón "Ver cómo se hace" en
+>   la tarjeta Turnos: 13 pasos con capturas de la empresa DEMO, cursor
+>   animado, zoom en el celular. Probado en Chrome y Firefox, 1280 y 390.
+>   AGUILAR: su régimen real desde el 11/09 es 2-2-2 con 4 francos (10 días,
+>   día 1 = 11/09). Con esa plantilla, del 11/09 al 07/10 los días "fuera de
+>   horario" bajan de 11 a 1. **No se cargó en producción**: no se escribe en
+>   la base de producción, falta la migración 20261015 y la fecha desde la
+>   que rige la decide el dueño. Pasos exactos en
+>   `DISENO_HORARIOS_ROTATIVOS.md`, "AGUILAR hoy".
 > - **2026-10-07 — Horarios rotativos, etapa 1 (publicada; falta la migración
 >   20261015 en producción).** Turnos por empresa con 1 a 4 tramos (turno
 >   partido, noche que termina al día siguiente), plantilla "Ciclo rotativo"

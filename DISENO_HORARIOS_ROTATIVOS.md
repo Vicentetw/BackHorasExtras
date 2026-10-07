@@ -218,6 +218,57 @@ siguiente (`overtimeCalculations.corteAlDiaSiguiente`). Ninguna plantilla de
 producción cruza la medianoche hoy, así que no cambia nada de lo publicado
 (verificado: 0 diferencias en 12.906 estados diarios de AVP).
 
+### AGUILAR hoy (medido 2026-10-07 con sus fichajes reales)
+
+Desde el 11/09 hace un ciclo de **10 días: Mañana, Mañana, Tarde, Tarde,
+Noche, Noche y 4 francos**. Empezó un ciclo el 11/09, el 21/09 y el 01/10, así
+que el **día 1 es el 11/09/2026**. Mientras tanto, en AVP le van cambiando la
+plantilla semanal a mano cada pocos días ("sereno 7 a 15" el 01–02/10, "turno
+de 15 a 23" desde el 03/10).
+
+Cómo cargarla en producción (después de correr la migración 20261015):
+
+1. Turnos: **Mañana** 07:00–15:00, **Tarde** 15:00–23:00, **Noche** 23:00–07:00.
+2. Plantilla nueva **"Sereno 2-2-2"** → Ciclo rotativo → largo **10** → días
+   1–2 Mañana, 3–4 Tarde, 5–6 Noche, 7–10 Sin turno.
+3. Horarios de empleados → AGUILAR (3056) → Asignar horario → "Sereno
+   2-2-2", vigente desde **la fecha que decida el dueño** (ver abajo), día 1
+   **11/09/2026**. Al asignar se cierra sola la asignación abierta anterior
+   ("turno de 15 a 23"), siempre que haya empezado antes de esa fecha.
+
+**Desde qué fecha** la decide el dueño: hacia atrás cambia lo ya calculado
+de esos días (tardanzas, ausencias, horas extra), y si septiembre ya se
+liquidó o cerró no conviene tocarlo. Medido en la copia local del 11/09 al
+07/10:
+
+| | Como está hoy | Con "Sereno 2-2-2" |
+|---|---|---|
+| Días "fuera de horario" | 11 | 1 (18/09: trabajó un franco, cobertura) |
+| Tardanzas | 6 | 1 (04/10 entró 15:15) |
+| Ausentes | 4 | 1 (05/10: no fichó la entrada de noche) |
+
+Lo que queda son excepciones reales. Los cambios puntuales de la etapa 2
+sirven para marcarlas.
+
+## Tutorial animado (frontend)
+
+En Plantillas de horario → tarjeta Turnos → **"Ver cómo se hace"**. Son 13
+pasos con capturas reales que avanzan solas, con un cursor que va al botón o
+campo de cada paso. En el celular hace zoom a esa zona. Si el sistema tiene
+activado "reducir movimiento", no arranca solo (hay botón Reproducir).
+
+- Componente genérico: `src/app/shared/tutorial/tutorial-dialog.ts`. Sirve
+  para otros tutoriales: se le pasan los pasos.
+- Pasos y textos: `src/app/motor-laboral/templates-page/tutorial-rotativa.ts`.
+- Capturas: `public/tutoriales/rotativa/*.webp` (~280 KB en total; se
+  cargan solo al abrir el tutorial).
+- **Siempre de la empresa DEMO** (nombres inventados): el tutorial lo ven
+  todas las empresas.
+- **Cuando cambie la pantalla**, rehacerlas con
+  `scripts/capturar-tutorial-rotativa.js` (en el frontend; los requisitos
+  están en el encabezado). Imprime dónde cae el foco de cada paso: copiarlo a
+  `tutorial-rotativa.ts`.
+
 ## 7. Pantallas
 
 | Pantalla | Qué tiene |
