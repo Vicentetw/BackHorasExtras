@@ -194,6 +194,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-07 — Marcador "nadie más en el medio" PUBLICADO** (rama
+>   `marcador-nadie-en-el-medio` unida a `main`, aprobado por el dueño). El
+>   marcador entre dos lecturas propias es de esa persona si nadie más leyó en
+>   el medio (antes: "más cerca de la 2da", fallaba en el 29 % de los "salida
+>   + 9 + dedo"). +273,6 h HE ene-sep, 56 suben, ninguna baja, serenos igual.
+>   Ver `MARCADORES_Y_SALIDAS.md` Regla 6. Suite 935/935.
 > - **2026-10-07 — "Ver el reloj" y aviso "Fuera de su horario" (publicados).**
 >   (1) Lupa en cada fichaje de Presentismo: muestra todas las lecturas de ese
 >   reloj ±2 min (personas, marcadores, cómo las interpretó el sistema) —

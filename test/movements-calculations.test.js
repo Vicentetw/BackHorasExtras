@@ -161,27 +161,24 @@ test('detectMovements: dentro de la ventana default (30s), el marcador sigue sie
   assert.deepEqual(sinDetalleDeMarcador(openEvents.get('2525')), { category: 'PARTICULAR', timeOut: dt2('13:34:15'), salidaMarkerUserId: 6 });
 });
 
-test('detectMovements: rebote del propio empleado no consume el marcador de OTRO empleado fichado en el medio', () => {
-  // Caso real: SANTIBAÑEZ (18/08/2026) fichó dos veces a 12s de distancia
-  // (13:37:29 y 13:37:41) -- el mismo rebote de lector ya documentado para
-  // marcadores, pero del lado del empleado. En el medio, OTRO empleado
-  // fichó el marcador 8 (CAMPANA/SALIDA) a las 13:37:34. Sin el resguardo,
-  // la segunda lectura de SANTIBAÑEZ "abria" una salida a Campaña que en
-  // realidad era ajena -- aparecia el mismo fichaje como Campaña Y como
-  // Hora Extra en los informes.
+test('detectMovements: si OTRA persona leyo despues del marcador, la 2da lectura propia no se lo lleva', () => {
+  // Lo que protege la regla "nadie mas en el medio" (2026-10-07): 2446 ficha,
+  // se aprieta el 8, OTRA persona (9999) pone el dedo y despues 2446 vuelve a
+  // leer (rebote). El marcador era de 9999, que lo consume; el rebote de 2446
+  // no abre nada.
   const dt2 = (hms) => new Date(`2026-08-18T${hms}`);
   const markers = { 8: { category: 'CAMPANA', direction: 'SALIDA' } };
   const checkins = [
-    { checktime: dt2('13:37:29'), userId: 2446, employeeId: '2446' }, // 1ra lectura, sin marcador previo relevante
-    { checktime: dt2('13:37:34'), userId: 8, employeeId: null },      // marcador de OTRO empleado
-    { checktime: dt2('13:37:41'), userId: 2446, employeeId: '2446' }, // 2da lectura (rebote), 12s despues de la propia
-    { checktime: dt2('16:49:07'), userId: 2446, employeeId: '2446' }  // ultimo fichaje del dia
+    { checktime: dt2('13:37:29'), userId: 2446, employeeId: '2446' },
+    { checktime: dt2('13:37:34'), userId: 8, employeeId: null },
+    { checktime: dt2('13:37:36'), userId: 9999, employeeId: '9999' }, // la que apreto el 8
+    { checktime: dt2('13:37:41'), userId: 2446, employeeId: '2446' }, // rebote de 2446
   ];
 
   const { closedEvents, openEvents, orphanReturns } = detectMovements(checkins, markers);
 
-  assert.equal(closedEvents.length, 0, 'no debe generar una salida a Campaña que en realidad es un rebote');
-  assert.equal(openEvents.size, 0);
+  assert.equal(closedEvents.length, 0);
+  assert.deepEqual([...openEvents.keys()], ['9999'], 'la salida es de quien leyo despues del marcador');
   assert.equal(orphanReturns.length, 0);
 });
 
@@ -270,19 +267,51 @@ test('rebote refinado: forma A (marcador, lectura, lectura) -- el rebote no cier
   assert.equal(closedEvents[0].timeIn.getTime(), new Date('2026-01-09T18:10:00').getTime());
 });
 
-test('rebote refinado: caso SANTIBAÑEZ sigue protegido aun con la ventana default de 30 s', () => {
+test('rebote refinado: caso SANTIBAÑEZ -- el marcador era suyo y se registra (cambio aprobado 2026-10-07)', () => {
   // Datos reales (con reloj): 13:37:29 ficha, 13:37:34 marcador 8, 13:37:41
-  // ficha. El marcador esta a 5 s de la 1ra y a 7 s de la 2da: no es de la 2da.
+  // ficha, y nadie mas leyo en el medio. Antes se descartaba porque el
+  // marcador estaba "mas cerca de la 1ra"; esa regla le hacia perder el 9 al
+  // 29 % de quienes empiezan horas extra. Mirando el reloj completo, el 8 lo
+  // apreto el mismo (por error: todos los demas apretaban el 9). Ahora se
+  // registra lo que apreto; si fue un error, se corrige con "corregir marcador".
   const checkins = [
     lect('2026-08-18T13:37:29', 2446, '2446'),
     lect('2026-08-18T13:37:34', 8, null),
     lect('2026-08-18T13:37:41', 2446, '2446'),
     lect('2026-08-18T16:49:07', 2446, '2446'),
   ];
-  const { closedEvents, openEvents, orphanReturns } = detectMovements(checkins, CAMPANA_MARKERS, { reboteRefinado: true });
-  assert.equal(closedEvents.length, 0);
+  const { closedEvents, openEvents } = detectMovements(checkins, CAMPANA_MARKERS, { reboteRefinado: true });
   assert.equal(openEvents.size, 0);
-  assert.equal(orphanReturns.length, 0);
+  assert.equal(closedEvents.length, 1);
+  assert.equal(closedEvents[0].timeOut.getTime(), new Date('2026-08-18T13:37:41').getTime());
+});
+
+test('salida + 9 + dedo: el marcador es de quien lo apreto, no de la persona siguiente (PERROTTA 2525, 02/10/2026)', () => {
+  // Reloj completo, tal cual esta en Checkins. Cuatro personas hacen lo mismo:
+  // fichan la salida, aprietan el 9 y vuelven a fichar para empezar horas
+  // extra. Con la regla de la distancia (marcador "mas cerca de la 2da"),
+  // AGOGLIA (7 s antes / 9 s despues del 9) y BACHILIERI (3 s / 4 s) perdian
+  // el 9 y se lo llevaba la persona siguiente: la SALIDA de PERROTTA quedaba
+  // como "inicio de horas extra" y su inicio real como "fin".
+  const HE = { 9: { category: 'HE', direction: 'SALIDA' }, 10: { category: 'HE', direction: 'REGRESO' } };
+  const d = (hms) => `2026-10-02T${hms}`;
+  const checkins = [
+    lect(d('06:39:51'), 3097, '3097'), lect(d('06:53:55'), 2525, '2525'), lect(d('06:56:56'), 2110, '2110'), lect(d('07:06:26'), 2488, '2488'),
+    lect(d('13:38:13'), 3097, '3097'), lect(d('13:38:20'), 9, null), lect(d('13:38:29'), 3097, '3097'),
+    lect(d('13:38:45'), 2525, '2525'), lect(d('13:38:48'), 9, null), lect(d('13:38:54'), 2525, '2525'),
+    lect(d('13:39:12'), 2488, '2488'), lect(d('13:39:15'), 9, null), lect(d('13:39:19'), 2488, '2488'),
+    lect(d('13:39:22'), 2110, '2110'), lect(d('13:39:25'), 9, null), lect(d('13:39:28'), 2110, '2110'),
+    lect(d('13:49:45'), 2110, '2110'), lect(d('15:37:42'), 3097, '3097'), lect(d('15:54:45'), 2525, '2525'), lect(d('18:01:23'), 2488, '2488'),
+  ];
+  const { closedEvents, openEvents } = detectMovements(checkins, HE, { maxMarkerGapMs: 25000 });
+  assert.equal(openEvents.size, 0);
+  const porPersona = Object.fromEntries(closedEvents.map((e) => [e.employeeId, [e.timeOut.toTimeString().slice(0, 8), e.timeIn.toTimeString().slice(0, 8)]]));
+  assert.deepEqual(porPersona, {
+    3097: ['13:38:29', '15:37:42'],
+    2525: ['13:38:54', '15:54:45'],
+    2488: ['13:39:19', '18:01:23'],
+    2110: ['13:39:28', '13:49:45'],
+  }, 'cada uno empieza su hora extra en la lectura que sigue a SU 9, y la termina en su salida');
 });
 
 test('rebote refinado: marcador a la misma distancia de las dos lecturas es de la segunda', () => {
