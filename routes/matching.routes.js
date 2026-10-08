@@ -19,6 +19,20 @@ const auditLog = require('../auditLog');
 
 const normalizeValue = (val) => String(val || '').trim().toLowerCase();
 
+// Un usuario del reloj cargado en Marcadores (specialusers) es un marcador,
+// no una persona: no se ofrece para vincular ni se avisa que "ficha sin
+// figurar" (decisión del dueño, 2026-10-08: "si está cargado en marcadores
+// corresponde a marcadores"). Antes solo se descartaban los USERID del 1 al
+// 10, y un marcador con número más grande aparecía como persona. Se compara
+// por USERID y por número de tarjeta, igual que fetchMarkerMap.
+// `alias`: la tabla de usuarios del reloj en la consulta (con USERID,
+// Badgenumber y tenant_id).
+const noEsMarcador = (alias) => `NOT EXISTS (
+  SELECT 1 FROM specialusers s
+   WHERE s.tenant_id = ${alias}.tenant_id
+     AND (s.userId = ${alias}.USERID
+          OR CAST(s.badgeNumber AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(${alias}.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci))`;
+
 const normalizeName = (name) => {
   return String(name || '')
     .normalize('NFKD')
@@ -331,6 +345,12 @@ async function buscarQuienFichaSinFigurar(tenantId, dias = 30) {
       LEFT JOIN employees ei
         ON CAST(TRIM(ei.\`${column}\`) AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(p.USERID AS CHAR) COLLATE utf8mb4_unicode_ci
         AND ei.tenant_id = p.tenant_id
+      -- Marcadores: ni por el número fichado ni por el usuario al que resuelve.
+      WHERE NOT EXISTS (
+        SELECT 1 FROM specialusers s
+         WHERE s.tenant_id = p.tenant_id
+           AND (s.userId = p.USERID OR s.userId = u.USERID
+                OR CAST(s.badgeNumber AS CHAR) COLLATE utf8mb4_unicode_ci = CAST(p.USERID AS CHAR) COLLATE utf8mb4_unicode_ci))
       ORDER BY p.lastPunch DESC
     `, params);
 
@@ -449,8 +469,8 @@ router.get('/', requirePermission('matching', 'read'), async (req, res) => {
 
 /**
  * 🔍 USUARIOS SIN MATCH
- * NOTA: ruta vieja, NO la llama el frontend actual (usa /diagnosis/report)
- * -- se deja filtrada igual por si algo la vuelve a usar.
+ * La usa la columna "Usuarios del reloj sin asociar" de "Asociar a mano"
+ * (Matching). Sin los marcadores (ver noEsMarcador).
  */
 router.get('/unmatched', requirePermission('matching', 'read'), async (req, res) => {
   try {
@@ -477,6 +497,7 @@ router.get('/unmatched', requirePermission('matching', 'read'), async (req, res)
       LEFT JOIN user_employee_map m ON u.USERID = m.USERID AND m.tenant_id = u.tenant_id
       WHERE m.USERID IS NULL
         AND u.USERID > 10
+        AND ${noEsMarcador('u')}
         ${tenantClause}
     `, tenantParams);
 
@@ -736,6 +757,7 @@ router.get('/diagnosis/report', requirePermission('matching', 'read'), async (re
       LEFT JOIN user_employee_map m ON u.USERID = m.USERID AND m.tenant_id = u.tenant_id
       WHERE m.USERID IS NULL
         AND u.USERID > 10
+        AND ${noEsMarcador('u')}
         ${effectiveTenantId !== null ? 'AND u.tenant_id = ?' : ''}
       ORDER BY checkinCount DESC, CAST(u.Badgenumber AS CHAR) COLLATE utf8mb4_unicode_ci
     `, effectiveTenantId !== null ? [effectiveTenantId, effectiveTenantId, effectiveTenantId] : []);
@@ -765,7 +787,7 @@ router.get('/diagnosis/report', requirePermission('matching', 'read'), async (re
     const activeEmployeesTenantClause = effectiveTenantId !== null ? 'AND tenant_id = ?' : '';
     const [stats] = await db.query(`
       SELECT
-        (SELECT COUNT(DISTINCT USERID) FROM users WHERE USERID > 10 ${effectiveTenantId !== null ? 'AND tenant_id = ?' : ''}) as total_users,
+        (SELECT COUNT(DISTINCT u.USERID) FROM users u WHERE u.USERID > 10 AND ${noEsMarcador('u')} ${effectiveTenantId !== null ? 'AND u.tenant_id = ?' : ''}) as total_users,
         (SELECT COUNT(DISTINCT employee_id) FROM user_employee_map ${effectiveTenantId !== null ? 'WHERE tenant_id = ?' : ''}) as matched_count,
         (SELECT COUNT(id) FROM employees WHERE activo = 1 ${activeEmployeesTenantClause}) as total_active_employees
     `, effectiveTenantId !== null ? [effectiveTenantId, effectiveTenantId, effectiveTenantId] : []);
