@@ -197,6 +197,23 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-08 — Revisión de Horarios de empleados (D, E, G, H aprobadas)
+>   + cobertura de guardia retirada.** (D) Ciudad, sucursal y categoría en
+>   bloque pasan a Empleados (filtro "Le falta", contadores que filtran); en
+>   Horarios de empleados ya no se asignan. (E) Historial con dd/mm/aaaa,
+>   "Rige hoy" y lo que otra asignación tapa; al asignar se avisa con qué se
+>   superpone y se ofrece reemplazar (`reemplazar: true`,
+>   `motor-laboral/services/vigenciasHorario.js`; sin la opción, igual que
+>   antes). (G) `scripts/normalizar-asignaciones.js`: borra copias exactas y
+>   recorta cada asignación a los días en que rige, verificando día por día que
+>   nada cambie. En la copia local de AVP: 1.327 → 771 asignaciones, 0
+>   superposiciones, **0 diferencias en 22.466 valores de Presentismo**.
+>   **Falta que el dueño lo corra en producción** (primero sin `--aplicar`, y
+>   con backup). (H) Convenio: qué es y dónde se crea, columna en la lista,
+>   encuadre en bloque. Cobertura de guardia: el diálogo estaba en blanco y,
+>   probada con casos, le cerraba el horario permanente a quien cubría, dejaba
+>   ausente al cubierto y el "mutuo" no intercambiaba; se retiró — se
+>   resuelve con cambios por día (etapa 2 de rotativos). 964/964.
 > - **2026-10-07 — Inicio = guía de puesta en marcha con avance real +
 >   tutoriales de relojes y Matching (aprobado A–E por el dueño).** Inicio
 >   muestra "Puesta en marcha: x de 7 pasos", el próximo paso destacado, el

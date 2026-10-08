@@ -18,6 +18,7 @@ const templateConfigHistoryRepository = require('../repositories/templateConfigH
 const { MODULOS, modulosDe, setModulo } = require('../services/modulos');
 const turnosRepository = require('../repositories/turnosRepository');
 const { cruzaMedianoche } = require('../services/cicloDeTurnos');
+const { aplicarReemplazo } = require('../services/vigenciasHorario');
 
 // Mismo motivo que ya documenta /attendance-range en horasdedica.js:
 // toISOString() usa UTC, y en un servidor con huso horario negativo
@@ -864,6 +865,18 @@ function createMotorLaboralAdminRoutes(db) {
     if (v === undefined || v === null || v === '') return null;
     return /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? String(v) : undefined;
   }
+  // "Reemplazar" (opción al asignar, `reemplazar: true`): la nueva asignación
+  // pasa a ser la única en sus fechas -- las que se superponen se borran,
+  // acortan, corren o parten (motor-laboral/services/vigenciasHorario.js).
+  // Sin la opción, todo sigue como siempre (solo se cierra la abierta
+  // anterior). Pedido real: asignar algo "desde el 01/01" a alguien que ya
+  // tenía otra plantilla "desde el 29/09" no cambiaba nada del 29/09 en
+  // adelante, sin ningún aviso, y dejaba superposiciones (2.114 en AVP).
+  async function reemplazarSuperpuestas(employeeId, desde, hasta) {
+    const [filas] = await db.query('SELECT * FROM employee_work_calendars WHERE employee_id = ?', [employeeId]);
+    return (await aplicarReemplazo(db, filas, desde, hasta || null)).length;
+  }
+
   // Solo se nombra la columna nueva si hace falta: sin "dia 1", la consulta
   // es la de siempre y funciona aunque la migracion 20261015 no se haya corrido.
   async function insertarAsignacion({ employeeId, tenantId, templateId, validFrom, validTo, diaUno }) {
@@ -936,6 +949,7 @@ function createMotorLaboralAdminRoutes(db) {
           await db.query('UPDATE employees SET tenant_id = ? WHERE id = ?', [templateTenantId, employeeId]);
         }
 
+        const reemplazadas = req.body.reemplazar === true ? await reemplazarSuperpuestas(employeeId, valid_from, valid_to) : 0;
         // Cerrar cualquier asignación abierta anterior (valid_to IS NULL) justo
         // antes de que empiece la nueva, para no dejar rangos superpuestos.
         await db.query(
@@ -947,7 +961,7 @@ function createMotorLaboralAdminRoutes(db) {
 
         const result = await insertarAsignacion({ employeeId, tenantId: empTenantId, templateId: template_id, validFrom: valid_from, validTo: valid_to, diaUno });
 
-        results.assigned.push({ employeeId, calendarId: result.insertId });
+        results.assigned.push({ employeeId, calendarId: result.insertId, reemplazadas });
       }
 
       res.status(201).json(results);
@@ -1032,6 +1046,7 @@ function createMotorLaboralAdminRoutes(db) {
         await db.query('UPDATE employees SET tenant_id = ? WHERE id = ?', [templateTenantId, employeeId]);
       }
 
+      const reemplazadas = req.body.reemplazar === true ? await reemplazarSuperpuestas(employeeId, valid_from, valid_to) : 0;
       // Mismo criterio que bulk-assign-calendar (antes solo lo hacia esa
       // ruta, no esta -- inconsistencia real: asignar de a uno dejaba dos
       // asignaciones "abiertas" (valid_to NULL) superpuestas).
@@ -1050,7 +1065,8 @@ function createMotorLaboralAdminRoutes(db) {
         tenant_id: empTenantId,
         template_id,
         valid_from,
-        valid_to: valid_to || null
+        valid_to: valid_to || null,
+        reemplazadas
       });
     } catch (err) {
       if (err.code === 'ER_BAD_FIELD_ERROR') return res.status(503).json({ error: FALTA_MIGRACION });
@@ -1474,6 +1490,68 @@ function createMotorLaboralAdminRoutes(db) {
     } catch (err) {
       console.error('Motor Laboral admin save convention-assignment error:', err);
       res.status(500).json({ error: 'Error al guardar encuadramiento del empleado' });
+    }
+  });
+
+  // Convenio vigente HOY de cada empleado de la empresa: la columna
+  // "Convenio" de Horarios de empleados (sin pedir uno por uno).
+  router.get('/convention-assignments/vigentes', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const tenantId = resolveTenantId(req);
+      if (tenantId == null) return res.json([]);
+      const [rows] = await consultarConRegimeId(db,
+        `SELECT employee_id, convention_id, regime_id, valid_from
+           FROM employee_convention_assignments
+          WHERE tenant_id = ? AND valid_from <= CURDATE() AND (valid_to IS NULL OR valid_to >= CURDATE())
+          ORDER BY valid_from DESC`, [tenantId]);
+      // Si hubiera dos vigentes, gana la que empezó más tarde (misma regla que el cálculo).
+      const porEmpleado = new Map();
+      for (const r of rows) if (!porEmpleado.has(r.employee_id)) porEmpleado.set(r.employee_id, r);
+      res.json([...porEmpleado.values()]);
+    } catch (err) {
+      console.error('Motor Laboral admin convenios vigentes error:', err);
+      res.status(500).json({ error: 'Error al leer los convenios vigentes' });
+    }
+  });
+
+  // Encuadrar a varios empleados en un convenio de una vez (antes solo de a
+  // uno, desde el detalle). Mismas reglas que el alta individual: el
+  // convenio y los empleados tienen que ser de la misma empresa, y se cierra
+  // el encuadramiento abierto anterior de cada uno.
+  router.post('/employees/bulk-convention-assignments', requirePermission('schedules', 'update'), async (req, res) => {
+    const { employeeIds, convention_id, valid_from } = req.body || {};
+    const regime_id = req.body?.regime_id || null;
+    if (!Array.isArray(employeeIds) || !employeeIds.length || !convention_id || !valid_from) {
+      return res.status(400).json({ error: 'employeeIds, convention_id y valid_from son requeridos' });
+    }
+    try {
+      const [[convention]] = await db.query('SELECT tenant_id FROM labor_conventions WHERE id = ?', [convention_id]);
+      if (!convention) return res.status(404).json({ error: 'Convenio no encontrado' });
+      const regimeError = await regimenDelConvenio(regime_id, convention_id);
+      if (regimeError) return res.status(400).json({ error: regimeError });
+      const effectiveTenantId = resolveTenantId(req);
+      if (effectiveTenantId !== null && convention.tenant_id !== effectiveTenantId) return res.status(404).json({ error: 'Convenio no encontrado' });
+      const results = { assigned: [], skipped: [] };
+      for (const employeeId of employeeIds) {
+        const [[emp]] = await db.query('SELECT id, tenant_id FROM employees WHERE id = ?', [employeeId]);
+        if (!emp || emp.tenant_id !== convention.tenant_id) {
+          results.skipped.push({ employeeId, reason: 'Empleado no encontrado' });
+          continue;
+        }
+        await db.query(
+          `UPDATE employee_convention_assignments SET valid_to = DATE_SUB(?, INTERVAL 1 DAY)
+            WHERE employee_id = ? AND valid_to IS NULL AND valid_from < ?`, [valid_from, employeeId, valid_from]);
+        const [r] = await db.query(
+          regime_id == null
+            ? 'INSERT INTO employee_convention_assignments (employee_id, tenant_id, convention_id, valid_from) VALUES (?, ?, ?, ?)'
+            : 'INSERT INTO employee_convention_assignments (employee_id, tenant_id, convention_id, valid_from, regime_id) VALUES (?, ?, ?, ?, ?)',
+          [employeeId, emp.tenant_id, convention_id, valid_from, ...(regime_id == null ? [] : [regime_id])]);
+        results.assigned.push({ employeeId, id: r.insertId });
+      }
+      res.status(201).json(results);
+    } catch (err) {
+      console.error('Motor Laboral admin bulk convention-assignments error:', err);
+      res.status(500).json({ error: 'Error al encuadrar en bloque' });
     }
   });
 
