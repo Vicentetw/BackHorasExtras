@@ -189,12 +189,33 @@
 > | Seguridad de la web: CORS, cabeceras, CSP, librerías | `SEGURIDAD_WEB.md` |
 > | Licencias largas (gremial, cargo electivo…): análisis y propuesta A–F | `LICENCIAS_LARGAS.md` |
 > | **Horarios rotativos: turnos, plantillas por ciclo, asignación, cambios por día (diseño)** | `DISENO_HORARIOS_ROTATIVOS.md` |
+> | **Tutoriales animados: cómo están hechos, cómo rehacer las capturas y cómo hacer uno nuevo** | `scripts/tutoriales/LEEME.md` (en el repo del FRONTEND) |
+> | Guía de puesta en marcha (Inicio): qué detecta cada paso | `routes/puestaEnMarcha.js` (comentarios) |
 > | **Aislamiento por empresa: qué es global, qué debería ser propio, plan A–J** | `AISLAMIENTO_POR_EMPRESA.md` |
 > | **Marcadores: salidas particulares y horas extra. Reglas que no se pueden romper y cómo verificarlas** | `MARCADORES_Y_SALIDAS.md` |
 > | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-07 — Inicio = guía de puesta en marcha con avance real +
+>   tutoriales de relojes y Matching (aprobado A–E por el dueño).** Inicio
+>   muestra "Puesta en marcha: x de 7 pasos", el próximo paso destacado, el
+>   estado de cada paso con los datos de la empresa (`GET
+>   /api/puesta-en-marcha`, `routes/puestaEnMarcha.js`, solo lectura) y tildes
+>   manuales para lo que no se puede detectar (feriados, motivos, "no uso
+>   marcadores", "no necesito convenios"; se guardan en `app_settings`, sin
+>   migración). Con todo hecho, la guía se achica. El primer paso ahora es
+>   **sincronizar los relojes con el programa de la PC** (pedido del dueño: no
+>   hace falta subir archivos; subirlos a mano queda como alternativa chica).
+>   "Sin vincular" usa EL MISMO cálculo que el aviso de Matching
+>   (`buscarQuienFichaSinFigurar`, extraído de `/punching-not-listed` sin
+>   cambiarlo). Tutoriales nuevos: relojes (capturas reales de la ventana del
+>   programa, corrido sin servidor) y Matching. Cómo se hacen:
+>   `scripts/tutoriales/LEEME.md` del frontend. 952/952; Chrome y Firefox, 1280
+>   y 390. **Pendiente F (preguntar):** el aviso de Matching solo descarta los
+>   números 1 a 10 como "no personas"; un marcador con número más grande (pasa
+>   en la empresa demo, no en AVP) aparece como persona que ficha sin estar en
+>   la lista, y también en "Asociar a mano".
 > - **2026-10-07 — Tutorial animado de horarios rotativos (publicado, front
 >   `3b32d35`) + plantilla de AGUILAR medida.** Botón "Ver cómo se hace" en
 >   la tarjeta Turnos: 13 pasos con capturas de la empresa DEMO, cursor

@@ -279,10 +279,20 @@ router.put('/identity-field', requirePermission('matching', 'create'), async (re
  */
 router.get('/punching-not-listed', requirePermission('matching', 'read'), async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
+    const dias = Math.min(365, Math.max(1, Number(req.query.dias) || 30));
+    res.json(await buscarQuienFichaSinFigurar(resolveTenantId(req), dias));
+  } catch (err) {
+    console.error('ERROR buscando quien ficha sin estar en la lista:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// El calculo de arriba, como funcion: lo usa tambien la guia de puesta en
+// marcha (routes/puestaEnMarcha.js), para que Inicio y Matching digan
+// siempre el mismo numero.
+async function buscarQuienFichaSinFigurar(tenantId, dias = 30) {
     const identityField = await getIdentityField(tenantId);
     const column = identityColumn(identityField);
-    const dias = Math.min(365, Math.max(1, Number(req.query.dias) || 30));
 
     const tenantClause = tenantId !== null ? 'AND c.tenant_id = ?' : '';
     const params = [dias];
@@ -361,17 +371,13 @@ router.get('/punching-not-listed', requirePermission('matching', 'read'), async 
       });
     }
 
-    res.json({
+    return {
       dias,
       identityField,
       count: avisos.length,
       items: avisos
-    });
-  } catch (err) {
-    console.error('ERROR buscando quien ficha sin estar en la lista:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+    };
+}
 
 /**
  * ✅ ACTIVAR / MOSTRAR a alguien que ficha y no estaba en la lista
@@ -810,3 +816,4 @@ router.post('/predict', requirePermission('matching', 'read'), async (req, res) 
 });
 
 module.exports = router;
+module.exports.buscarQuienFichaSinFigurar = buscarQuienFichaSinFigurar;
