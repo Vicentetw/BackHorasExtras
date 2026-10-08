@@ -96,6 +96,49 @@ module.exports = function (db) {
   });
 
   // ==========================
+  // 3b. PLANTILLA Y CONVENIO SUGERIDOS (migración 20261016)
+  // ==========================
+  // Solo sugerencias: completan el alta de un empleado de esta categoría y
+  // "aplicar a todos los de la categoría". No cambian ningún cálculo. Tienen
+  // que ser de la misma empresa que la categoría; null = sin sugerencia.
+  router.put('/:id/sugerencias', requirePermission('employees', 'update'), async (req, res) => {
+    const id = Number(req.params.id);
+    const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+    const plantilla = num(req.body?.plantilla_sugerida_id);
+    const convenio = num(req.body?.convenio_sugerido_id);
+    const regimen = convenio == null ? null : num(req.body?.regimen_sugerido_id);
+    try {
+      const [[cat]] = await db.query('SELECT id, tenant_id FROM employee_categories WHERE id = ?', [id]);
+      const effectiveTenantId = resolveTenantId(req);
+      if (!cat || (effectiveTenantId !== null && cat.tenant_id !== effectiveTenantId)) {
+        return res.status(404).json({ success: false, error: 'Categoría no encontrada' });
+      }
+      if (plantilla != null) {
+        const [[t]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [plantilla]);
+        if (!t || t.tenant_id !== cat.tenant_id) return res.status(400).json({ success: false, error: 'La plantilla no es de esta empresa' });
+      }
+      if (convenio != null) {
+        const [[c]] = await db.query('SELECT tenant_id FROM labor_conventions WHERE id = ?', [convenio]);
+        if (!c || c.tenant_id !== cat.tenant_id) return res.status(400).json({ success: false, error: 'El convenio no es de esta empresa' });
+      }
+      if (regimen != null) {
+        const [[r]] = await db.query('SELECT convention_id FROM labor_convention_regimes WHERE id = ?', [regimen]);
+        if (!r || r.convention_id !== convenio) return res.status(400).json({ success: false, error: 'El régimen no es de ese convenio' });
+      }
+      await db.query(
+        'UPDATE employee_categories SET plantilla_sugerida_id = ?, convenio_sugerido_id = ?, regimen_sugerido_id = ? WHERE id = ?',
+        [plantilla, convenio, regimen, id]);
+      res.json({ success: true });
+    } catch (err) {
+      if (err.code === 'ER_BAD_FIELD_ERROR') {
+        return res.status(503).json({ success: false, error: 'Falta correr la migración 20261016 (sugerencias por categoría).' });
+      }
+      console.error('ERROR saving category suggestions:', err);
+      res.status(500).json({ success: false, error: 'Error al guardar las sugerencias' });
+    }
+  });
+
+  // ==========================
   // 4. DESACTIVAR CATEGORÍA (soft delete, no rompe empleados ya asignados)
   // ==========================
   router.delete('/:id', requirePermission('employees', 'delete'), async (req, res) => {

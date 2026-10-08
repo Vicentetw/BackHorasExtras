@@ -254,6 +254,10 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       campaignCountsAs: status === 'Campaign' ? campana.modo : undefined,
       campaignMoment: esRegresoDeCampana ? 'regreso' : undefined,
       inactiveWarning,
+      // Si la persona está activa. El estado no alcanza: un inactivo un
+      // domingo figura "NonWorkDay", no "Inactive". Lo usa el desglose de
+      // buildSummary y el "ocultar inactivos" de Presentismo.
+      activo: !!u.active,
       // Pedido real: alguien con una licencia cargada (vacaciones, enfermedad,
       // comision...) que igual ficho. El fichaje es un hecho y manda: el dia
       // sigue siendo presente/tarde como siempre. Pero una de las dos cosas
@@ -333,7 +337,38 @@ function buildSummary(attendance) {
     partialAbsence: attendance.filter(a => a.status === 'PartialAbsence').length,
     // Aviso: fichajes que no coinciden con su plantilla (fueraDeHorario.js).
     fueraDeHorario: attendance.filter(a => a.fueraDeHorario).length,
-    total: attendance.length
+    total: attendance.length,
+    desglose: desgloseDelDia(attendance)
+  };
+}
+
+// Totales que SUMAN (pedido del dueño, 2026-10-08: "que concuerde la
+// sumatoria"). Los campos de arriba quedan como estaban (los usan otras
+// partes, ej. la comparación con el motor viejo), pero no particionan: el
+// total incluía a los inactivos, "excused" incluye la campaña contada como
+// excusado, y "fueraDeHorario" es un aviso que se superpone con los demás.
+// Acá: solo ACTIVOS, cada uno en exactamente un grupo, y
+//   total = aTiempo + tarde + tardeJustificada + ausente + ausenciaParcial
+//         + excusado + campana + feriado + noLaborable.
+// Los inactivos y "fuera de horario" van aparte, como avisos.
+function desgloseDelDia(attendance) {
+  const activos = attendance.filter(a => a.activo !== false);
+  const de = (...estados) => activos.filter(a => estados.includes(a.status)).length;
+  return {
+    total: activos.length,
+    aTiempo: de('OnTime'),
+    tarde: de('Late'),
+    tardeJustificada: de('LateJustified'),
+    ausente: de('Absent'),
+    ausenciaParcial: de('PartialAbsence'),
+    excusado: de('Excused'),
+    campana: de('Campaign'),
+    feriado: de('WorkedHoliday', 'HolidayAbsent'),
+    noLaborable: de('NonWorkDay'),
+    // Avisos, no suman:
+    fueraDeHorario: activos.filter(a => a.fueraDeHorario).length,
+    inactivos: attendance.length - activos.length,
+    inactivosQueFicharon: attendance.filter(a => a.activo === false && a.totalCheckins > 0).length
   };
 }
 
@@ -661,5 +696,6 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
 
 module.exports = {
   calculateDailyAttendance,
-  calculateLegacyAttendance
+  calculateLegacyAttendance,
+  desgloseDelDia
 };

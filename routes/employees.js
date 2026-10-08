@@ -341,11 +341,23 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
       throw errMail;
     }
 
+    // Bug real (encontrado en QA, 2026-10-08): el alta ignoraba la categoría
+    // elegida en el formulario -- el empleado quedaba "sin categoría" aunque
+    // se la hubiera puesto (la edición sí la guardaba). Tiene que ser de la
+    // misma empresa.
+    const categoryId = req.body.category_id ? Number(req.body.category_id) : null;
+    if (categoryId) {
+      const [[cat]] = await db.query('SELECT tenant_id FROM employee_categories WHERE id = ?', [categoryId]);
+      if (!cat || cat.tenant_id !== effectiveTenantId) {
+        return res.status(400).json({ error: 'La categoría no es de esta empresa' });
+      }
+    }
+
     // Insertar
     const [result] = await db.query(
       `INSERT INTO employees
-       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, ciudad_id, sucursal_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, payroll_regime, exclude_from_report, legajo_alt, tenant_id, afectado_campana)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (employee_id, nombre, documento, tipo_documento, direccion, zona_id, zona_real_id, ciudad_id, sucursal_id, fecha_alta, fecha_baja, activo, motivo_baja, overtime_authorized, payroll_regime, exclude_from_report, legajo_alt, tenant_id, afectado_campana, category_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         employee_id,
         nombre,
@@ -365,7 +377,8 @@ router.post('/', requirePermission('employees', 'create'), requireActiveSubscrip
         exclude_from_report !== undefined ? (exclude_from_report ? 1 : 0) : 0,
         legajo_alt || null,
         effectiveTenantId,
-        afectado_campana ? 1 : 0
+        afectado_campana ? 1 : 0,
+        categoryId
       ]
     );
 
@@ -459,6 +472,14 @@ router.put('/:id', requirePermission('employees', 'update'), async (req, res) =>
 
     const ubicacionMal = await ubicacionAjena(effectiveTenantId, ciudad_id, sucursal_id);
     if (ubicacionMal) return res.status(404).json({ error: ubicacionMal });
+
+    // La categoría tiene que ser de la misma empresa (igual que en el alta).
+    if (category_id) {
+      const [[cat]] = await db.query('SELECT tenant_id FROM employee_categories WHERE id = ?', [category_id]);
+      if (!cat || cat.tenant_id !== effectiveTenantId) {
+        return res.status(400).json({ error: 'La categoría no es de esta empresa' });
+      }
+    }
 
     // Verificar que no haya conflicto de legajo
     const normalizedDocumento = documento ? String(documento).trim() : null;

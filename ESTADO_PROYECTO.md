@@ -77,6 +77,8 @@
 >
 > | Qué | Para qué |
 > |---|---|
+> | **Migración `20261016_categoria_sugerencias.sql`** | Plantilla y convenio sugeridos por categoría. Sin ella todo funciona y guardar una sugerencia avisa que falta. Idempotente. |
+> | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
 > | **Migración `20261015_horarios_rotativos.sql`** | Habilita Turnos y plantillas rotativas. Sin ella todo lo demás sigue igual y esas pantallas avisan "Falta correr la migración 20261015". Es idempotente (se puede correr dos veces). Hasta la `20261014` ya estaban aplicadas (backup del 07/10). |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
@@ -197,6 +199,23 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-08 — P1, P2, P4, P5 (aprobados).** (P1) Presentismo diario:
+>   totales que SUMAN — solo activos, recuadros nuevos En campaña / Feriado /
+>   No le tocaba, "fuera de horario" e inactivos como avisos aparte
+>   (`desgloseDelDia` en attendanceService; los campos viejos del resumen no
+>   cambian). La lista oculta a TODOS los inactivos (antes un domingo aparecían
+>   los 309 de AVP). (P2) Contadores de Empleados solo activos. (P4) Alta de
+>   empleado con "Horario y convenio": propone la plantilla sugerida por la
+>   categoría o la por defecto, y la asigna con `reemplazar` desde la fecha de
+>   alta. (P5) Categoría con plantilla/convenio sugeridos (**migración
+>   20261016, falta correrla en producción**; sin ella todo sigue igual y
+>   guardar una sugerencia avisa), barra "aplicar a la categoría" en Horarios
+>   de empleados, filtro por categoría en Presentismo. **Bug encontrado en QA
+>   y corregido:** el alta de empleado ignoraba la categoría elegida (ahora se
+>   guarda, y alta y edición validan que sea de la misma empresa). QA: 280
+>   días de AVP, el desglose suma siempre y total = activos; 0 diferencias con
+>   la versión publicada (133.840 estados diarios, mensual idéntico);
+>   968/968; Chrome y Firefox, 1366 y 390.
 > - **2026-10-08 — Revisión de Horarios de empleados (D, E, G, H aprobadas)
 >   + cobertura de guardia retirada.** (D) Ciudad, sucursal y categoría en
 >   bloque pasan a Empleados (filtro "Le falta", contadores que filtran); en
