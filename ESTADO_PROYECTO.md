@@ -199,6 +199,19 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Asistente y Plantillas de horario, lo que marcó el dueño.**
+>   (1) Bug: en un cortado, el "día distinto" copiaba la tarde y no se podía
+>   hacer el sábado corrido ("la tarde empieza antes de que termine la
+>   mañana"). Ahora cada día distinto tiene **Corrido / Cortado** (arranca
+>   corrido con las horas de la mañana); también un corrido puede tener un
+>   día cortado, y entonces pregunta cuántas veces ficha. (2) X para cerrar y
+>   "Cancelar" en todos los pasos. (3) La pantalla: arriba "Cómo funciona" en
+>   3 pasos (crear → asignar en Horarios de empleados → Presentismo compara);
+>   un solo botón principal "Nuevo horario"; "Turnos" pasó abajo, cerrado,
+>   como "Turnos de los horarios rotativos (avanzado)" y aclara que crear uno
+>   no lo agrega a ningún horario; "Nuevo bloque" ahora es "Agregar día u
+>   horario" (corrección a mano). Probado el caso exacto (L-S 08-12/16-20 con
+>   sábado 08-17) en Chrome y Firefox, 1366 y 390. Solo frontend.
 > - **2026-10-09 — Auditoría de permisos (sin cambios de código, propuestas
 >   A–F esperando aprobación).** motorolatrelew@gmail.com es una cuenta del
 >   PORTAL (employee_id 54, legajo 2525): el servidor le da permisos vacíos a
