@@ -19,6 +19,7 @@ const { MODULOS, modulosDe, setModulo } = require('../services/modulos');
 const turnosRepository = require('../repositories/turnosRepository');
 const { cruzaMedianoche } = require('../services/cicloDeTurnos');
 const { aplicarReemplazo } = require('../services/vigenciasHorario');
+const asistente = require('../services/asistenteHorario');
 
 // Mismo motivo que ya documenta /attendance-range en horasdedica.js:
 // toISOString() usa UTC, y en un servidor con huso horario negativo
@@ -780,6 +781,111 @@ function createMotorLaboralAdminRoutes(db) {
       if (responderSinMigracion(res, err)) return;
       console.error('ERROR quitando ciclo:', err);
       res.status(500).json({ error: 'Error al quitar el ciclo' });
+    }
+  });
+
+  // ============ ASISTENTE PARA CREAR HORARIOS (2026-10-09) ============
+  //
+  // La pantalla pregunta en castellano (¿corrido, cortado o rotativo? ¿qué
+  // días? ¿a qué hora?) y manda todo junto. Acá se crea la plantilla CON sus
+  // bloques (semanal) o CON sus turnos y su ciclo (rotativa) en UNA
+  // transacción: o queda todo bien, o no queda nada (antes eran varios
+  // pasos y un error en el medio dejaba una plantilla a medio armar).
+  //
+  // Body: { nombre, por_defecto?, semana?: [{ dia, tramos:[{inicio,fin}], descanso_sin_fichar? }],
+  //         rotativo?: { turnos:[{ clave, id? | nombre+tramos }], ciclo:[clave|null] } }
+  // El horario semanal no usa nada de la migración 20261015: anda sin ella.
+  router.post('/templates/asistente', requirePermission('schedules', 'create'), async (req, res) => {
+    const tenantId = empresaONada(req, res); if (tenantId == null) return;
+    const body = req.body || {};
+    const nombre = String(body.nombre || '').trim();
+    let semana = null;
+    let rotativo = null;
+    try {
+      if (!nombre || nombre.length > 100) throw new asistente.ErrorAsistente('Poné un nombre para el horario (hasta 100 letras)');
+      if (!!body.semana === !!body.rotativo) throw new asistente.ErrorAsistente('Elegí si es un horario semanal o rotativo');
+      if (body.semana) semana = asistente.validarSemana(body.semana);
+      else rotativo = asistente.validarRotativo(body.rotativo);
+    } catch (err) {
+      if (err instanceof asistente.ErrorAsistente) return res.status(400).json({ error: err.message });
+      console.error('ERROR validando el asistente de horarios:', err);
+      return res.status(500).json({ error: 'No se pudo revisar el horario' });
+    }
+
+    const conn = await db.getConnection();
+    try {
+      // Mismo nombre que otra plantilla activa: después nadie sabe cuál es cuál.
+      const [[repetida]] = await conn.query(
+        'SELECT id FROM work_schedule_templates WHERE tenant_id = ? AND name = ? AND active = 1', [tenantId, nombre]);
+      if (repetida) return res.status(409).json({ error: `Ya hay un horario que se llama "${nombre}". Poné otro nombre.` });
+
+      // Rotativa: resolver los turnos ANTES de escribir nada (si falta la
+      // migración, sale acá con 503 y no se creó nada).
+      const idDeClave = new Map();
+      const turnosNuevos = [];
+      if (rotativo) {
+        const existentes = await turnosRepository.listarTurnos(conn, tenantId);
+        for (const t of rotativo.turnos) {
+          if (t.id != null) {
+            if (!existentes.some((e) => e.id === t.id)) return res.status(400).json({ error: 'Uno de los turnos elegidos no existe en esta empresa' });
+            idDeClave.set(t.clave, t.id);
+            continue;
+          }
+          const mismo = existentes.find((e) => e.nombre.toLowerCase() === t.nombre.toLowerCase());
+          if (mismo && asistente.mismosTramos(t.tramos, mismo.tramos)) { idDeClave.set(t.clave, mismo.id); continue; }
+          if (mismo) {
+            const horario = mismo.tramos.map((x) => `${x.inicio}–${x.fin}`).join(' y ');
+            return res.status(409).json({ error: `Ya existe el turno "${mismo.nombre}" con otro horario (${horario}). Elegilo de la lista o poné otro nombre.` });
+          }
+          turnosNuevos.push(t);
+        }
+      }
+
+      // Una rotativa nunca es "por defecto" (sin asignación no tiene día 1).
+      const porDefecto = !!body.por_defecto && !rotativo;
+      await conn.beginTransaction();
+      if (porDefecto) {
+        await conn.query('UPDATE work_schedule_templates SET is_default = 0 WHERE tenant_id = ?', [tenantId]);
+      }
+      // Mismas columnas que POST /templates (sin modo/cycle_length: andan sin la migración).
+      const [r] = await conn.query(
+        `INSERT INTO work_schedule_templates (tenant_id, name, description, type, active, is_default, rules_engine_mode)
+         VALUES (?, ?, ?, 'FIXED', 1, ?, 'legacy')`,
+        [tenantId, nombre, 'Creada con el asistente', porDefecto ? 1 : 0]);
+      const templateId = r.insertId;
+
+      if (semana) {
+        for (const d of semana) {
+          for (const b of asistente.bloquesDelDia(d)) {
+            await conn.query(
+              `INSERT INTO shift_blocks (template_id, day_of_week, block_name, start_time, end_time, block_type, crosses_midnight, active)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+              [templateId, b.day_of_week, b.block_name, b.start_time, b.end_time, b.block_type, b.crosses_midnight]);
+          }
+        }
+      } else {
+        for (const t of turnosNuevos) {
+          const [s] = await conn.query('INSERT INTO shift_definitions (tenant_id, nombre, color, created_by) VALUES (?, ?, ?, ?)',
+            [tenantId, t.nombre, null, req.appUser ? req.appUser.id : null]);
+          await guardarTramos(conn, s.insertId, t.tramos);
+          idDeClave.set(t.clave, s.insertId);
+        }
+        await conn.query("UPDATE work_schedule_templates SET modo = 'ROTATIVO', cycle_length = ? WHERE id = ?", [rotativo.dias.length, templateId]);
+        for (let i = 0; i < rotativo.dias.length; i++) {
+          const clave = rotativo.dias[i];
+          await conn.query('INSERT INTO template_cycle_days (template_id, day_number, shift_id) VALUES (?, ?, ?)',
+            [templateId, i + 1, clave == null ? null : idDeClave.get(clave)]);
+        }
+      }
+      await conn.commit();
+      res.status(201).json({ ok: true, id: templateId, turnosCreados: turnosNuevos.length });
+    } catch (err) {
+      await conn.rollback().catch(() => {});
+      if (responderSinMigracion(res, err)) return;
+      console.error('ERROR asistente de horarios:', err);
+      res.status(500).json({ error: 'No se pudo crear el horario. No se guardó nada; reintentá.' });
+    } finally {
+      conn.release();
     }
   });
 

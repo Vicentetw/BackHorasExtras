@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-09 — último: aviso "Sin horario propio", ver bitácora)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-09 — último: asistente "Nuevo horario", ver bitácora)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
@@ -199,6 +199,27 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Asistente "Nuevo horario" (pedido del dueño: "a prueba de
+>   tontos").** Plantillas de horario → **Nuevo horario** abre un asistente de
+>   3 pasos: (1) ¿corrido, cortado o rotativo? con ejemplos; (2) días como
+>   botones + atajos, horas con barra de 24 h; en el cortado pregunta **"¿ficha
+>   al irse y al volver del mediodía?"** (sí = 2 bloques WORK, 4 fichadas; no =
+>   una jornada WORK de punta a punta + la pausa como BREAK, así no da
+>   "ausente parcial"); "algún día tiene otro horario" (ej. sábado solo
+>   mañana); rotativo armado como "2 días de Mañana, 2 de Tarde…" con
+>   ejemplos (2-2-2 serenos, 12 h, 6x2), turnos nuevos o ya cargados; (3)
+>   revisar: tabla por día con horas y total semanal, avisos (>48 h/semana,
+>   >12 h/día), **confirmación obligatoria si algo termina al día
+>   siguiente**, nombre sugerido, "usarlo para quien no tenga horario". Guarda
+>   todo en UNA transacción: `POST /api/labor-engine/admin/templates/asistente`
+>   (`services/asistenteHorario.js`, reglas puras). Nombre repetido → 409;
+>   turno con mismo nombre y otro horario → 409; turno de otra empresa → 400.
+>   El semanal anda SIN la migración 20261015 (probado contra
+>   horas_prod_copia); el rotativo responde 503 y la tarjeta se ve apagada
+>   con el motivo. El editor de siempre sigue como "Prefiero el editor
+>   avanzado". Tests: `test/asistente-horario.test.js` (incluye que el
+>   cortado de 2 fichadas da "a tiempo" en Presentismo). Suite 983/983.
+>   Probado en Chrome y Firefox, 1366 y 390.
 > - **2026-10-09 — Revisión de reportes antes de una demo (sin cambios de
 >   código, propuestas A–H esperando aprobación).** Se generaron todos los
 >   PDF/Excel desde la pantalla (AVP, copia local) y se midieron con PyMuPDF.
