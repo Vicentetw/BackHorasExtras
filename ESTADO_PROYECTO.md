@@ -199,6 +199,21 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Auditoría de permisos (sin cambios de código, propuestas
+>   A–F esperando aprobación).** motorolatrelew@gmail.com es una cuenta del
+>   PORTAL (employee_id 54, legajo 2525): el servidor le da permisos vacíos a
+>   propósito (`appUserRepository.findByFirebaseUid`) y una lista blanca de
+>   rutas (`appUserMiddleware`), así que rol y "permisos adicionales" no hacen
+>   nada; /usuarios no sabe que es de empleado (`listByTenant` no trae
+>   employee_id) y deja tildarlos. Recorrido por perfil (11 perfiles x 22
+>   pantallas, local): el MENÚ muestra las 12 opciones a todos (la mayoría da
+>   "No tenés permiso"); botones de cambio visibles sin permiso de escritura
+>   (Nuevo empleado, Agregar feriado, Justificar, Guardar tope…); llamadas
+>   secundarias en 403 con permisos parciales (Presentismo sin plantillas/
+>   empleados/categorías/ciudades; Horarios de empleados sin lista de
+>   empleados; `/config/theme` para todo el que no tiene settings). Rutas del
+>   servidor: todas protegidas (las que no muestran permiso lo reciben al
+>   montarse).
 > - **2026-10-09 — Asistente "Nuevo horario" (pedido del dueño: "a prueba de
 >   tontos").** Plantillas de horario → **Nuevo horario** abre un asistente de
 >   3 pasos: (1) ¿corrido, cortado o rotativo? con ejemplos; (2) días como
