@@ -4605,6 +4605,9 @@ async function attendanceRangeHandler(req, res) {
         // Dias con fichajes que no coinciden con su plantilla (aviso).
         fueraDeHorarioDays,
         noScheduleDays,
+        // Si la persona está activa (2026-10-09): Presentismo esconde a los
+        // inactivos que no tuvieron nada en el período. Dato nuevo, no cambia nada.
+        activo: employeeActivo,
         defaultScheduleDays,
         defaultScheduleName,
         // Faltas seguidas sin aviso: la racha mas larga del periodo, y la que

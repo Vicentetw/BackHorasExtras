@@ -199,6 +199,24 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Reportes PDF/Excel arreglados (A–F aprobados) + /empresas.**
+>   (A) `shared/export.ts` rehecho con `jspdf-autotable`: ancho por columna,
+>   texto largo en dos renglones (nada cortado), hoja horizontal si es ancha,
+>   títulos en cada página, "Página X de Y", fechas dd/mm/aaaa, números a la
+>   derecha (con su título); Excel con ancho de columnas. (B) Salidas en 24 h
+>   ("01/09/2026 07:50") en pantalla, Excel y PDF. (C) Presentismo diario:
+>   entrada/salida solo hora + totales del día arriba del PDF. (D) Horas
+>   extra "40 h 43 min" en PDF; en Excel número sumable + texto (mensual, HE
+>   por régimen con TOTAL). (E) Mensual/anual y HE por régimen esconden
+>   inactivos sin actividad (casilla, marcada por defecto; backend agrega
+>   `activo` a cada fila de /attendance-range). (F) Feriados: "Exportar
+>   Excel" en castellano; el CSV técnico queda (es el formato de importar) con
+>   BOM. Medido con PyMuPDF: 0 textos encimados y 0 cortados en los 9 PDF
+>   (antes hasta 483). /empresas: el hint del titular ya no se encima, la
+>   etiqueta "Nombre" no se recorta, y el tilde "Portal del empleado" se
+>   verificó prender/apagar desde la pantalla. Pendiente con el dueño: botón
+>   "Descartar pedido" (un pedido de plan de prueba de "Nueva de prueba"
+>   999963 mantiene la campanita en 1). Suite 995/995.
 > - **2026-10-09 — "Una empresa siempre tiene al menos un administrador"
 >   (A–C aprobados) + avisos antes de cada cambio en /usuarios.** (A) Nadie
 >   se puede desactivar, eliminar ni cambiar su propio rol/permisos (antes
