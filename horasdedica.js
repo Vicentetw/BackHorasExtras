@@ -243,6 +243,8 @@ app.use('/api/agent-keys', agentKeysRoutes(db));
 app.use('/api/sync-status', syncStatusRoutes(db));
 // Guía de puesta en marcha (Inicio): cuánto le falta a la empresa.
 app.use('/api/puesta-en-marcha', require('./routes/puestaEnMarcha')(db));
+// Registro de actividad: quién hizo qué (lo escribe registroActividad.js).
+app.use('/api/registro-actividad', require('./routes/registroActividad')(db));
 
 function parseCheckTime(value) {
   if (!value) return null;

@@ -68,7 +68,13 @@ module.exports = function (db) {
       employeeId: req.appUser.employeeId ?? null,
       // Modulos que el superadmin le habilito a la empresa (ver modulos.js).
       modulos: req.appUser.tenantId != null ? await modulosDe(db, req.appUser.tenantId).catch(() => ({})) : {},
-      subscriptionStatus
+      // Soporte: no se lo manda a /pagos aunque la empresa esté vencida (es el operador).
+      subscriptionStatus: req.appUser.soporte ? null : subscriptionStatus,
+      // Superadmin trabajando en una empresa (cabecera X-Empresa-Trabajo):
+      // con esto el frontend muestra el aviso "Estás trabajando en X como
+      // soporte" y sigue mostrando el menú de plataforma (Empresas, etc.).
+      soporte: req.appUser.soporte ? { empresaId: req.appUser.soporte.empresaId, empresaNombre: req.appUser.soporte.empresaNombre } : null,
+      superadminReal: req.appUser.isSuperadmin || !!req.appUser.soporte,
     });
   });
 

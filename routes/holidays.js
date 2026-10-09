@@ -1,5 +1,6 @@
 const express = require('express');
-const { requirePermission, resolveTenantId, resolveTenantForWrite, MENSAJE_ELEGIR_EMPRESA } = require('../appUserMiddleware');
+const { requirePermission, requireSuperadmin, resolveTenantId, resolveTenantForWrite, MENSAJE_ELEGIR_EMPRESA } = require('../appUserMiddleware');
+const { registrar, autorDe } = require('../registroActividad');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -183,6 +184,58 @@ module.exports = function (db) {
         return res.status(503).json({ success: false, error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' });
       }
       res.status(500).json({ success: false, error: 'Error creating holiday' });
+    }
+  });
+
+  // ==========================
+  // 3b. CARGAR UN FERIADO EN VARIAS EMPRESAS (superadmin, 2026-10-09)
+  // ==========================
+  // Para un feriado nacional nuevo (ej. un feriado puente decretado): el
+  // superadmin elige las empresas y se crea UNA COPIA en cada una. No es un
+  // feriado "global": cada empresa queda con el suyo y lo puede editar o
+  // borrar sin afectar a las demás. Si una empresa ya tiene un feriado
+  // general ese día, se saltea (no se duplica ni se pisa).
+  // Cada copia queda en el registro de actividad DE ESA EMPRESA, a nombre del
+  // superadmin: su administrador ve quién se lo cargó.
+  router.post('/varias-empresas', requireSuperadmin, async (req, res) => {
+    try {
+      const { date, name, description, type, reason, isWorkDay, recurring } = req.body;
+      const empresas = Array.isArray(req.body.tenantIds)
+        ? [...new Set(req.body.tenantIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))]
+        : [];
+      if (!date || !name) return res.status(400).json({ success: false, error: 'Faltan la fecha y el nombre del feriado.' });
+      if (!empresas.length) return res.status(400).json({ success: false, error: 'Elegí al menos una empresa.' });
+
+      const [existentes] = await db.query('SELECT id, name FROM tenants WHERE id IN (?)', [empresas]);
+      const nombres = new Map(existentes.map((t) => [t.id, t.name]));
+      const fecha = parseDate(date);
+      const year = new Date(fecha).getFullYear();
+      const creados = []; const salteados = [];
+
+      for (const tenantId of empresas) {
+        if (!nombres.has(tenantId)) { salteados.push({ tenantId, motivo: 'La empresa no existe' }); continue; }
+        if (await findDuplicate(tenantId, fecha, null)) {
+          salteados.push({ tenantId, empresa: nombres.get(tenantId), motivo: 'Ya tenía un feriado ese día' });
+          continue;
+        }
+        const [r] = await db.query(
+          `INSERT INTO holidays (tenant_id, ciudad_id, date, year, name, description, type, reason, isWorkDay, recurring)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [tenantId, fecha, year, name, description || null, type || 'NATIONAL', reason || null,
+            isWorkDay ? 1 : 0, recurring ? 1 : 0]
+        );
+        creados.push({ tenantId, empresa: nombres.get(tenantId), id: r.insertId });
+        await registrar(db, {
+          // Lo hizo el equipo de la plataforma en esta empresa: se marca como soporte.
+          ...autorDe(req), comoSoporte: true, tenantId, metodo: 'POST', ruta: '/api/holidays/varias-empresas',
+          descripcion: `Creó un feriado (cargado por el superadmin en varias empresas): ${fecha} ${name}`.slice(0, 255),
+          estado: 200, detalle: JSON.stringify({ id: r.insertId, date: fecha, name, type: type || 'NATIONAL' }),
+        });
+      }
+      res.json({ success: true, creados, salteados });
+    } catch (err) {
+      console.error('ERROR creating holiday in several tenants:', err);
+      res.status(500).json({ success: false, error: 'No se pudo cargar el feriado en las empresas elegidas.' });
     }
   });
 

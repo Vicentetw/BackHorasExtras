@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-09 — último: asistente "Nuevo horario", ver bitácora)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-09 — último: superadmin "trabajando en una empresa" + Registro de actividad, ver bitácora)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
@@ -77,6 +77,7 @@
 >
 > | Qué | Para qué |
 > |---|---|
+> | **Migración `20261017_registro_actividad.sql`** | Registro de actividad (quién hizo qué, incluido el soporte). Sin ella todo funciona, solo no se registra y la pantalla lo avisa. Idempotente. Ver `SOPORTE_Y_REGISTRO.md`. |
 > | **Migración `20261016_categoria_sugerencias.sql`** | Plantilla y convenio sugeridos por categoría. Sin ella todo funciona y guardar una sugerencia avisa que falta. Idempotente. |
 > | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
 > | **Migración `20261015_horarios_rotativos.sql`** | Habilita Turnos y plantillas rotativas. Sin ella todo lo demás sigue igual y esas pantallas avisan "Falta correr la migración 20261015". Es idempotente (se puede correr dos veces). Hasta la `20261014` ya estaban aplicadas (backup del 07/10). |
@@ -194,11 +195,30 @@
 > | **Tutoriales animados: cómo están hechos, cómo rehacer las capturas y cómo hacer uno nuevo** | `scripts/tutoriales/LEEME.md` (en el repo del FRONTEND) |
 > | Guía de puesta en marcha (Inicio): qué detecta cada paso | `routes/puestaEnMarcha.js` (comentarios) |
 > | **Aislamiento por empresa: qué es global, qué debería ser propio, plan A–J** | `AISLAMIENTO_POR_EMPRESA.md` |
+> | **Superadmin trabajando en una empresa (soporte), Registro de actividad, feriado en varias empresas** | `SOPORTE_Y_REGISTRO.md` |
 > | **Marcadores: salidas particulares y horas extra. Reglas que no se pueden romper y cómo verificarlas** | `MARCADORES_Y_SALIDAS.md` |
 > | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Superadmin aislado por empresa + Registro de actividad +
+>   feriado en varias empresas** (pedido del dueño). El superadmin elige
+>   arriba "en qué empresa trabaja" y para el servidor pasa a ser un
+>   administrador de esa empresa (cabecera `X-Empresa-Trabajo`, solo válida
+>   para superadmin): todas las pantallas muestran y guardan solo en ella.
+>   Sin empresa elegida, las pantallas de datos mandan a "Elegir empresa".
+>   Plataforma (Empresas, Facturación, Planes, campanita) sigue como
+>   superadmin. Franja "Estás trabajando en X como soporte… [Salir]".
+>   Registro de actividad: todo POST/PUT/PATCH/DELETE queda con autor,
+>   empresa, resultado y marca de soporte; cada empresa ve el suyo en
+>   Administración (migración `20261017`, falta en producción; sin ella todo
+>   anda). Empresas > "Feriado en varias empresas": una copia por empresa,
+>   saltea la que ya tiene ese día. Además: el paginador en castellano se
+>   registra en cada pantalla (la carga inicial bajó de 996 a 960 kB; con
+>   esto el build ya no pasaba el tope de 1 MB). `test/superadmin-empresa-
+>   trabajo.test.js` (9). Suite 1009/1009. QA en Chrome 1366/390. Detalle:
+>   `SOPORTE_Y_REGISTRO.md`. Propuesto, no hecho: que el cliente autorice el
+>   acceso del soporte con vencimiento.
 > - **2026-10-09 — Aislamiento de plantillas verificado y un hueco cerrado.**
 >   Todas las rutas de plantillas, bloques, ciclo, asistente y asignación ya
 >   controlaban la empresa. Hueco: `GET /api/labor-engine/attendance/:date

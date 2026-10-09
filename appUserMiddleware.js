@@ -11,6 +11,11 @@ const { resolveEffectiveStatus, isWriteBlocked, isFullyBlocked, DEFAULT_GRACE_DA
 // ('users' ya se usaba de verdad en routes/appUsers.js -- faltaba en esta
 // lista, corregido al armar routes/roles.js).
 
+// Todos los permisos de una empresa (los que usa cada pantalla): los que tiene
+// el superadmin cuando trabaja en una empresa (modo soporte).
+const PERMISOS_DE_EMPRESA = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'settings', 'users']
+  .flatMap((m) => ['read', 'create', 'update', 'delete'].map((a) => `${m}:${a}`));
+
 // Corre DESPUES de firebaseAuthMiddleware (necesita req.user ya resuelto).
 // Un login de Firebase valido NO alcanza por si solo: ademas hace falta un
 // registro en app_users (lo da de alta un admin o el superadmin), sino la
@@ -68,6 +73,36 @@ async function appUserMiddleware(req, res, next) {
       } catch (billingErr) {
         console.error('appUserMiddleware billing check error:', billingErr);
       }
+    }
+
+    // ---- SUPERADMIN "TRABAJANDO EN UNA EMPRESA" (modo soporte, 2026-10-09) ----
+    // El superadmin elige una empresa arriba en la pantalla y cada pedido
+    // viaja con la cabecera X-Empresa-Trabajo. Desde ahí, para el servidor ES
+    // un administrador de ESA empresa: misma empresa, todos los permisos de
+    // una empresa y NADA de superadmin. Así el aislamiento entre empresas (el
+    // mismo que ya está probado para los clientes) le aplica también a él, en
+    // todas las pantallas a la vez, sin selectores sueltos por pantalla.
+    // Sigue siendo su cuenta (mismo id): todo lo que haga queda registrado a
+    // su nombre como soporte (ver registroActividad.js).
+    // Solo cuenta para un superadmin real; un usuario común que mande la
+    // cabecera no cambia en nada.
+    const empresaTrabajo = req.headers['x-empresa-trabajo'];
+    if (appUser.isSuperadmin && empresaTrabajo) {
+      const id = Number(empresaTrabajo);
+      const [[empresa]] = Number.isInteger(id) && id > 0
+        ? await db.query('SELECT id, name FROM tenants WHERE id = ?', [id])
+        : [[null]];
+      if (!empresa) {
+        return res.status(400).json({ error: 'La empresa elegida para trabajar no existe. Elegí otra arriba.' });
+      }
+      req.appUser = {
+        ...appUser,
+        tenantId: empresa.id,
+        isSuperadmin: false,
+        permissions: new Set(PERMISOS_DE_EMPRESA),
+        soporte: { superadminId: appUser.id, email: appUser.email, empresaId: empresa.id, empresaNombre: empresa.name },
+      };
+      return next();
     }
 
     // PORTAL DEL EMPLEADO: una cuenta de empleado solo entra a su perfil y a
@@ -249,7 +284,9 @@ function responder(res, next, decision) {
 }
 
 function requireActiveSubscription(req, res, next) {
-  if (!req.appUser || req.appUser.isSuperadmin) return next();
+  // El superadmin trabajando en una empresa (soporte) tampoco se bloquea:
+  // justamente puede estar ayudando a una empresa vencida a regularizarse.
+  if (!req.appUser || req.appUser.isSuperadmin || req.appUser.soporte) return next();
   const tenantId = req.appUser.tenantId;
   if (tenantId == null) return next();
 
