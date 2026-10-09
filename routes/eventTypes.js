@@ -12,7 +12,8 @@ module.exports = function (db) {
   // ==========================
   // 1. LISTAR MOTIVOS
   // ==========================
-  router.get('/', requirePermission('exclusions', 'read'), async (req, res) => {
+  // Nombres de motivos: también para Vacaciones/Licencias y para justificar desde Presentismo (2026-10-09).
+  router.get('/', requireAnyPermission([['exclusions', 'read'], ['leaves', 'read'], ['attendance', 'read']]), async (req, res) => {
     try {
       const { includeInactive } = req.query;
       // Sin fallback a tenant_id IS NULL: la migracion a motivos por tenant

@@ -129,9 +129,15 @@ test('una empresa sin horario propio cae en el valor por defecto', async () => {
   assert.equal(json.timeEntrance, '07:00:00');
 });
 
-test('el tema también exige permiso ahora', async () => {
+// 2026-10-09: LEER el tema (los colores de la empresa) ya no pide permiso:
+// lo necesita cualquier usuario de la empresa para ver su color (antes, quien
+// no tenía "configuración" veía el color por defecto). Sigue pidiendo estar
+// logueado, y GUARDARLO sigue pidiendo permiso.
+test('el tema: lo lee cualquier usuario de la empresa, sin sesión no, y guardarlo pide permiso', async () => {
   const leer = await fetch(`${BASE_URL}/config/theme`, { headers: headersSinPermiso });
-  assert.equal(leer.status, 403);
+  assert.equal(leer.status, 200);
+  const sinSesion = await fetch(`${BASE_URL}/config/theme`);
+  assert.equal(sinSesion.status, 401);
 
   const guardar = await fetch(`${BASE_URL}/config/theme`, {
     method: 'POST',

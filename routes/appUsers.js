@@ -82,9 +82,17 @@ module.exports = function (db) {
       }
       if (effectiveTenantId === null) {
         // Superadmin sin ?tenantId= explicito: lista todos los app_users
+        // + employee_id: marcar las cuentas del portal (sin la migración 20261010, NULL).
         const [rows] = await db.query(
-          `SELECT id, firebase_uid, email, tenant_id, role_id, is_superadmin, is_active, created_at FROM app_users ORDER BY tenant_id, email`
-        );
+          `SELECT u.id, u.firebase_uid, u.email, u.tenant_id, u.role_id, u.is_superadmin, u.is_active, u.created_at,
+                  u.employee_id, e.employee_id AS employee_legajo, e.nombre AS employee_nombre
+           FROM app_users u LEFT JOIN employees e ON e.id = u.employee_id ORDER BY u.tenant_id, u.email`
+        ).catch((err) => {
+          if (err.code === 'ER_BAD_FIELD_ERROR') {
+            return db.query(`SELECT id, firebase_uid, email, tenant_id, role_id, is_superadmin, is_active, created_at FROM app_users ORDER BY tenant_id, email`);
+          }
+          throw err;
+        });
         return res.json({ users: rows });
       }
       const rows = await appUserRepository.listByTenant(effectiveTenantId, db);
@@ -159,6 +167,18 @@ module.exports = function (db) {
       const effectiveTenantId = resolveTenantId(req);
       if (effectiveTenantId !== null && user.tenant_id !== effectiveTenantId) {
         return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+
+      // Cuenta del PORTAL DEL EMPLEADO: solo ve su propia asistencia (lista
+      // blanca en appUserMiddleware.js). Un rol, permisos o superadmin no le
+      // harían nada: antes se guardaban igual y la pantalla parecía decir que
+      // sí (caso real 2026-10-09). Ahora se rechaza con la explicación. Sí se
+      // puede activar/desactivar y vaciarle permisos viejos.
+      const esCuentaDeEmpleado = (await appUserRepository.employeeIdDe(id, db)) != null;
+      if (esCuentaDeEmpleado && ((Array.isArray(permissions) && permissions.length > 0) || (roleId !== undefined && roleId !== null) || isSuperadmin)) {
+        return res.status(400).json({
+          error: 'Esta cuenta es del portal del empleado: solo ve su propia asistencia y no puede tener rol ni permisos. Para darle acceso de gestión, invitá otra cuenta con otro email.'
+        });
       }
 
       if (Array.isArray(permissions)) {

@@ -5,7 +5,8 @@ const { requireAnyPermission, resolveTenantId, resolveTenantForWrite, MENSAJE_EL
 // permisos de Feriados pero no de Empleados (o viceversa) tiene que poder
 // gestionarlas igual desde donde le toque trabajar. requirePermission
 // exigiria los DOS a la vez; requireAnyPermission alcanza con cualquiera.
-const canRead = requireAnyPermission([['employees', 'read'], ['holidays', 'read']]);
+// + attendance/schedules: los filtros de Presentismo y Horarios de empleados (2026-10-09).
+const canRead = requireAnyPermission([['employees', 'read'], ['holidays', 'read'], ['attendance', 'read'], ['schedules', 'read']]);
 const canCreate = requireAnyPermission([['employees', 'create'], ['holidays', 'create']]);
 const canUpdate = requireAnyPermission([['employees', 'update'], ['holidays', 'update']]);
 const canDelete = requireAnyPermission([['employees', 'delete'], ['holidays', 'delete']]);

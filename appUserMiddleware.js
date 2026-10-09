@@ -75,7 +75,7 @@ async function appUserMiddleware(req, res, next) {
     // administracion quedo protegida solo por "estar logueado" (paso con las
     // de facturacion, que dejaban pedir la baja a cualquier usuario de la
     // empresa), igual le queda cerrada a un empleado.
-    if (appUser.employeeId != null && !esRutaDelPortal(req.path)) {
+    if (appUser.employeeId != null && !esRutaDelPortal(req.path, req.method)) {
       return res.status(403).json({ error: 'Tu cuenta es de empleado: solo podés ver tu propia información.' });
     }
 
@@ -88,7 +88,11 @@ async function appUserMiddleware(req, res, next) {
 }
 
 // Rutas que puede usar una cuenta de empleado (portal).
-function esRutaDelPortal(ruta) {
+// + LEER el tema (los colores de su empresa), 2026-10-09: no es un dato de
+// nadie y sin esto el portal se veía con el color por defecto. Guardarlo
+// sigue cerrado (POST): una cuenta de empleado no tiene permisos.
+function esRutaDelPortal(ruta, metodo = 'GET') {
+  if (ruta === '/config/theme') return metodo === 'GET';
   return ruta === '/api/app-users/me' || ruta === '/api/mi' || ruta.startsWith('/api/mi/');
 }
 
@@ -135,6 +139,15 @@ function requireAnyPermission(pairs) {
     }
     return res.status(403).json({ error: `Falta alguno de estos permisos: ${permissions.join(', ')}` });
   };
+}
+
+// Solo exige estar logueado y habilitado (cualquier usuario de la empresa).
+// Para lo que todos necesitan ver y no es un dato de nadie: el tema/colores
+// de la empresa (2026-10-09: antes pedía settings:read y a quien no lo tenía
+// no se le aplicaba el color de su empresa).
+function requireAppUser(req, res, next) {
+  if (!req.appUser) return res.status(401).json({ error: 'Unauthorized' });
+  return next();
 }
 
 // Fragmento de WHERE para filtrar por tenant. El superadmin no filtra
@@ -255,6 +268,7 @@ module.exports = {
   esRutaDelPortal,
   requirePermission,
   requireAnyPermission,
+  requireAppUser,
   requireSuperadmin,
   requireActiveSubscription,
   tenantFilter,

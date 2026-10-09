@@ -111,14 +111,31 @@ async function findByFirebaseUid(firebaseUid, db) {
 }
 
 async function listByTenant(tenantId, db) {
-  const [rows] = await db.query(
-    `SELECT id, firebase_uid, email, tenant_id, role_id, is_superadmin, is_active, created_at
-     FROM app_users
-     WHERE tenant_id = ?
-     ORDER BY email`,
-    [tenantId]
-  );
+  // + de qué empleado es la cuenta (portal), con su legajo y nombre, para que
+  // /usuarios la muestre como lo que es (2026-10-09). Sin la migración
+  // 20261010, employee_id sale NULL para todas (como antes).
+  const sql = (conEmpleado) => `SELECT u.id, u.firebase_uid, u.email, u.tenant_id, u.role_id, u.is_superadmin, u.is_active, u.created_at,
+            ${conEmpleado ? 'u.employee_id, e.employee_id AS employee_legajo, e.nombre AS employee_nombre' : 'NULL AS employee_id, NULL AS employee_legajo, NULL AS employee_nombre'}
+     FROM app_users u
+     ${conEmpleado ? 'LEFT JOIN employees e ON e.id = u.employee_id' : ''}
+     WHERE u.tenant_id = ?
+     ORDER BY u.email`;
+  const [rows] = await db.query(sql(true), [tenantId]).catch((err) => {
+    if (err.code === 'ER_BAD_FIELD_ERROR') return db.query(sql(false), [tenantId]);
+    throw err;
+  });
   return rows;
+}
+
+// De qué empleado es una cuenta (null = cuenta de gestión). Tolerante a la migración 20261010.
+async function employeeIdDe(appUserId, db) {
+  try {
+    const [[r]] = await db.query('SELECT employee_id FROM app_users WHERE id = ?', [appUserId]);
+    return r && r.employee_id != null ? Number(r.employee_id) : null;
+  } catch (err) {
+    if (err.code === 'ER_BAD_FIELD_ERROR') return null;
+    throw err;
+  }
 }
 
 async function setPermissions(userId, permissions, db) {
@@ -137,6 +154,7 @@ module.exports = {
   createInvitedUser,
   findByFirebaseUid,
   listByTenant,
+  employeeIdDe,
   setPermissions,
   setRole
 };

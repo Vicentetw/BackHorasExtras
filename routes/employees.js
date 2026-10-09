@@ -2,7 +2,7 @@ const express = require('express');
 const { guardarEmailDeEmpleado, verificarEmailDeEmpleado } = require('../motor-laboral/services/emailDeEmpleado');
 const router = express.Router();
 const db = require('../db');
-const { resolveTenantId, requirePermission, requireActiveSubscription } = require('../appUserMiddleware');
+const { resolveTenantId, requirePermission, requireAnyPermission, requireActiveSubscription } = require('../appUserMiddleware');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
 
 // La ciudad y la sucursal de un empleado tienen que ser de SU empresa.
@@ -30,8 +30,18 @@ async function ubicacionAjena(tenantId, ciudadId, sucursalId) {
  * GET /api/employees
  * Query params: page, limit, search, status, sortBy
  */
-router.get('/', requirePermission('employees', 'read'), async (req, res) => {
+// Permisos (2026-10-09): Presentismo, Horas extra por régimen y Horarios de
+// empleados usan esta lista para cruzar categoría, ciudad, sucursal y régimen.
+// Quien NO tiene "ver empleados" la recibe sin datos personales (DNI,
+// dirección, email, motivo de baja) y no puede buscar por documento.
+const CAMPOS_SIN_DATOS_PERSONALES = ['id', 'employee_id', 'nombre', 'activo', 'category_id', 'ciudad_id', 'sucursal_id',
+  'payroll_regime', 'overtime_authorized', 'exclude_from_report', 'afectado_campana', 'legajo_alt', 'tenant_id',
+  'fecha_alta', 'fecha_baja', 'hasActiveSchedule'];
+const veDatosPersonales = (req) => !req.appUser || req.appUser.isSuperadmin || req.appUser.permissions.has('employees:read');
+
+router.get('/', requireAnyPermission([['employees', 'read'], ['attendance', 'read'], ['schedules', 'read']]), async (req, res) => {
   try {
+    const completo = veDatosPersonales(req);
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const rawLimit = req.query.limit;
     let limit = rawLimit !== undefined ? parseInt(rawLimit, 10) : 10;
@@ -55,8 +65,14 @@ router.get('/', requirePermission('employees', 'read'), async (req, res) => {
     const params = [];
 
     if (search) {
-      whereClauses.push('(nombre LIKE ? OR documento LIKE ? OR employee_id LIKE ?)');
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      // Sin "ver empleados", no se busca por documento (no se puede adivinar un DNI).
+      if (completo) {
+        whereClauses.push('(nombre LIKE ? OR documento LIKE ? OR employee_id LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      } else {
+        whereClauses.push('(nombre LIKE ? OR employee_id LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`);
+      }
     }
 
     // Busqueda exacta por legajo -- usada por el pre-chequeo de "ya existe"
@@ -189,8 +205,12 @@ router.get('/', requirePermission('employees', 'read'), async (req, res) => {
 
     const [employees] = await db.query(querySql, queryParams);
 
+    const data = completo
+      ? employees
+      : employees.map((e) => Object.fromEntries(CAMPOS_SIN_DATOS_PERSONALES.filter((k) => k in e).map((k) => [k, e[k]])));
+
     res.json({
-      data: employees,
+      data,
       pagination: {
         page,
         limit: limit === null ? total : limit,

@@ -199,6 +199,28 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Permisos A–E (aprobados, "arreglar antes de mostrarlo").**
+>   (A) /usuarios marca las cuentas del portal ("Portal del empleado · legajo
+>   2525 · Nombre") y al editarlas oculta rol/permisos con la explicación
+>   (`listByTenant` trae employee_id + legajo + nombre, tolerante a la
+>   migración 20261010). (B) `PUT /api/app-users/:id` rechaza (400) rol,
+>   permisos o superadmin para una cuenta de empleado; activar/desactivar y
+>   vaciar permisos viejos sí. (C) Menú según permisos: `shell.ts puedeAbrir()`
+>   lee el MISMO `data.permission` de cada ruta (menú y guard no se
+>   contradicen); "Administración" solo si adentro hay algo. (D) Botones de
+>   cambio solo con el permiso exacto de su ruta del servidor
+>   (`CurrentUserService.puede('modulo:accion')`), en ~20 pantallas. (E)
+>   Lecturas que dejaban pantallas a medias: tema = cualquier usuario de la
+>   empresa (`requireAppUser`; también la cuenta del portal, solo GET);
+>   config de Presentismo/Salidas/marcadores, nombres de plantillas,
+>   categorías, ciudades, sucursales y motivos con el permiso de la pantalla
+>   que los usa; `/api/employees` para attendance/schedules **sin datos
+>   personales** (sin DNI, dirección, email, motivo de baja) y sin buscar por
+>   documento. Verificado que /matching/auto, /manual-bulk y /predict (POST con
+>   permiso de lectura) NO escriben. Auditoría repetida (11 perfiles x 22
+>   pantallas): mismas pantallas abiertas que antes, 0 llamadas 403, 0 botones
+>   de cambio sin permiso; un admin completo sigue viendo todo. Tests:
+>   `test/permisos-pantallas.test.js`; suite 990/990.
 > - **2026-10-09 — Asistente y Plantillas de horario, lo que marcó el dueño.**
 >   (1) Bug: en un cortado, el "día distinto" copiaba la tarde y no se podía
 >   hacer el sábado corrido ("la tarde empieza antes de que termine la

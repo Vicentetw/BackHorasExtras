@@ -1,5 +1,5 @@
 const express = require('express');
-const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const { requirePermission, requireAnyPermission, resolveTenantId } = require('../appUserMiddleware');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -7,7 +7,8 @@ module.exports = function (db) {
   // ==========================
   // 1. LISTAR CATEGORÍAS
   // ==========================
-  router.get('/', requirePermission('employees', 'read'), async (req, res) => {
+  // Nombres de categorías: también para el filtro de Presentismo y Horarios de empleados (2026-10-09).
+  router.get('/', requireAnyPermission([['employees', 'read'], ['attendance', 'read'], ['schedules', 'read']]), async (req, res) => {
     try {
       const { includeInactive } = req.query;
       // Sin fallback a tenant_id IS NULL: la migracion a categorias por

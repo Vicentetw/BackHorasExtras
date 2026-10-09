@@ -10,7 +10,7 @@ const { securityMiddlewares, apiKeyWarning, reportesRateLimiter } = require('./s
 const { evaluarFueraDeHorario } = require('./motor-laboral/services/fueraDeHorario');
 const { esRotativa } = require('./motor-laboral/services/cicloDeTurnos');
 const turnosRepository = require('./motor-laboral/repositories/turnosRepository');
-const { resolveTenantId, requirePermission, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
+const { resolveTenantId, requirePermission, requireAnyPermission, requireAppUser, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
 // Auditoria de cargas manuales (horas extra, licencias, exclusiones): quien
 // las creo/modifico/borro y que decian antes. Ver auditLog.js y la migracion
 // 20260927_manual_entries_exclusions_audit.sql.
@@ -1681,7 +1681,7 @@ app.post('/config/schedule', requirePermission('schedules', 'update'), async (re
 // Los datos del tema ya estaban aislados por empresa (app_settings +
 // resolveTenantId), pero a las dos rutas les faltaba el chequeo de permiso:
 // cualquier usuario logueado podia leerlo y cambiarlo.
-app.get('/config/theme', requirePermission('settings', 'read'), async (req, res) => {
+app.get('/config/theme', requireAppUser, async (req, res) => {
   try {
     // Antes era una unica fila GLOBAL (ver appSettingsRepository.js) -- el
     // tema que alguien tocaba en la Empresa A se lo cambiaba a la Empresa B
@@ -2171,7 +2171,7 @@ app.post('/config/personal-leave-limit', requirePermission('schedules', 'update'
 // personal-leave-limit de arriba, que pese a su nombre en la UI vieja
 // ("salida particular") en realidad solo cubre llegadas tarde
 // justificadas, no las salidas reales de /movements-range.
-app.get('/config/particular-exit-limit', requirePermission('schedules', 'read'), async (req, res) => {
+app.get('/config/particular-exit-limit', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
   try {
     const value = await getAppSetting('particularExitMonthlyLimitMinutes', resolveTenantId(req), db);
     res.json({ particularExitMonthlyLimitMinutes: value ? Number(value) : 0 });
@@ -4961,7 +4961,7 @@ app.get('/campana-range', requirePermission('attendance', 'read'), reportesRateL
 
 // GET/POST /config/campana-cutoff -- horario de corte para computar "cantidad
 // de días" de una salida a Campaña (mismo patrón que /config/personal-leave-limit).
-app.get('/config/campana-cutoff', requirePermission('schedules', 'read'), async (req, res) => {
+app.get('/config/campana-cutoff', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
   try {
     const value = await getAppSetting('campanaArrivalCutoffTime', resolveTenantId(req), db);
     res.json({ campanaArrivalCutoffTime: value || '09:00' });
@@ -4998,7 +4998,7 @@ app.post('/config/campana-cutoff', requirePermission('schedules', 'update'), asy
 const { CAMPANA_PRESENTISMO_MODOS } = campanaService;
 const fetchCampanaPresentismoModo = (tenantId) => campanaService.fetchCampanaPresentismoModo(db, tenantId);
 
-app.get('/config/campana-presentismo-modo', requirePermission('schedules', 'read'), async (req, res) => {
+app.get('/config/campana-presentismo-modo', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
   try {
     res.json({ campanaPresentismoModo: await fetchCampanaPresentismoModo(resolveTenantId(req)) });
   } catch (err) {
@@ -5341,7 +5341,7 @@ async function contarAfectadosACampana(tenantId) {
   return n;
 }
 
-app.get('/config/campana-solo-afectados', requirePermission('schedules', 'read'), async (req, res) => {
+app.get('/config/campana-solo-afectados', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
   try {
     const tenantId = resolveTenantId(req);
     if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
@@ -5647,7 +5647,7 @@ app.delete('/marker-corrections/:id', requirePermission('attendance', 'update'),
 // no relacionado -- caso real: Perrotta 02/07/2026.
 const fetchMarkerMaxGapMs = (tenantId) => campanaService.fetchMarkerMaxGapMs(db, tenantId);
 
-app.get('/config/marker-max-gap-seconds', requirePermission('schedules', 'read'), async (req, res) => {
+app.get('/config/marker-max-gap-seconds', requireAnyPermission([['schedules', 'read'], ['settings', 'read'], ['attendance', 'read']]), async (req, res) => {
   try {
     const value = await getAppSetting('markerMaxGapSeconds', resolveTenantId(req), db);
     res.json({ markerMaxGapSeconds: value ? Number(value) : 30 });
@@ -5676,7 +5676,7 @@ app.post('/config/marker-max-gap-seconds', requirePermission('schedules', 'updat
 // nuevo en el medio, son una sola accion (el lector la leyo dos veces).
 // Medido en AVP: el 10 % de las lecturas son dobles. 20 s por defecto. Ver
 // "Rebote refinado" en movementsCalculations.js y MARCADORES_Y_SALIDAS.md.
-app.get('/config/marker-bounce-seconds', requirePermission('schedules', 'read'), async (req, res) => {
+app.get('/config/marker-bounce-seconds', requireAnyPermission([['schedules', 'read'], ['settings', 'read'], ['attendance', 'read']]), async (req, res) => {
   try {
     const ms = await fetchVentanaReboteMs(resolveTenantId(req));
     res.json({ markerBounceSeconds: ms / 1000 });
@@ -5726,7 +5726,7 @@ async function fetchOvertimeSettings(tenantId) {
   };
 }
 
-app.get('/config/overtime-settings', requirePermission('schedules', 'read'), async (req, res) => {
+app.get('/config/overtime-settings', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
   try {
     const settings = await fetchOvertimeSettings(resolveTenantId(req));
     res.json({ overtimeCutoffTime: settings.cutoffTime, overtimeCapMinutes: settings.capMinutes });

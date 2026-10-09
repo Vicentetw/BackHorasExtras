@@ -1,5 +1,5 @@
 const express = require('express');
-const { resolveTenantId, requireSuperadmin, requirePermission } = require('../../appUserMiddleware');
+const { resolveTenantId, requireSuperadmin, requirePermission, requireAnyPermission } = require('../../appUserMiddleware');
 const { getAppSetting, setAppSetting } = require('../repositories/appSettingsRepository');
 const { darKitInicial } = require('../services/kitInicialEmpresa');
 const { consultarConRegimeId } = require('../repositories/regimeIdOpcional');
@@ -273,7 +273,8 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.get('/templates', requirePermission('schedules', 'read'), async (req, res) => {
+  // Nombres de plantillas: también para Presentismo y Empleados (columna/filtros) (2026-10-09).
+  router.get('/templates', requireAnyPermission([['schedules', 'read'], ['attendance', 'read'], ['employees', 'read']]), async (req, res) => {
     try {
       const effectiveTenantId = resolveTenantId(req);
       const [rows] = effectiveTenantId !== null
@@ -889,7 +890,8 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
-  router.get('/employees', requirePermission('employees', 'read'), async (req, res) => {
+  // Legajo, nombre y categoría: lo necesita Horarios de empleados (schedules) (2026-10-09).
+  router.get('/employees', requireAnyPermission([['employees', 'read'], ['schedules', 'read']]), async (req, res) => {
     try {
       const { categoryId } = req.query;
       const params = [];

@@ -6,7 +6,8 @@ const { requirePermission, requireAnyPermission, resolveTenantId, resolveTenantF
 // recurso compartido, ver routes/ciudades.js) -- la escritura (alta/baja/
 // rename) se queda solo en Empleados, una sucursal no tiene relacion con
 // feriados hoy.
-const canRead = requireAnyPermission([['employees', 'read'], ['holidays', 'read']]);
+// + attendance/schedules: los filtros de Presentismo y Horarios de empleados (2026-10-09).
+const canRead = requireAnyPermission([['employees', 'read'], ['holidays', 'read'], ['attendance', 'read'], ['schedules', 'read']]);
 
 module.exports = function (db) {
   const router = express.Router();
