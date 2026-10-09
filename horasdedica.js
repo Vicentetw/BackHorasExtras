@@ -1864,12 +1864,19 @@ app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), asyn
         ue.excFrom,
         ue.excTo,
         ue.createdAt,
+        ue.updatedAt,
+        -- Quién la cargó y quién la modificó por última vez (columnas de la
+        -- migración 20260927). Se muestra al editarla: "¿quién justificó esto?".
+        cb.email AS createdByEmail,
+        ub.email AS updatedByEmail,
         (ue.excDate >= CURDATE()) as isActive
       FROM \`userexclusions\` ue
       JOIN \`users\` u ON ue.userId = u.USERID AND u.tenant_id = ue.tenant_id
       LEFT JOIN \`user_employee_map\` uem ON uem.USERID = u.USERID AND uem.tenant_id = u.tenant_id
       LEFT JOIN \`employees\` e ON e.id = uem.employee_id
       LEFT JOIN \`event_types\` et ON et.id = ue.event_type_id
+      LEFT JOIN app_users cb ON cb.id = ue.created_by
+      LEFT JOIN app_users ub ON ub.id = ue.updated_by
       ${where}
       ORDER BY ue.excDate DESC, ue.createdAt DESC
       LIMIT ? OFFSET ?

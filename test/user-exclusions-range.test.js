@@ -108,3 +108,14 @@ test('GET /config/user-exclusions?userId=X&dateFrom=Y&dateTo=Z devuelve todas la
   assert.equal(json.data.length, 5, 'las 5 filas creadas en el test anterior deberian aparecer');
   assert.ok(json.data.some((r) => r.excDate === PRELOADED_DATE));
 });
+
+// 2026-10-09: el listado informa QUIÉN cargó cada justificación (Presentismo
+// lo muestra al editarla: "Cargada por ...").
+test('GET /config/user-exclusions informa quién la cargó', async () => {
+  const headers = await getTestAuthHeaders(UID);
+  const r = await fetch(`${BASE_URL}/config/user-exclusions?userId=${TEST_USER_ID}&excDate=${DATE_FROM}&tenantId=${TENANT_ID}`, { headers });
+  assert.equal(r.status, 200);
+  const { data } = await r.json();
+  assert.equal(data.length, 1);
+  assert.equal(data[0].createdByEmail, `${UID}@test.local`);
+});
