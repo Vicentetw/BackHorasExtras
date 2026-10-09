@@ -199,6 +199,20 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — "Una empresa siempre tiene al menos un administrador"
+>   (A–C aprobados) + avisos antes de cada cambio en /usuarios.** (A) Nadie
+>   se puede desactivar, eliminar ni cambiar su propio rol/permisos (antes
+>   solo se impedía el borrado propio; desactivarse o bajarse de rol se
+>   podía). (B) No se puede desactivar, eliminar ni quitarle `users:update`
+>   al último administrador activo de la empresa
+>   (`services/administradoresDeEmpresa.js`; en la práctica protege del que
+>   solo tiene permiso de eliminar usuarios). (C) El superadmin queda afuera
+>   de B (soporte). Pantalla: fila propia "vos" sin Deshabilitar/Eliminar;
+>   chip "único administrador"; formulario propio bloqueado con explicación;
+>   antes de guardar, resumen de cambios ("Rol: X → Y", permisos que se
+>   suman/quitan, habilitar/deshabilitar) y confirmación; deshabilitar y
+>   eliminar con el cuadro de la app (no el `confirm()` del navegador).
+>   Tests: `test/administradores-empresa.test.js`; suite 995/995.
 > - **2026-10-09 — /usuarios: buscar, filtrar, ordenar y paginar (A–E
 >   aprobados).** Buscador (email, nombre, legajo); filtros Tipo de cuenta
 >   (de gestión / portal / todas), Estado, Rol y, para el superadmin,

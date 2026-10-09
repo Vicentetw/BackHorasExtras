@@ -4,6 +4,7 @@ const { initFirebaseAdmin } = require('../firebaseAuth');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const { modulosDe } = require('../motor-laboral/services/modulos');
+const { controlarUltimoAdministrador } = require('../motor-laboral/services/administradoresDeEmpresa');
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
 const { resolveEffectiveStatus, DEFAULT_GRACE_DAYS } = require('../motor-laboral/services/billingCalculations');
 
@@ -181,6 +182,30 @@ module.exports = function (db) {
         });
       }
 
+      // Nadie puede quedar afuera por un clic (2026-10-09): ni cambiarse a sí
+      // mismo rol/permisos/superadmin o desactivarse, ni dejar a la empresa
+      // sin administrador. Se compara con lo que YA tiene: guardar el propio
+      // usuario sin cambios sigue andando.
+      const [[actual]] = await db.query('SELECT id, tenant_id, role_id, is_active, is_superadmin FROM app_users WHERE id = ?', [id]);
+      const [permRows] = await db.query('SELECT permission FROM user_permissions WHERE user_id = ?', [id]);
+      const permisosActuales = new Set(permRows.map((p) => p.permission));
+      const cambiaRol = roleId !== undefined && (roleId == null ? null : Number(roleId)) !== (actual.role_id == null ? null : Number(actual.role_id));
+      const cambiaPermisos = Array.isArray(permissions)
+        && (permissions.length !== permisosActuales.size || permissions.some((p) => !permisosActuales.has(p)));
+      const seDesactiva = isActive !== undefined && !isActive;
+      const cambiaSuper = isSuperadmin !== undefined && !!isSuperadmin !== !!Number(actual.is_superadmin);
+      if (req.appUser && Number(req.appUser.id) === Number(id) && (cambiaRol || cambiaPermisos || seDesactiva || cambiaSuper)) {
+        return res.status(400).json({ error: 'No podés cambiar tu propio rol ni tus permisos, ni desactivar tu propia cuenta. Pedíselo a otro administrador.' });
+      }
+      if (!(req.appUser && req.appUser.isSuperadmin) && (cambiaRol || cambiaPermisos || seDesactiva)) {
+        const aviso = await controlarUltimoAdministrador(db, actual, {
+          activa: seDesactiva ? false : undefined,
+          roleId: cambiaRol ? (roleId == null ? null : Number(roleId)) : undefined,
+          permisos: cambiaPermisos ? permissions : undefined,
+        });
+        if (aviso) return res.status(409).json({ error: aviso });
+      }
+
       if (Array.isArray(permissions)) {
         await appUserRepository.setPermissions(id, permissions, db);
       }
@@ -310,18 +335,25 @@ module.exports = function (db) {
       }
 
       const permanente = req.query.permanente === '1' || req.query.permanente === 'true';
+
+      // Borrarse o desactivarse a uno mismo deja sin sesión para arreglarlo
+      // (antes solo se impedía el borrado; desactivarse se podía).
+      if (req.appUser && Number(req.appUser.id) === Number(user.id)) {
+        return res.status(400).json({ error: permanente ? 'No podés eliminar tu propia cuenta' : 'No podés desactivar tu propia cuenta. Pedíselo a otro administrador.' });
+      }
+      // Ni dejar a la empresa sin administrador (salvo el superadmin: soporte).
+      if (!(req.appUser && req.appUser.isSuperadmin)) {
+        const [[cuenta]] = await db.query('SELECT id, tenant_id, role_id FROM app_users WHERE id = ?', [id]);
+        const aviso = await controlarUltimoAdministrador(db, cuenta, permanente ? { eliminar: true } : { activa: false });
+        if (aviso) return res.status(409).json({ error: aviso });
+      }
+
       if (!permanente) {
         await db.query('UPDATE app_users SET is_active = 0 WHERE id = ?', [id]);
         return res.json({ ok: true, accion: 'deshabilitado' });
       }
 
       // --- Borrado real, de aca en adelante ---
-
-      // Borrarse a uno mismo deja al sistema sin quien lo administre y sin
-      // sesion para arreglarlo.
-      if (req.appUser && Number(req.appUser.id) === Number(user.id)) {
-        return res.status(400).json({ error: 'No podés eliminar tu propia cuenta' });
-      }
       // Una cuenta con acceso a TODAS las empresas solo la puede borrar
       // alguien que tambien lo tenga.
       if (Number(user.is_superadmin) === 1 && !(req.appUser && req.appUser.isSuperadmin)) {
