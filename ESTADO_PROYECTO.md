@@ -199,6 +199,19 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Revisión de reportes antes de una demo (sin cambios de
+>   código, propuestas A–H esperando aprobación).** Se generaron todos los
+>   PDF/Excel desde la pantalla (AVP, copia local) y se midieron con PyMuPDF.
+>   Las 24 pantallas del admin cargan sin errores (1366 y 390). Hallazgos:
+>   el PDF común (`shared/export.ts`) usa columnas iguales, hoja vertical y
+>   corta con "..." → nombres cortados y encimados (diario 16, mensual 21,
+>   HE 37); **Salidas en PDF pierde la hora** ("01/09/2026,..."); horas en
+>   formato a. m./p. m.; HE como "40.72" (decimal, en texto); mensual y HE por
+>   régimen listan los 309 inactivos en cero; Feriados exporta CSV con
+>   encabezados en inglés y sin BOM. Los números coinciden entre resumen y
+>   detalle. **Producción NO tiene la migración 20261015** (rotativos): sin
+>   ella no se puede cargar "Sereno 2-2-2" a AGUILAR Hugo (3056). El backup
+>   nocturno ya respalda producción (2026-10-08 23:14).
 > - **2026-10-09 — "Sin horario propio" (A + C, aprobados).** El dueño le
 >   sacó el horario a AGOGLIA (3097) y en Presentismo no se veía: con una
 >   plantilla POR DEFECTO en la empresa (AVP: "Administración"), quien no
