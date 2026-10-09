@@ -199,6 +199,18 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Aislamiento de plantillas verificado y un hueco cerrado.**
+>   Todas las rutas de plantillas, bloques, ciclo, asistente y asignación ya
+>   controlaban la empresa. Hueco: `GET /api/labor-engine/attendance/:date
+>   ?templateId=` aceptaba una plantilla de otra empresa y devolvía sus
+>   horarios/bloques → ahora 404. Resguardo: el cálculo ignora una
+>   asignación que apunte a una plantilla de otra empresa (hoy 0 casos).
+>   Datos (copia 07/10): 0 asignaciones cruzadas; 16 asignaciones de AVP con
+>   `tenant_id` viejo (3/4) — inocuo, el cálculo filtra por la empresa del
+>   empleado; 50 bloques huérfanos de plantillas borradas (sin uso).
+>   `test/aislamiento-plantillas.test.js` (falla con el código anterior en
+>   los 2 casos, pasa con el nuevo). Suite 1000/1000. Pendiente de decisión:
+>   "trabajar en una empresa" para el superadmin (puesta en marcha paga).
 > - **2026-10-09 — Reportes PDF/Excel arreglados (A–F aprobados) + /empresas.**
 >   (A) `shared/export.ts` rehecho con `jspdf-autotable`: ancho por columna,
 >   texto largo en dos renglones (nada cortado), hoja horizontal si es ancha,
