@@ -199,6 +199,17 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — /usuarios: buscar, filtrar, ordenar y paginar (A–E
+>   aprobados).** Buscador (email, nombre, legajo); filtros Tipo de cuenta
+>   (de gestión / portal / todas), Estado, Rol y, para el superadmin,
+>   Empresa; orden por columna (email, empresa, rol, estado, alta); columna
+>   "Alta"; páginas de 50 cuando hay más de 25. **Por defecto solo las
+>   cuentas de gestión**, con el aviso "y N cuentas del portal… se
+>   administran en Portal del empleado". El aviso "Ojo con Es superadmin"
+>   solo lo ve el superadmin. Paginadores de TODA la app en castellano
+>   (`shared/paginador-es.ts`, "1 – 50 de 151"). Probado con 150 cuentas de
+>   portal sintéticas en la copia local (borradas), Chrome/Firefox 1366 y 390.
+>   Solo frontend.
 > - **2026-10-09 — Permisos A–E (aprobados, "arreglar antes de mostrarlo").**
 >   (A) /usuarios marca las cuentas del portal ("Portal del empleado · legajo
 >   2525 · Nombre") y al editarlas oculta rol/permisos con la explicación
