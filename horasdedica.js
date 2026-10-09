@@ -10,7 +10,7 @@ const { securityMiddlewares, apiKeyWarning, reportesRateLimiter } = require('./s
 const { evaluarFueraDeHorario } = require('./motor-laboral/services/fueraDeHorario');
 const { esRotativa } = require('./motor-laboral/services/cicloDeTurnos');
 const turnosRepository = require('./motor-laboral/repositories/turnosRepository');
-const { resolveTenantId, requirePermission, requireAnyPermission, requireAppUser, requireSuperadmin, requireActiveSubscription } = require('./appUserMiddleware');
+const { resolveTenantId, requirePermission, requireAnyPermission, requireAppUser, requireSuperadmin, requireActiveSubscription, resolveTenantForWrite, MENSAJE_ELEGIR_EMPRESA } = require('./appUserMiddleware');
 // Auditoria de cargas manuales (horas extra, licencias, exclusiones): quien
 // las creo/modifico/borro y que decian antes. Ver auditLog.js y la migracion
 // 20260927_manual_entries_exclusions_audit.sql.
@@ -1902,6 +1902,44 @@ app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), asyn
   }
 });
 
+// ============================================================================
+// "Exigir razón al justificar" (opción de cada empresa, 2026-10-09)
+// ============================================================================
+// Pedido del dueño: que quede escrito POR QUÉ se justificó algo (no solo el
+// motivo de la lista). Es configuración por empresa y viene APAGADA: así no
+// le cambia nada a quien ya usa el sistema; la prende el administrador en
+// Configuración General. Encendida, el servidor rechaza crear o modificar una
+// justificación sin razón escrita (la pantalla también lo avisa antes, pero
+// el control que vale es este: no se puede saltear desde otra pantalla).
+const MENSAJE_RAZON_EXIGIDA = 'Tu empresa exige escribir la razón al justificar (Configuración General).';
+async function exigeRazonJustificacion(tenantId) {
+  if (tenantId == null) return false;
+  return (await getAppSetting('exigirRazonJustificacion', tenantId, db)) === '1';
+}
+const faltaRazon = (reason) => !String(reason ?? '').trim();
+
+app.get('/config/exigir-razon-justificacion', requireAnyPermission([['exclusions', 'read'], ['schedules', 'read']]), async (req, res) => {
+  try {
+    res.json({ exigirRazonJustificacion: await exigeRazonJustificacion(resolveTenantId(req)) });
+  } catch (err) {
+    console.error('ERROR fetching exigir razon:', err);
+    res.status(500).json({ error: 'Error leyendo la opción' });
+  }
+});
+
+app.post('/config/exigir-razon-justificacion', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    // Siempre de UNA empresa: nunca un valor "global" para todas.
+    const tenantId = resolveTenantForWrite(req);
+    if (tenantId == null) return res.status(400).json({ error: MENSAJE_ELEGIR_EMPRESA });
+    await setAppSetting('exigirRazonJustificacion', tenantId, req.body.exigirRazonJustificacion ? '1' : '0', db);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('ERROR saving exigir razon:', err);
+    res.status(500).json({ error: 'Error guardando la opción' });
+  }
+});
+
 // POST /config/user-exclusions - Crear exclusión
 app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), async (req, res) => {
   try {
@@ -1922,6 +1960,10 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
     }
     if (!(await userBelongsToCallerTenant(userId, req))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    if (faltaRazon(reason) && await exigeRazonJustificacion(user.tenant_id)) {
+      return res.status(400).json({ error: MENSAJE_RAZON_EXIGIDA });
     }
 
     const cupo = await verificarCupoJustificacion({
@@ -2004,6 +2046,10 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
       return res.status(400).json({ error: 'El rango no puede superar un año' });
     }
 
+    if (faltaRazon(reason) && await exigeRazonJustificacion(user.tenant_id)) {
+      return res.status(400).json({ error: MENSAJE_RAZON_EXIGIDA });
+    }
+
     const cupo = await verificarCupoJustificacion({
       tenantId: user.tenant_id, userId, eventTypeId, type, desde: dateFrom, hasta: dateTo,
     });
@@ -2063,6 +2109,9 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
     const previous = await loadExclusionForCaller(id, req);
     if (!previous) {
       return res.status(404).json({ error: 'Exclusión no encontrada' });
+    }
+    if (faltaRazon(reason) && await exigeRazonJustificacion(previous.tenant_id)) {
+      return res.status(400).json({ error: MENSAJE_RAZON_EXIGIDA });
     }
     const cupo = await verificarCupoJustificacion({
       tenantId: previous.tenant_id, userId: previous.userId, eventTypeId, type,

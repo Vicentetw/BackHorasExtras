@@ -201,6 +201,14 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — "Exigir la razón al justificar" (opción A aprobada).**
+>   Configuración General > Justificaciones: opción por empresa, APAGADA por
+>   defecto (no cambia nada a quien no la prende; AVP tampoco, la prende su
+>   administrador). Encendida, el servidor rechaza (400) crear un día, un
+>   rango o modificar una justificación sin razón escrita; el formulario dice
+>   "Razón (obligatoria)" y avisa antes de guardar. Se guarda en
+>   `app_settings` (`exigirRazonJustificacion`), sin migración.
+>   `test/exigir-razon-justificacion.test.js` (4). Suite 1014/1014.
 > - **2026-10-09 — Justificar una llegada tarde desde Presentismo.** En un
 >   día "Tarde", "Justificar" abre el formulario SIN "Día completo" (vino, no
 >   es una ausencia) y con "Justifica la llegada hasta" = la hora a la que
@@ -210,7 +218,7 @@
 >   ahora devuelve `createdByEmail`/`updatedByEmail`; las columnas ya
 >   existían desde la migración 20260927, no hace falta migración). Solo la
 >   fecha y no la hora: `createdAt` está en la hora del servidor de la base.
->   Pendiente de decisión: razón obligatoria. Suite 1010/1010.
+>   Suite 1010/1010.
 > - **2026-10-09 — Superadmin aislado por empresa + Registro de actividad +
 >   feriado en varias empresas** (pedido del dueño). El superadmin elige
 >   arriba "en qué empresa trabaja" y para el servidor pasa a ser un
