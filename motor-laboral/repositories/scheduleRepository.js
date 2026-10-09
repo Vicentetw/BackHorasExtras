@@ -96,6 +96,9 @@ async function findAssignedScheduleMapForDate(date, employeeIds, db, tenantId) {
        AND c.valid_from <= ?
        AND (c.valid_to IS NULL OR c.valid_to >= ?)
        AND t.active = 1
+       -- Aislamiento (2026-10-09): una plantilla de OTRA empresa nunca se usa,
+       -- aunque una asignación vieja apuntara a ella (hoy no hay ninguna).
+       AND (t.tenant_id = e.tenant_id OR t.tenant_id = 0 OR t.tenant_id IS NULL)
      ORDER BY e.employee_id ASC, c.valid_from DESC`,
     params
   );
@@ -131,6 +134,9 @@ async function findAssignedCalendarRowsForRange(fromDate, toDate, employeeIds, d
        AND c.valid_from <= ?
        AND (c.valid_to IS NULL OR c.valid_to >= ?)
        AND t.active = 1
+       -- Aislamiento (2026-10-09): una plantilla de OTRA empresa nunca se usa,
+       -- aunque una asignación vieja apuntara a ella (hoy no hay ninguna).
+       AND (t.tenant_id = e.tenant_id OR t.tenant_id = 0 OR t.tenant_id IS NULL)
      ORDER BY e.employee_id ASC, c.valid_from DESC`,
     params
   );

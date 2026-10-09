@@ -73,6 +73,15 @@ function createMotorLaboralRoutes({ db, attendanceService }) {
       const templateId = req.query.templateId !== undefined && req.query.templateId !== ''
         ? Number(req.query.templateId)
         : null;
+      // Aislamiento (2026-10-09): "calcular el día con esta plantilla" solo con
+      // una plantilla de TU empresa. Antes se aceptaba cualquier id y la
+      // respuesta mostraba los horarios/bloques de la plantilla de otra empresa.
+      if (templateId != null && tenantId != null) {
+        const [[tpl]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [templateId]);
+        if (!tpl || (tpl.tenant_id !== tenantId && tpl.tenant_id !== 0 && tpl.tenant_id != null)) {
+          return res.status(404).json({ error: 'Plantilla no encontrada' });
+        }
+      }
 
       const result = await attendanceService.calculateDailyAttendance({
         date, tenantId, templateId, umbralFueraDeHorario: await umbralFueraDeHorario(db, tenantId),
