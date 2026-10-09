@@ -131,6 +131,20 @@ if (-not ($ultimas -join "`n" -match 'Dump completed')) {
   throw "El archivo quedo INCOMPLETO (falta la marca 'Dump completed'). Se borro."
 }
 
+# Contadores AUTO_INCREMENT: mysqldump --no-data igual escribe el contador
+# de cada tabla (ej. "AUTO_INCREMENT=165020" en los fichajes). No es un dato
+# de nadie, pero deja ver cuánto usa el sistema la otra instalación, y hace
+# que la primera empresa de la base nueva nazca con un número enorme
+# (pasó en el ensayo del 2026-10-09: id 1000053). Se quitan: la base nueva
+# arranca contando desde 1.
+# Se lee y escribe como UTF-8 SIN marca BOM: Get-Content/Set-Content de
+# PowerShell 5.1 leen en la codificación de Windows y escriben con BOM, y
+# `mysql` rechaza un archivo que empieza con BOM (error de sintaxis en la
+# línea 1). Visto en el ensayo.
+$utf8SinBom = New-Object System.Text.UTF8Encoding($false)
+$texto = [System.IO.File]::ReadAllText($sql, $utf8SinBom) -replace ' AUTO_INCREMENT=\d+', ''
+[System.IO.File]::WriteAllText($sql, $texto, $utf8SinBom)
+
 # Red de seguridad: que NO se haya colado ni una fila de datos. Si aparece un
 # INSERT, este archivo llevaria datos de un cliente a la instalacion de otro.
 $inserts = (Select-String -Path $sql -Pattern '^INSERT INTO' -AllMatches).Count

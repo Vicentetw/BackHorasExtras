@@ -47,4 +47,10 @@ UNION ALL SELECT '20261013 nombre del reloj',
 -- empresa (antes de correrla hay 4 y 1).
 UNION ALL SELECT '20261014 aislamiento por empresa (rama aislamiento-por-empresa)',
   (SELECT COUNT(*) FROM vacation_scale WHERE tenant_id IS NULL) = 0
-  AND (SELECT COUNT(*) FROM ManualEntries WHERE tenant_id IS NULL) = 0;
+  AND (SELECT COUNT(*) FROM ManualEntries WHERE tenant_id IS NULL) = 0
+UNION ALL SELECT '20261015 horarios rotativos',
+  (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'template_cycle_days') > 0
+UNION ALL SELECT '20261016 categoria con plantilla sugerida',
+  (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee_categories' AND COLUMN_NAME = 'plantilla_sugerida_id') > 0
+UNION ALL SELECT '20261017 registro de actividad',
+  (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'registro_actividad') > 0;

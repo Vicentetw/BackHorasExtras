@@ -1,44 +1,70 @@
-# Replicar el sistema en los 3 servidores
+# Montar el sistema en 3 servidores nuevos
 
 Instructivo para levantar una instalación **completa y separada** de Horas
-Dedica: su propio frontend, su propio backend y su propia base, sin ninguna
-relación con la instalación de AVP.
+Dedica (su propia base, su propio backend y su propio frontend) desde cero.
+
+> **Revisado y ensayado el 2026-10-09.** Se hizo la instalación entera en
+> Docker siguiendo este documento: estructura → siembra → superadmin →
+> backend apuntando a la base nueva → crear empresa, administrador, motivo,
+> empleado, horario, feriado, Presentismo y registro de actividad. Salió
+> bien de punta a punta (14 de 14 comprobaciones). El ensayo encontró que la
+> versión anterior de este documento dejaba la instalación **sin roles**
+> (ver paso 1.5): ya está corregido.
+
+Si lo que pasó es que **se perdieron los datos** (o se cayó un servidor) y
+hay que volver a funcionar, empezá por **`RECUPERACION_ANTE_DESASTRE.md`**:
+ahí está qué parte de este documento usar en cada caso.
 
 ---
 
 ## Antes que nada: ¿de verdad hace falta?
 
-**Para vender a una empresa más, no.** El sistema es multiempresa: un cliente
-nuevo es una fila en `tenants` dentro de esta misma instalación, y nace vacío
-sin ver un solo dato de los demás. Eso es lo que verifica
-`test/full-tenant-isolation.test.js` (dos empresas con legajos, USERID y
-credenciales idénticos, ningún dato que se cruce). Los pasos de ese camino
-están en `ESTADO_PROYECTO.md`, sección "Cómo dar de alta una empresa nueva".
+**Para que un cliente nuevo pruebe el sistema, en general NO.** El sistema
+es multiempresa: un cliente nuevo es una empresa más dentro de esta misma
+instalación, nace vacía y no ve un solo dato de los demás (lo verifica
+`test/full-tenant-isolation.test.js` en cada corrida de tests). Y el camino
+ya está armado:
 
-Replicar la instalación entera tiene sentido en tres casos:
+- el cliente se registra en la landing → **Solicitudes de alta** → al
+  aprobarla se crea la empresa con **un mes de prueba gratis**, su
+  administrador (que recibe el mail para poner la contraseña) y sus valores
+  iniciales; o
+- el superadmin la crea en **Empresas** y le crea el administrador en
+  **Usuarios y Roles**.
+
+Y si hace falta ayudarlo a arrancar, el superadmin puede **trabajar dentro de
+su empresa** (botón de arriba, ver `SOPORTE_Y_REGISTRO.md`), con todo
+registrado.
+
+Una instalación separada (los 3 servidores de nuevo) tiene sentido en estos
+casos:
 
 1. **Un cliente exige por contrato que sus datos no compartan base** con
-   otros. Es una decisión comercial legítima, y hay que cobrarla: multiplica
-   el mantenimiento.
-2. **Un ambiente de prueba o demo** donde romper cosas no importe — por
-   ejemplo para mostrar el motor de reglas nuevo sin tocar producción.
-3. **Mudar todo a otra cuenta** (otro Render, otro Firebase, otro Clever
-   Cloud) porque cambia quién paga o quién administra.
+   otros. Es legítimo y hay que cobrarlo: multiplica el mantenimiento.
+2. **Un ambiente de prueba o demostración** donde romper cosas no importe.
+3. **Recuperarse de un desastre** en que se perdió un servidor entero o la
+   cuenta (Render, Clever Cloud o Firebase).
+4. **Mudar todo a otra cuenta** porque cambia quién paga o administra.
 
-**El costo real de tener N instalaciones**: cada corrección, cada migración y
-cada despliegue hay que hacerlos N veces. El primer olvido deja dos clientes
-con cálculos distintos sobre las mismas reglas — y acá se calculan horas que
-se pagan.
+**El costo de tener N instalaciones**: cada migración, cada publicación del
+frontend y cada backup hay que hacerlos N veces. El primer olvido deja dos
+clientes con cálculos distintos sobre las mismas reglas, y acá se calculan
+horas que se pagan.
 
 ---
 
 ## Los 3 servidores y qué hace cada uno
 
-| Servidor | Qué corre | Instalación actual |
+| Servidor | Qué corre | Instalación actual (AVP) |
 |---|---|---|
-| **Clever Cloud** | La base MySQL 8.4 | addon MySQL |
+| **Clever Cloud** | La base MySQL 8 | addon MySQL (base `bjtzqo…`) |
 | **Render** | El backend Node/Express | Web Service `academypruebadep.onrender.com` |
-| **Firebase Hosting** | El frontend Angular | proyecto `horasdedicacionavp` → `horasdedicacionavp.web.app` |
+| **Firebase Hosting** | El frontend Angular (y la landing dentro del sistema) | proyecto `horasdedicacionavp` → `horasdedicacionavp.web.app` |
+
+Además hay servicios que no son "servidores" pero se configuran:
+**Firebase Authentication** (el login), **Cloudflare Turnstile** (el
+captcha del registro), **MercadoPago** (cobros), **Telegram** (avisos) y el
+**agente de fichajes** en la PC de cada cliente con reloj.
 
 ### ⚠️ Firebase son DOS proyectos distintos, no uno
 
@@ -47,54 +73,60 @@ Esto ya causó un bug real y es lo más fácil de arruinar:
 - **Hosting** (dónde vive la página): proyecto `horasdedicacionavp`.
 - **Autenticación** (quién puede entrar): proyecto **`asistenciatw`**.
 
-Se ve en `src/environments/environment.ts` del frontend: `.firebaserc` apunta
-a `horasdedicacionavp`, pero el `firebaseConfig` que usa el login dice
+Se ve en `src/environments/environment.ts` del frontend: `.firebaserc`
+apunta a `horasdedicacionavp`, pero el `firebaseConfig` del login dice
 `projectId: 'asistenciatw'`.
 
-Consecuencia para una instalación nueva: **el `FIREBASE_SERVICE_ACCOUNT` del
-backend tiene que ser del proyecto de AUTENTICACIÓN**, no del de hosting. El
-backend usa esa credencial para verificar los tokens que emite el login; si
-es del proyecto equivocado, todos los tokens se rechazan y nadie puede
-entrar, con un error que no dice nada de proyectos.
+Consecuencias para una instalación nueva:
+
+- el **`FIREBASE_SERVICE_ACCOUNT`** del backend tiene que ser del proyecto
+  de **autenticación**. Si es del otro, todos los tokens se rechazan y nadie
+  entra, con un error que no dice nada de proyectos;
+- si la autenticación es un proyecto **distinto** de `asistenciatw`, también
+  hay que cargar **`FIREBASE_WEB_API_KEY`** en el backend (ver paso 2.2).
 
 ---
 
 ## El orden importa
 
-Base → backend → frontend. Cada uno necesita datos del anterior: el backend
-necesita la dirección de la base, y el frontend necesita la URL del backend.
-Hacerlo al revés obliga a volver atrás.
+**Base → backend → frontend.** Cada uno necesita datos del anterior: el
+backend necesita la dirección de la base, y el frontend la del backend.
 
 ---
 
 ## Paso 1 — La base (Clever Cloud)
 
-**1.1.** Crear un addon MySQL nuevo. Anotar host, puerto, usuario, contraseña
-y nombre de la base.
+**1.1.** Crear un addon MySQL nuevo. Anotar host, puerto, usuario,
+contraseña y nombre de la base (guardalos en un gestor de contraseñas: ver
+"Dónde guardar las claves" al final).
 
-**1.2.** Exportar la estructura de la base que ya funciona:
+**1.2.** Exportar la **estructura** (tablas sin datos) de la base que ya
+funciona:
 
 ```powershell
 cd C:\angular\horasdedicacion-back-deploy\BackHorasExtras
 .\scripts\exportar-estructura.ps1
 ```
 
-Genera un `.sql` con las 51 tablas y **cero filas**. El script verifica que
-no se haya colado ni un `INSERT`: si aparece uno, borra el archivo y falla —
-un archivo con datos llevaría información de un cliente a la instalación de
-otro.
+- Por defecto lee las credenciales de producción de `motor-laboral\.env`
+  (solo LEE la estructura; no toca datos). Con `-EnvFile <otro .env>` se
+  exporta de otra base.
+- Genera un `.sql` con **todas las tablas y cero filas**. Si se coló un
+  `INSERT`, borra el archivo y falla: un archivo con datos llevaría
+  información de un cliente a la instalación de otro.
+- Desde el 2026-10-09 también quita los contadores `AUTO_INCREMENT` (si no,
+  la primera empresa de la base nueva nacía con un número enorme y se veía
+  cuánto usa AVP el sistema) y escribe el archivo en UTF-8 sin BOM (con BOM,
+  `mysql` lo rechaza).
+- Anotá la cantidad de tablas que informa: **65** en producción al
+  2026-10-09 (con la migración `20261017` aplicada son 66).
 
-**Por qué se saca de la base y no de un archivo del repo**: `schema/full_schema_snapshot.sql`
-quedó viejo. Verificado el 2026-09-22: declara 42 tablas y la base real tiene
-51. Un archivo de esquema escrito a mano se desactualiza sin que nadie se
-entere; la base que está funcionando, no.
-
-**Por qué no se corren las 48 migraciones sobre una base vacía**: son
+**Por qué se saca de la base y no de las migraciones**: son más de 60
 archivos escritos a lo largo de meses, varios pensados para modificar tablas
-que ya existían con datos adentro. Cualquiera que asuma algo del estado
-anterior falla o deja la base a medias, justo cuando uno está poniendo en
-marcha un cliente. La estructura actual ya *es* el resultado de haberlas
-corrido todas.
+que ya tenían datos. Correrlos en orden sobre una base vacía falla o la deja
+a medias. La estructura de la base que funciona ya *es* el resultado de
+haberlos corrido todos. (Tampoco sirve `schema/full_schema_snapshot.sql`:
+quedó viejo.)
 
 **1.3.** Cargarla en la base nueva:
 
@@ -102,302 +134,260 @@ corrido todas.
 mysql -h HOST_NUEVO -P PUERTO -u USUARIO -p BASE_NUEVA < estructura-....sql
 ```
 
-**1.4.** Verificar que tenga las mismas 51 tablas:
+(o en phpMyAdmin de Clever Cloud: Importar → ese archivo).
+
+**1.4.** Verificar que tenga la misma cantidad de tablas:
 
 ```sql
 SELECT COUNT(*) FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = 'BASE_NUEVA' AND TABLE_TYPE = 'BASE TABLE';
 ```
 
-**1.5. Sembrar los catálogos.** ⚠️ **Este paso es obligatorio y es el que más
-fácil se olvida.**
-
-El dump del paso 1.2 trae la estructura pero **ninguna fila**, así que las
-tablas de catálogo quedan vacías. Sin `roles` y `role_permissions` no se le
-puede dar ningún permiso a nadie: el sistema arranca, se puede entrar como
-superadmin, y no se puede crear un solo usuario que sirva.
-
-Correr estas tres migraciones, en este orden. Las tres son idempotentes (se
-pueden re-correr sin romper nada):
+**1.5. Sembrar los datos de la plataforma.** ⚠️ **Obligatorio.**
 
 ```powershell
-mysql -h HOST -P PUERTO -u USUARIO -p BASE < migrations\20260902_add_roles.sql
-mysql -h HOST -P PUERTO -u USUARIO -p BASE < migrations\20260903_overtime_auth_and_vacation_scale.sql
-mysql -h HOST -P PUERTO -u USUARIO -p BASE < migrations\20260906_billing_plans.sql
+mysql -h HOST -P PUERTO -u USUARIO -p BASE < scripts\sembrar-instalacion-nueva.sql
 ```
 
-| Migración | Qué siembra |
+Carga **solo** lo que la plataforma necesita para funcionar:
+
+| Qué | Para qué |
 |---|---|
-| `20260902_add_roles.sql` | los 4 roles del sistema y sus 63 permisos — **imprescindible** |
-| `20260903_overtime_auth_and_vacation_scale.sql` | la escala de vacaciones por antigüedad (14/21/28/35 días, LCT art. 150) como default global editable, y 2 valores por defecto de configuración |
-| `20260906_billing_plans.sql` | el plan de facturación base — solo si se va a cobrar |
+| los 4 roles del sistema con sus 57 permisos | sin roles no se le puede dar permisos a nadie: se entra como superadmin pero no se puede crear un usuario que sirva |
+| el plan de facturación por defecto | sin él, aprobar una solicitud de alta falla con "No hay un plan por defecto configurado" (los precios se editan en Planes) |
 
-Verificar que quedaron:
+Al final muestra un control: tiene que dar **`roles = 4, permisos = 57,
+plan_por_defecto = 1`**. Se puede correr más de una vez sin duplicar nada.
 
-```sql
-SELECT (SELECT COUNT(*) FROM roles) AS roles,              -- esperado: 4
-       (SELECT COUNT(*) FROM role_permissions) AS permisos, -- esperado: 63
-       (SELECT COUNT(*) FROM vacation_scale) AS vacaciones; -- esperado: 4
-```
+⚠️ **No usar las migraciones `20260902`, `20260903` ni `20260906` para
+esto**, como decía la versión anterior de este documento. Empiezan
+agregando columnas (`ALTER TABLE … ADD COLUMN`) que la estructura del paso
+1.2 ya tiene: `mysql` corta en ese error y **los roles nunca se cargan**.
+Comprobado en el ensayo: quedaban 0 roles.
 
-### ⚠️ Una migración que NO hay que correr
+Lo que **no** hace falta sembrar:
+- la escala de vacaciones y el régimen de pago: cada empresa los recibe
+  **sola al crearse** (`kitInicialEmpresa.js`);
+- los valores de configuración: el código tiene sus valores por defecto;
+- los motivos de ausencia: los crea el administrador de cada empresa en
+  **Administración > Motivos de Ausencia** (paso 5).
 
-**`20260721_add_app_users_permissions_tenant.sql`** no es una migración de
-estructura nada más: crea una empresa llamada "Empresa Principal" y además
-inserta como superadmin la cuenta personal `perrottavicente@gmail.com` con un
-Firebase UID fijo escrito en el archivo (líneas 30 y 42).
+### ⚠️ Una migración que NO hay que correr nunca en una instalación nueva
 
-En una instalación para un cliente eso deja una empresa fantasma y una cuenta
-ajena con acceso total. Las tablas que esa migración crea ya vienen en el
-dump del paso 1.2, así que no hace falta para nada.
-
-**Los motivos de ausencia (`event_types`) son por empresa, no catálogo**:
-cada empresa tiene los suyos (VACACIONES, ENFERMEDAD, ART, ARTICULO_55,
-PERMISO, ESTUDIO, OTRO). Se cargan después de crear la empresa, en el paso 5.
+**`20260721_add_app_users_permissions_tenant.sql`** crea una empresa
+"Empresa Principal" y además inserta como superadmin la cuenta personal
+`perrottavicente@gmail.com` con un UID fijo. En una instalación para un
+cliente eso deja una empresa fantasma y una cuenta ajena con acceso total.
 
 ---
 
 ## Paso 2 — El backend (Render)
 
-**2.1.** Crear un Web Service nuevo apuntando al repo `Vicentetw/BackHorasExtras`,
-rama `main`.
-
-No hay `render.yaml` en el repo: la configuración vive en el panel de Render
-y hay que cargarla a mano.
+**2.1.** Crear un **Web Service** nuevo apuntando al repo
+`Vicentetw/BackHorasExtras`, rama `main`.
 
 - **Build command**: `npm ci`
 - **Start command**: `node horasdedica.js`
+- No hay `render.yaml`: la configuración se carga a mano en el panel.
+- El punto de entrada es `horasdedica.js` (no lo que dice `"main"` en
+  `package.json`). El puerto lo pone Render (`PORT`).
 
-El punto de entrada **no** es lo que dice `"main"` en `package.json` (ahí dice
-`db.js`, que está mal y no se usa). El servidor que escucha es
-`horasdedica.js`, y toma el puerto de `process.env.PORT`, que Render provee
-solo.
+**2.2.** Cargar las variables de entorno. La lista completa, con qué pasa si
+falta cada una, está en **`VARIABLES_DE_ENTORNO.md`**. Las que hay que
+cargar sí o sí:
 
-**2.2.** Cargar las variables de entorno.
-
-**Obligatorias** — sin alguna de estas el sistema no funciona o funciona mal:
-
-| Variable | Qué es |
+| Variable | Valor |
 |---|---|
-| `MYSQL_ADDON_HOST` | del paso 1.1 |
-| `MYSQL_ADDON_PORT` | del paso 1.1 |
-| `MYSQL_ADDON_USER` | del paso 1.1 |
-| `MYSQL_ADDON_PASSWORD` | del paso 1.1 |
-| `MYSQL_ADDON_DB` | del paso 1.1 |
-| `FIREBASE_SERVICE_ACCOUNT` | el JSON completo de la cuenta de servicio, **del proyecto de autenticación** (ver la advertencia de arriba) |
-| `API_KEY` | ⚠️ ver abajo |
-| `CORS_ORIGINS` | la URL del frontend nuevo, separadas por coma si hay varias |
+| `MYSQL_ADDON_HOST`, `_PORT`, `_USER`, `_PASSWORD`, `_DB` | los del paso 1.1 |
+| `MYSQL_SSL` | `no-verify` en Clever Cloud (cifra la conexión) |
+| `FIREBASE_SERVICE_ACCOUNT` | el JSON completo de la cuenta de servicio del proyecto de **autenticación**, en una línea |
+| `FIREBASE_WEB_API_KEY` | ⚠️ **solo si la autenticación NO es `asistenciatw`**: la `apiKey` web de ese proyecto. Si falta, el mail de "poner tu contraseña" se pide al proyecto de AVP y no le llega a nadie |
+| `NODE_ENV` | `production` (sin esto, el login no falla cerrado cuando debería) |
+| `CORS_ORIGINS` | la dirección del frontend nuevo (y de la landing aparte, si hay), separadas por coma, sin barra final |
+| `API_KEY` | una cadena larga y aleatoria, **distinta** de la de AVP; va también en el `environment.ts` del frontend (paso 3) |
 
-⚠️ **`API_KEY` falla en silencio si falta.** En `security.js:33` está
-`if (!API_KEY) return next();` — o sea que si la variable no está cargada, la
-capa de clave de aplicación **queda desactivada** y el servidor arranca
-normal, sin ningún error ni aviso. Es el tipo de olvido que no se nota hasta
-que alguien lo busca. Tiene que ser una cadena larga y aleatoria, distinta de
-la de la instalación de AVP, y el mismo valor va después en el
-`environment.ts` del frontend.
+Para las funciones opcionales (cobros, captcha del registro, chat de
+ventas, avisos por Telegram, monitoreo): ver `VARIABLES_DE_ENTORNO.md`.
 
-⚠️ **`CORS_ORIGINS` sin cargar también rompe.** El valor por defecto
-(`security.js:21`) es solo `localhost`, así que el frontend publicado no va a
-poder hablarle al backend.
+**2.3.** Verificar:
 
-**Opcionales** — el sistema arranca sin ellas, pero esa función queda apagada:
+```
+https://<backend-nuevo>/health                     → {"ok":true,...,"version":"<commit>"}
+https://<backend-nuevo>/api/billing/plans          → 401 (pide login: está protegido)
+```
 
-| Variable | Si falta |
-|---|---|
-| `FRONTEND_URL` | los links de vuelta de MercadoPago apuntan a `horasdedicacionavp.web.app`, o sea a la instalación equivocada. Cargarla siempre que haya cobro |
-| `MERCADOPAGO_ACCESS_TOKEN` | no se puede cobrar |
-| `MERCADOPAGO_WEBHOOK_SECRET` | no se validan los avisos de pago |
-| `SENTRY_DSN` | sin monitoreo de errores (`monitoreo.js` queda inerte, no rompe) |
-| `SENTRY_ENVIRONMENT` | por defecto `production` |
-| `TURNSTILE_SECRET_KEY` | sin captcha en el registro público |
-| `ANTHROPIC_API_KEY` | sin el chat de ventas de la landing |
+Si el segundo da **503**, Firebase no inicializó (`FIREBASE_SERVICE_ACCOUNT`).
+Si da **200**, algo está muy mal: responde sin pedir login.
 
-**2.3.** Verificar que levantó: abrir la URL del servicio y ver los logs de
-arranque (`✅ Backend escuchando en puerto`).
+**2.4. Las migraciones futuras.** Las corre el dueño a mano, **en cada
+base**: phpMyAdmin de Clever Cloud (pegar el `.sql`) o, desde la PC:
 
-**2.4.** Configurar los secrets del repo para las migraciones futuras.
-GitHub → Settings → Secrets and variables → Actions:
-`MYSQL_ADDON_HOST`, `MYSQL_ADDON_PORT`, `MYSQL_ADDON_USER`,
-`MYSQL_ADDON_PASSWORD`, `MYSQL_ADDON_DB`.
+```powershell
+$env:MYSQL_ADDON_HOST="..."; $env:MYSQL_ADDON_PORT="3306"; $env:MYSQL_ADDON_USER="..."
+$env:MYSQL_ADDON_PASSWORD="..."; $env:MYSQL_ADDON_DB="..."
+node run-sql.js migrations\2026XXXX_nombre.sql
+```
 
-Son los que usa el workflow `run-migration.yml`, que corre una migración a
-mano desde la pestaña Actions sin necesidad de una terminal.
+Ya no se usa el workflow de GitHub Actions (`run-migration.yml`): el repo es
+público y no se guardan credenciales de producción ahí. Para saber qué
+migraciones tiene una base: `DIAGNOSTICO_MIGRACIONES.sql` (solo lectura).
 
-⚠️ **Pero son un solo juego de secrets por repositorio.** Si las dos
-instalaciones salen del mismo repo, ese workflow apunta a **una sola** de las
-dos bases. Con más de una instalación hay que correr las migraciones a mano
-con `run-sql.js` contra cada base, o el workflow va a migrar siempre la misma
-y la otra se va a quedar atrás sin que nadie lo note.
+Render publica cada push a `main` en **todos** los backends que apunten al
+repo: el código nuevo llega a todas las instalaciones a la vez, pero las
+migraciones no. Por eso todo código nuevo funciona también sin su migración.
 
 ---
 
 ## Paso 3 — El frontend (Firebase Hosting)
 
-**3.1.** Crear el proyecto de Firebase Hosting nuevo (o un sitio nuevo dentro
-del existente).
+**3.1.** Crear el proyecto de Firebase Hosting nuevo (o un sitio nuevo
+dentro del existente: Hosting → "Agregar otro sitio", gratis).
 
-**3.2.** Decidir la autenticación: reusar el proyecto de Auth actual
-(`asistenciatw`) o crear uno nuevo. **Si es un cliente que exige datos
-separados, tiene que ser uno nuevo** — si no, sus usuarios viven en la misma
-base de identidades que los de AVP, que es justo lo que se quería evitar.
+**3.2.** Decidir la autenticación: reusar `asistenciatw` o crear un proyecto
+nuevo. **Si el cliente exige datos separados, tiene que ser uno nuevo**: si
+no, sus usuarios viven en la misma lista de cuentas que los de AVP.
 
-**3.3.** En `src/environments/environment.ts`, cambiar:
+En el proyecto de autenticación que se use:
+- Authentication → Sign-in method: habilitar **Email/contraseña** (y Google
+  si se usa);
+- Authentication → Settings → **Authorized domains**: agregar el dominio
+  del frontend nuevo (`<sitio>.web.app`). Si falta, el login con Google y
+  los links de "restablecer contraseña" fallan;
+- Authentication → Templates: el mail de restablecer contraseña en español
+  (es el que recibe cada administrador nuevo para poner su clave).
 
-- `backendUrl` → la URL del Render nuevo
-- `apiKey` → el mismo valor que cargaste en `API_KEY` en el paso 2.2
-- `firebaseConfig` → el del proyecto de autenticación elegido en 3.2
+**3.3. Los archivos que cambian por instalación.** Son cuatro, y los cuatro
+tienen la dirección de AVP escrita:
 
-Estos valores **no son secretos**: viajan al navegador por diseño. La
-seguridad real la dan el login de Firebase y los permisos por usuario, que se
-resuelven en el backend.
+| Archivo | Qué cambiar |
+|---|---|
+| `src/environments/environment.ts` | `backendUrl` (Render nuevo), `apiKey` (= `API_KEY` del paso 2.2), `firebaseConfig` (el del proyecto de autenticación) |
+| `firebase.json` | la política de seguridad (CSP, en `headers`): en `connect-src` la URL del Render nuevo; en `frame-src` el `authDomain` del proyecto de autenticación; y el `report-uri` (Render nuevo). ⚠️ Cuando la CSP pase de "solo reportar" a "bloquear", si esto quedó con la dirección de AVP **el frontend nuevo no va a poder hablarle a su backend** |
+| `.firebaserc` | el proyecto de hosting nuevo |
+| `public/landing.js` y `public/landing.html` | `BACKEND_URL` y la `data-sitekey` de Turnstile (solo si se usa la landing de esa instalación) |
 
-**3.4.** Apuntar `.firebaserc` al proyecto nuevo y publicar:
+(`environment.development.ts` es el de `ng serve` en la PC: no se publica.)
+
+**Cómo no mezclar instalaciones**: `main` tiene los valores de AVP. Para
+otra instalación, usar una **rama propia** (`instalacion/<nombre>`) con solo
+esos cuatro archivos cambiados, y para publicar una versión nueva: traer
+`main` a esa rama (`git merge main`) y publicar desde ahí. Publicar desde
+`main` con los archivos de otra instalación publica el frontend de un
+cliente apuntando al backend de otro.
+
+**3.4.** Publicar:
 
 ```powershell
 cd C:\angular\horasDedicacionOnlineAngular\horas-dedica-angular
-npm run deploy:live
+npm run deploy:preview   # prueba en una dirección aparte (no toca el sitio)
+npm run deploy:live      # publica
 ```
 
-El deploy del frontend **no es automático** — no alcanza con pushear.
+No es automático: no alcanza con hacer push.
 
-Para probar sin tocar el sitio real: `npm run deploy:preview`, que publica en
-una URL aparte.
+**3.5.** Volver al backend (Render) y verificar que `CORS_ORIGINS` tenga la
+dirección exacta del frontend nuevo. Si falta, el navegador no dice "CORS":
+dice "no se pudo conectar con el servidor".
 
 ---
 
 ## Paso 4 — Crear el superadmin (y nada más)
 
-**No hay nada que vaciar.** La base nueva arranca sin una sola empresa, sin un
-solo empleado y sin un solo usuario: el dump del paso 1.2 no trae filas y los
-catálogos del 1.5 no crean ninguna cuenta. El único dato que va a existir
-cuando termines este paso es el superadmin.
+La base nueva no tiene ni una empresa, ni un empleado ni un usuario. El único
+dato que se crea a mano es el superadmin: la pantalla de Usuarios exige
+estar logueado con permisos, y todavía no existe nadie.
 
-### Cómo funciona una cuenta acá (para entender por qué son dos pasos)
+Una cuenta vive en **dos lugares**: **Firebase Auth** (email y contraseña:
+*quién sos*) y la tabla **`app_users`** (empresa, rol, si es superadmin:
+*qué podés hacer*). Se unen por el **`firebase_uid`**. Tienen que existir
+las dos, con el mismo UID.
 
-Una cuenta vive en **dos lugares a la vez**, y hacen cosas distintas:
+**4.1.** En la consola de Firebase, proyecto de **autenticación**:
+Authentication → Users → **Add user** (email y contraseña) y **copiar el
+`User UID`** (unos 28 caracteres).
 
-- **Firebase Auth** guarda el email y la contraseña. Es lo único que sabe
-  *quién sos*. Cuando entrás, Firebase emite un token.
-- **La tabla `app_users`** guarda *qué podés hacer*: a qué empresa
-  pertenecés, qué rol tenés, si sos superadmin, si estás activo.
-
-Las dos se unen por el **`firebase_uid`**: la cadena que Firebase le asigna a
-la cuenta. El backend recibe el token, saca el UID y busca esa fila.
-
-Consecuencia práctica: si creás la cuenta solo en Firebase, podés poner la
-contraseña pero el backend no te reconoce. Si creás solo la fila en
-`app_users` con un UID inventado, no vas a poder loguearte nunca. **Tienen
-que existir las dos, con el mismo UID.**
-
-Para el *primer* superadmin no hay forma de usar la pantalla de Usuarios: esa
-pantalla exige estar logueado con permisos, y todavía no existe nadie. Por
-eso este primer usuario, y solo este, se crea a mano.
-
-### 4.1. Crear la cuenta en Firebase
-
-En la consola de Firebase, en el proyecto de **autenticación** que elegiste en
-el paso 3.2 (ojo: el de autenticación, no el de hosting):
-
-1. Authentication → Users → **Add user**
-2. Email y contraseña
-3. **Copiar el `User UID`** que aparece en la lista. Es una cadena de ~28
-   caracteres como `8F5FJYCLwHSLSgEzBDhDo1UcOP33`.
-
-### 4.2. Crear la fila en `app_users`
+**4.2.** En la base nueva:
 
 ```sql
 INSERT INTO app_users (firebase_uid, email, tenant_id, role_id, is_superadmin, is_active)
 VALUES ('EL_UID_QUE_COPIASTE', 'el@email.com', NULL, NULL, 1, 1);
 ```
 
-Qué significa cada valor, porque acá es fácil equivocarse:
-
 | Columna | Valor | Por qué |
 |---|---|---|
-| `firebase_uid` | el UID del paso 4.1 | es la única unión con Firebase; si no coincide exactamente, el login falla sin decir por qué |
-| `tenant_id` | **`NULL`** | el superadmin **no pertenece a ninguna empresa**: por eso las ve todas. Si le ponés un número, queda encerrado en esa empresa |
-| `role_id` | **`NULL`** | los roles limitan permisos dentro de una empresa. El superadmin no pasa por ahí |
-| `is_superadmin` | `1` | es una **columna**, no un rol. Es lo que habilita crear empresas y ver todo |
-| `is_active` | `1` | en `0` la cuenta existe pero no puede entrar |
+| `firebase_uid` | el UID del 4.1 | es la única unión con Firebase; si no coincide exacto, el login falla sin decir por qué |
+| `tenant_id` | `NULL` | el superadmin no pertenece a ninguna empresa |
+| `role_id` | `NULL` | los roles son para usuarios de una empresa |
+| `is_superadmin` | `1` | es una columna, no un rol |
+| `is_active` | `1` | en `0` la cuenta existe pero no entra |
 
-### 4.3. Verificar
+**4.3.** Verificar: `SELECT id, email, tenant_id, is_superadmin FROM app_users;`
+tiene que dar **una sola fila**, y `SELECT COUNT(*) FROM tenants;` **0**.
 
-```sql
-SELECT id, email, tenant_id, is_superadmin, is_active FROM app_users;
-```
-
-Tiene que devolver **exactamente una fila**, con `tenant_id` en `NULL` y
-`is_superadmin` en `1`. Si hay más de una, algo se sembró de más — revisá que
-no hayas corrido `20260721_add_app_users_permissions_tenant.sql`.
-
-Y que no haya empresas todavía:
-
-```sql
-SELECT COUNT(*) FROM tenants;   -- tiene que dar 0
-```
-
-### 4.4. Entrar
-
-Entrar al frontend nuevo con ese email y contraseña. `/empresas` tiene que
-estar **vacío**.
-
-Si aparece una empresa que no creaste, el frontend está apuntando a la base
-equivocada — revisá `backendUrl` en `environment.ts` y las variables de
-MySQL en Render.
-
-### 4.5. De acá en adelante, ya no se toca SQL
-
-Todo lo demás sale de las pantallas: crear la empresa, su administrador, su
-suscripción, su clave de agente. El paso a paso está en `ESTADO_PROYECTO.md`,
-sección "Cómo dar de alta una empresa nueva".
+**4.4.** Entrar al frontend nuevo con ese email. **Empresas** tiene que
+estar vacía. Si aparece una empresa que no creaste, el frontend apunta a
+otro backend (`backendUrl`) o el backend a otra base (variables de Render).
 
 ---
 
-## Paso 5 — Los motivos de ausencia de la primera empresa
+## Paso 5 — La primera empresa (ya sin SQL)
 
-`event_types` (VACACIONES, ENFERMEDAD, ART, ARTICULO_55, PERMISO, ESTUDIO,
-OTRO) es **por empresa**, no catálogo global. Una empresa recién creada no
-tiene ninguno, y sin ellos no se puede cargar una licencia.
+Todo sale de las pantallas:
 
-Con el `tenant_id` de la empresa ya creada:
-
-```sql
-INSERT INTO event_types (tenant_id, code, descripcion, descuenta_vacaciones, requiere_aprobacion, active) VALUES
-  (?, 'VACACIONES',  'Vacaciones',            1, 1, 1),
-  (?, 'ENFERMEDAD',  'Enfermedad',            0, 0, 1),
-  (?, 'ART',         'ART',                   0, 1, 1),
-  (?, 'ARTICULO_55', 'Articulo 55',           0, 1, 1),
-  (?, 'PERMISO',     'Permiso',               0, 1, 1),
-  (?, 'ESTUDIO',     'Licencia por estudio',  0, 1, 1),
-  (?, 'OTRO',        'Otro',                  0, 0, 1);
-```
-
-Es la lista que usa AVP hoy; cada empresa puede tener la suya.
+1. **Empresas → Nueva empresa** (recibe sola la escala de vacaciones de la
+   ley y el régimen de pago mensual). O, si el cliente se registra solo en
+   la landing, **Solicitudes de alta → Aprobar** (crea empresa, mes de
+   prueba y administrador, y le manda el mail de la contraseña).
+2. **Usuarios y Roles**: el administrador de la empresa, rol
+   "Administrador de Empresa". En Empresas, elegirlo como **titular**.
+3. **Facturación**: la suscripción (o el mes de prueba).
+4. El administrador de la empresa (o el superadmin trabajando en ella)
+   carga: **Motivos de Ausencia** (vacaciones, enfermedad, etc.),
+   empleados, plantillas de horario, feriados.
+5. **Si tiene reloj**: crear la clave del agente (**Facturación** → fila
+   de la empresa → **Claves de agente**; se ve una sola vez) e instalar el
+   agente en su PC. En el `config.ini` del agente:
+   `[servidor] url = <backend nuevo>` y `clave = <la clave creada>`.
 
 ---
 
 ## Verificación final
 
-1. Entrar al frontend nuevo y loguearse.
-2. Confirmar que `/empresas` está **vacío** — si aparece una empresa que no
-   creaste, algo quedó apuntando a la base equivocada.
-3. Crear una empresa de prueba, cargar un empleado, borrarlo.
-4. Confirmar que el Render nuevo aparece en los logs cuando usás el frontend
-   nuevo, y que el de AVP **no** registra nada.
+1. Entrar y loguearse. **Empresas** muestra solo lo que creaste.
+2. Crear un empleado, una plantilla con el asistente, un feriado; abrir
+   Presentismo de un día; ver que en **Registro de actividad** quedaron los
+   cambios.
+3. En los logs de Render del backend **nuevo** se ven esos pedidos, y en
+   los del de AVP **no**.
+4. Si se usa la landing de esa instalación: registrarse con un mail propio
+   y ver que llegue la solicitud.
 
 ---
 
 ## Lo que hay que repetir en cada instalación, para siempre
 
-Esto es el costo real de la decisión, y conviene tenerlo escrito:
+- **Cada migración nueva**, en cada base.
+- **Cada publicación del frontend**, desde la rama de esa instalación.
+- **Cada backup**: un workflow de backup por base (ver
+  `RECUPERACION_ANTE_DESASTRE.md`) y `backup-produccion.ps1` con su propio
+  `-EnvFile` y `-Destino`.
+- **Cada cambio de claves**.
 
-- **Cada migración nueva**, en cada base, en el mismo orden.
-- **Cada deploy de frontend** (`npm run deploy:live` por separado, con el
-  `environment.ts` correcto en cada uno — equivocarse acá publica el
-  frontend de un cliente apuntando al backend de otro).
-- **Cada backup** (`backup-produccion.ps1` con un `-EnvFile` y un `-Destino`
-  distintos por instalación).
-- **Cada rotación de credenciales.**
+## Dónde guardar las claves
 
-Render redespliega solo al pushear a `main`, así que los backends sí se
-actualizan juntos. Las bases y los frontends, no.
+Las variables de Render (base, Firebase, MercadoPago, Telegram…) **solo
+existen en Render**. Si se pierde esa cuenta, se pierden con ella y no hay
+forma de verlas de nuevo. Guardá una copia de cada valor en un gestor de
+contraseñas (Bitwarden, 1Password…), nunca en el repositorio ni en un
+archivo suelto de la PC.
+
+---
+
+## Limitación conocida: los sitios de AVP están escritos en el código
+
+`origenesPermitidos.js` deja pasar siempre a `horasdedicacionavp.web.app`
+(y sus vistas previas), sin importar `CORS_ORIGINS`. En otra instalación
+eso significa que su backend también acepta pedidos desde el sitio de AVP.
+No da acceso a nada (sin una cuenta de esa instalación, todo pide login),
+pero si un cliente exige separación total, conviene pasar esa regla a una
+variable antes de entregarle la instalación.

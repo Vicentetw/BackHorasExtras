@@ -68,6 +68,29 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq mysql-client-core-8.0
 
+      - name: Verificar que esten los secrets
+        # Si falta alguno, mysqldump da un error confuso ("Empty value for
+        # 'port'"). Mejor decir claramente cual falta.
+        env:
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DB: ${{ secrets.MYSQL_DB }}
+        run: |
+          FALTAN=0
+          for NOMBRE in MYSQL_HOST MYSQL_PORT MYSQL_USER MYSQL_PASSWORD MYSQL_DB; do
+            if [ -z "${!NOMBRE}" ]; then
+              echo "Falta el secret $NOMBRE (o esta vacio)."
+              FALTAN=1
+            fi
+          done
+          if [ "$FALTAN" = 1 ]; then
+            echo "Cargalos en Settings -> Secrets and variables -> Actions -> pestaña Secrets."
+            exit 1
+          fi
+          echo "Estan todos los secrets."
+
       - name: Hacer el dump
         env:
           MYSQL_PWD: ${{ secrets.MYSQL_PASSWORD }}
@@ -81,7 +104,10 @@ jobs:
           # base: se puede correr con el sistema en uso.
           # --set-gtid-purged=OFF evita que el dump traiga instrucciones de
           # replicacion que despues rompen al restaurar en otro servidor.
+          # --no-tablespaces evita el error "Access denied; you need the
+          # PROCESS privilege": el usuario de Clever Cloud no tiene ese permiso.
           mysqldump \
+            --no-tablespaces \
             --host="${{ secrets.MYSQL_HOST }}" \
             --port="${{ secrets.MYSQL_PORT }}" \
             --user="${{ secrets.MYSQL_USER }}" \

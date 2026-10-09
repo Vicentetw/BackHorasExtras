@@ -77,10 +77,9 @@
 >
 > | Qué | Para qué |
 > |---|---|
+> | *(Verificado en el backup del 09/10: producción ya tiene hasta la `20261016`.)* | |
 > | **Migración `20261017_registro_actividad.sql`** | Registro de actividad (quién hizo qué, incluido el soporte). Sin ella todo funciona, solo no se registra y la pantalla lo avisa. Idempotente. Ver `SOPORTE_Y_REGISTRO.md`. |
-> | **Migración `20261016_categoria_sugerencias.sql`** | Plantilla y convenio sugeridos por categoría. Sin ella todo funciona y guardar una sugerencia avisa que falta. Idempotente. |
 > | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
-> | **Migración `20261015_horarios_rotativos.sql`** | Habilita Turnos y plantillas rotativas. Sin ella todo lo demás sigue igual y esas pantallas avisan "Falta correr la migración 20261015". Es idempotente (se puede correr dos veces). Hasta la `20261014` ya estaban aplicadas (backup del 07/10). |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
 > | Decir cuál de las dos landing usa y dónde está publicada la separada | Hoy hay dos copias |
@@ -184,6 +183,9 @@
 >
 > | Tema | Documento |
 > |---|---|
+> | **Montar el sistema en 3 servidores nuevos (otra instalación) — ensayado** | `REPLICAR_INSTALACION.md` |
+> | **Qué hacer si se cae o se pierde algo (base, Render, Firebase) — ensayado** | `RECUPERACION_ANTE_DESASTRE.md` |
+> | Variables de entorno del backend y qué pasa si falta cada una | `VARIABLES_DE_ENTORNO.md` |
 > | Horas extra: regímenes, topes, liquidación, cierre de mes, ajustes | `HORAS_EXTRA_REGIMENES.md` |
 > | Portal del empleado, módulos por empresa, fichaje móvil | `PORTAL_EMPLEADO.md` |
 > | Alta de empresas (solicitudes), chat de ventas, titular | `SOLICITUDES_DE_ALTA.md` |
@@ -201,6 +203,28 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — Documentos de instalación nueva y de desastre revisados y
+>   ENSAYADOS.** Ensayo 1 (instalación nueva en Docker: estructura → siembra
+>   → superadmin → backend nuevo en 3005): 14/14 comprobaciones. Encontró
+>   que el paso 1.5 viejo dejaba **0 roles** (las migraciones 20260902/03
+>   empiezan con `ALTER ... ADD COLUMN` que la estructura ya tiene y `mysql`
+>   corta) → nuevo `scripts/sembrar-instalacion-nueva.sql` (solo INSERT,
+>   idempotente: 4 roles, 57 permisos, plan por defecto). `exportar-
+>   estructura.ps1` ahora quita los `AUTO_INCREMENT` (la 1ª empresa nacía con
+>   id 1000053) y escribe UTF-8 sin BOM. Ensayo 2 (desastre): el backup real
+>   del 09/10 se restauró en 27 s (65 tablas, 508 empleados, 165.019
+>   fichajes) y un backend contra esa base respondió Presentismo, Empleados y
+>   el resumen mensual. Hallazgos documentados: falta `FIREBASE_WEB_API_KEY`
+>   en los docs (sin ella, otra instalación con otro proyecto de login no
+>   manda el mail de contraseña); la CSP de `firebase.json` tiene la URL de
+>   AVP; el agente NO reenvía fichajes tras restaurar un backup viejo (se
+>   recuperan subiendo su `CHECKINOUT.csv` en Importar Fichajes, que descarta
+>   repetidos); la plantilla del workflow de backup no tenía
+>   `--no-tablespaces` (sincronizada con la que corre); `DIAGNOSTICO_
+>   MIGRACIONES.sql` llega hasta la 20261017. Producción ya tiene 20261015 y
+>   20261016 (backup del 09/10). Recomendado: dominio propio (evita tocar
+>   cada agente si cambia el servidor) y guardar las variables de Render en
+>   un gestor de contraseñas.
 > - **2026-10-09 — "Exigir la razón al justificar" (opción A aprobada).**
 >   Configuración General > Justificaciones: opción por empresa, APAGADA por
 >   defecto (no cambia nada a quien no la prende; AVP tampoco, la prende su
