@@ -3822,6 +3822,8 @@ async function attendanceRangeHandler(req, res) {
       let excused = 0;
       // Dias con el aviso "Fuera de su horario" (no cambia ningun contador).
       let fueraDeHorarioDays = 0;
+      // P3 (2026-10-08): días sin horario propio ni de su empresa.
+      let noScheduleDays = 0;
       // Los mismos dias de `excused`, separados por motivo ("Licencia
       // gremial" 22, "Artículo 55" 1...). El total no cambia: es para que el
       // resumen diga POR QUE esta excusado (LICENCIAS_LARGAS.md, letra D).
@@ -3902,6 +3904,40 @@ async function attendanceRangeHandler(req, res) {
         // sabado de campaña de alguien que trabaja lunes a viernes sigue
         // siendo no laborable, solo se le agrega la marca para mostrarlo.
         const enCampana = campanaDayByEmployeeDate.has(`${employeeId}|${date}`);
+
+        // P3 (2026-10-08): sin horario propio NI de su empresa, `schedule` es
+        // el genérico de getScheduleEntry (07:00-13:40 lunes a viernes, escrito
+        // en el código), que nadie cargó: no se lo juzga contra eso. El día
+        // queda "Sin horario" -- ni ausente, ni tarde, ni no laborable -- para
+        // que se vea y alguien se lo asigne. Un feriado, una licencia, una
+        // excepción o una campaña siguen su camino de siempre. Si fichó, el
+        // día cuenta como trabajado (estuvo); horas extra solo las manuales.
+        const sinHorarioDelDia = employeeActivo
+          && !(dateSchedules.assignedScheduleMap && dateSchedules.assignedScheduleMap[employeeId])
+          && !(dateSchedules.tenantScheduleMap && u.tenantId != null && dateSchedules.tenantScheduleMap[u.tenantId])
+          && !holidayNonWorkApplies && !enCampana
+          && !leaveEventMap.get(`${employeeId}_${date}`)
+          && !(u.USERID && exclusionsMap.get(`${u.USERID}_${date}`));
+        if (sinHorarioDelDia) {
+          noScheduleDays++;
+          if (checks.length > 0) daysWorked++;
+          const manualKeySin = u.USERID ? `${u.USERID}_${date}` : null;
+          const manualMinutesSin = manualKeySin ? (manualMinutesByUserDate.get(manualKeySin) || 0) : 0;
+          if (manualMinutesSin > 0) overtimeMinutes += manualMinutesSin;
+          if (days) {
+            days.push({
+              date,
+              status: 'NoSchedule',
+              firstCheckin: checks.length > 0 ? extractTime(checks[0]) : undefined,
+              lastCheckin: checks.length > 0 ? extractTime(checks[checks.length - 1]) : undefined,
+              totalCheckins: checks.length,
+              checkins: checks.map(c => extractTime(c)),
+              overtimeManualMinutes: manualMinutesSin,
+              hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
+            });
+          }
+          return;
+        }
 
         if (!isWorkDay && !holidayNonWorkApplies) {
           // Dia libre normal segun el horario del empleado (fin de semana,
@@ -4554,6 +4590,7 @@ async function attendanceRangeHandler(req, res) {
         leaveConflictDays,
         // Dias con fichajes que no coinciden con su plantilla (aviso).
         fueraDeHorarioDays,
+        noScheduleDays,
         // Faltas seguidas sin aviso: la racha mas larga del periodo, y la que
         // sigue abierta al ultimo dia (la que pide actuar YA). Ver
         // rachaFaltas arriba.

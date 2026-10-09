@@ -15,14 +15,15 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { darHorarioDeEmpresa, quitarHorarioDeEmpresa } = require('../test-helpers/horarioDeEmpresa');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TENANT = 999985;
 const UID = 'test-attendance-inactive-employee';
 const USERID_ACTIVE = 8890010;
 const USERID_INACTIVE = 8890011;
-// Lunes fijo, sin feriados/plantillas custom para este tenant descartable --
-// cae en el horario legacy por defecto (07:00-13:40, L-V laborable).
+// Lunes fijo, sin feriados. La empresa tiene el horario 07:00-13:40 de lunes
+// a viernes (ver test-helpers/horarioDeEmpresa.js: antes se suponía solo).
 const TEST_DATE = '2026-01-05';
 
 let headers;
@@ -44,6 +45,7 @@ before(async () => {
   headers = await getTestAuthHeaders(UID, { isSuperadmin: false, tenantId: TENANT, permissions: ['attendance:read'] });
 
   await cleanup();
+  await darHorarioDeEmpresa(db, TENANT);
 
   const [empActiveRes] = await db.query(
     `INSERT INTO employees (employee_id, nombre, tenant_id, activo) VALUES (?, ?, ?, 1)`,
@@ -71,6 +73,7 @@ before(async () => {
 
 after(async () => {
   await cleanup();
+  await quitarHorarioDeEmpresa(db, TENANT);
   await deleteTestUser(UID);
   await db.query('DELETE FROM tenants WHERE id = ?', [TENANT]);
   await closeDb();

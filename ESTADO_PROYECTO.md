@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-06)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-08 — último: P3 "Sin horario", ver bitácora)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
@@ -199,6 +199,22 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-08 — P3 (aprobado): "Sin horario" en Presentismo.** Un empleado
+>   ACTIVO sin horario asignado ni horario de su empresa ya no se mide contra
+>   el inventado 07:00–13:40 de lunes a viernes: figura **"Sin horario"**
+>   (`NoSchedule`) en el diario (recuadro con filtro + enlace "Asignar horario"
+>   que abre Horarios de empleados filtrado por legajo), en el mensual (chip
+>   "Sin horario N d", `noScheduleDays`), en el detalle (calendario y conteo;
+>   si fichó cuenta como trabajado, igual que `daysWorked`) y en el portal.
+>   Licencia/excepción, campaña y feriado siguen mandando; el inactivo sigue
+>   "Inactivo". Diario y mensual usan la MISMA regla. Sin migración. QA: AVP
+>   (tiene horario de empresa) idéntico a la versión publicada — 0
+>   diferencias en 133.840 filas diarias (280 días) y 4.780 filas mensuales;
+>   prueba en Chrome y Firefox (1366/390) con una empresa local sin plantillas.
+>   Suite 973/973. 5 tests viejos usaban empresas sin plantilla y contaban con
+>   el horario inventado: ahora les cargan ese mismo horario
+>   (`test-helpers/horarioDeEmpresa.js`). Test nuevo:
+>   `test/presentismo-sin-horario.test.js`.
 > - **2026-10-08 — P1, P2, P4, P5 (aprobados).** (P1) Presentismo diario:
 >   totales que SUMAN — solo activos, recuadros nuevos En campaña / Feriado /
 >   No le tocaba, "fuera de horario" e inactivos como avisos aparte

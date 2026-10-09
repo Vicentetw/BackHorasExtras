@@ -39,6 +39,12 @@ cargó sin empresa (lo cargó el superadmin sin elegir empresa):
 Además, el horario de AVP (07:00 a 13:40, corte 13:40) está **escrito en el
 código** como valor de reserva en unos 12 lugares del backend.
 
+> **2026-10-08 (P3):** Presentismo (diario, mensual, detalle y portal) ya no
+> mide a nadie contra ese horario de reserva: un empleado activo sin horario
+> asignado ni horario de su empresa figura **"Sin horario"** (`NoSchedule`,
+> `noScheduleDays` en `/attendance-range`) con un enlace para asignarlo. El
+> valor sigue en el código para otros usos (corte de horas extra, etc.).
+
 Lo que SÍ está bien: plantillas, empleados, fichajes, marcadores, convenios,
 motivos y categorías nuevas son por empresa; un admin de empresa no puede
 tocar nada de otra; `test/full-tenant-isolation.test.js` lo verifica.

@@ -22,6 +22,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 const db = require('../db');
+const { darHorarioDeEmpresa, quitarHorarioDeEmpresa } = require('../test-helpers/horarioDeEmpresa');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TEST_UID = 'test-attendance-range-campana';
@@ -76,7 +77,9 @@ before(async () => {
     );
   }
 
-  // Empresa A: el empleado, sus dos marcadores de campaña y sus fichajes.
+  // Empresa A: horario 07:00-13:40 de lunes a viernes, el empleado, sus dos
+  // marcadores de campaña y sus fichajes.
+  await darHorarioDeEmpresa(db, TENANT_A);
   const [empA] = await db.query(
     `INSERT INTO employees (employee_id, nombre, tenant_id, fecha_alta, exclude_from_report) VALUES (?, 'Campaña Test', ?, '2020-01-01', 0)`,
     [LEGAJO, TENANT_A]
@@ -131,6 +134,7 @@ after(async () => {
     await db.query('DELETE FROM user_employee_map WHERE tenant_id = ?', [t]);
     await db.query('DELETE FROM users WHERE tenant_id = ?', [t]);
     await db.query('DELETE FROM employees WHERE tenant_id = ?', [t]);
+    await quitarHorarioDeEmpresa(db, t);
     await db.query('DELETE FROM tenants WHERE id = ?', [t]);
   }
   await deleteTestUser(TEST_UID);

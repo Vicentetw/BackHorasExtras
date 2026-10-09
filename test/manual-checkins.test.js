@@ -11,6 +11,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const mysql = require('mysql2/promise');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { darHorarioDeEmpresa, quitarHorarioDeEmpresa } = require('../test-helpers/horarioDeEmpresa');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TEST_UID = 'test-manual-checkins';
@@ -41,6 +42,8 @@ before(async () => {
      ON DUPLICATE KEY UPDATE name = VALUES(name)`,
     [TENANT_B]
   );
+  // La "llegada tarde" se mide contra 07:00 (antes ese horario se suponía).
+  await darHorarioDeEmpresa(db, TENANT_A);
 
   badge = 999960001;
   userId = 999960001;
@@ -69,6 +72,7 @@ after(async () => {
   await db.query('DELETE FROM users WHERE tenant_id IN (?, ?)', [TENANT_A, TENANT_B]);
   await db.query('DELETE FROM employees WHERE tenant_id IN (?, ?)', [TENANT_A, TENANT_B]);
   await db.query('DELETE FROM app_settings WHERE tenant_id IN (?, ?)', [TENANT_A, TENANT_B]).catch(() => {});
+  await quitarHorarioDeEmpresa(db, TENANT_A);
   await db.query('DELETE FROM tenants WHERE id IN (?, ?)', [TENANT_A, TENANT_B]);
   await deleteTestUser(TEST_UID);
   await db.end();

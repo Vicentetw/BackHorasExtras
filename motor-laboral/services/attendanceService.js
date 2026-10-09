@@ -129,6 +129,14 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
     const lastCheckin = checkinsSorted[checkinsSorted.length - 1] || null;
 
     const userSchedule = getScheduleEntry(schedule, assignedScheduleMap, tenantScheduleMap, u.employeeId, u.tenantId);
+    // P3 (2026-10-08): sin horario propio NI de su empresa, el horario de
+    // arriba es uno genérico (07:00-13:40 lunes a viernes, escrito en el
+    // código) que nadie cargó. No se lo juzga contra eso: el día queda "Sin
+    // horario", visible, para que alguien se lo asigne. Con ?templateId= (vista
+    // de una plantilla) no aplica: ahí el horario es esa plantilla.
+    const sinHorario = !opciones.vistaDePlantilla
+      && !(assignedScheduleMap && assignedScheduleMap[u.employeeId])
+      && !(tenantScheduleMap && u.tenantId != null && tenantScheduleMap[u.tenantId]);
     const entranceRef = getEntranceReference(userSchedule);
     const entranceMinutes = Number(entranceRef.split(':')[0]) * 60 + Number(entranceRef.split(':')[1]);
     const toleranceMin = resolveToleranceMinutes(userSchedule);
@@ -240,6 +248,18 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       status = 'Inactive';
     }
 
+    // Sin horario (ver sinHorario arriba): ni a tiempo, ni tarde, ni ausente
+    // ni "no laborable" -- no hay contra qué medirlo. Una licencia o excepción
+    // cargada (haya fichado o no), una campaña o un feriado siguen mandando
+    // (no dependen del horario). Mismas condiciones que `sinHorarioDelDia` de
+    // /attendance-range: el diario y el mensual tienen que decir lo mismo.
+    const mandaOtraCosa = !!(exclusion || leaveEvent)
+      || !!(campana && campana.empleados.has(String(u.employeeId)))
+      || ['WorkedHoliday', 'HolidayAbsent'].includes(status);
+    if (sinHorario && u.active && !mandaOtraCosa) {
+      status = 'NoSchedule';
+    }
+
     return {
       employeeId: u.employeeId,
       userId: u.userId,
@@ -286,7 +306,7 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       // plantilla (rotativo mal cargado, salida al campo de madrugada...).
       // No aplica al regreso de campaña ni a un inactivo (ese ya tiene su
       // propio aviso).
-      fueraDeHorario: (status === 'Campaign' || !u.active) ? null : evaluarFueraDeHorario({
+      fueraDeHorario: (status === 'Campaign' || status === 'NoSchedule' || !u.active) ? null : evaluarFueraDeHorario({
         fichajes: checkinsSorted,
         esDiaDeTrabajo: !!Number(userSchedule.isWorkDay),
         esFeriado: isHoliday,
@@ -349,7 +369,7 @@ function buildSummary(attendance) {
 // excusado, y "fueraDeHorario" es un aviso que se superpone con los demás.
 // Acá: solo ACTIVOS, cada uno en exactamente un grupo, y
 //   total = aTiempo + tarde + tardeJustificada + ausente + ausenciaParcial
-//         + excusado + campana + feriado + noLaborable.
+//         + excusado + campana + feriado + noLaborable + sinHorario.
 // Los inactivos y "fuera de horario" van aparte, como avisos.
 function desgloseDelDia(attendance) {
   const activos = attendance.filter(a => a.activo !== false);
@@ -365,6 +385,7 @@ function desgloseDelDia(attendance) {
     campana: de('Campaign'),
     feriado: de('WorkedHoliday', 'HolidayAbsent'),
     noLaborable: de('NonWorkDay'),
+    sinHorario: de('NoSchedule'),
     // Avisos, no suman:
     fueraDeHorario: activos.filter(a => a.fueraDeHorario).length,
     inactivos: attendance.length - activos.length,
@@ -478,7 +499,7 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
     ? await repositories.campana.empleadosEnCampanaElDia(normalizedDate, tenantId)
     : null;
 
-  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana, { umbralFueraDeHorario });
+  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana, { umbralFueraDeHorario, vistaDePlantilla: templateId !== undefined && templateId !== null && templateId !== '' });
   const summary = buildSummary(attendance);
   const anyMotorSchedule = attendance.some(a => a.schedule.source === 'motor');
   const usedMotorSchedule = schedule.source === 'motor' || anyMotorSchedule;

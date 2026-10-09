@@ -25,6 +25,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 const db = require('../db');
+const { darHorarioDeEmpresa, quitarHorarioDeEmpresa } = require('../test-helpers/horarioDeEmpresa');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TEST_UID = 'test-leave-conflict';
@@ -59,6 +60,7 @@ before(async () => {
     `INSERT INTO tenants (id, name, code) VALUES (?, 'Tenant Licencia y fichaje (test)', 'tenant-leave-conflict-test') ON DUPLICATE KEY UPDATE name = VALUES(name)`,
     [TENANT]
   );
+  await darHorarioDeEmpresa(db, TENANT);
   const [et] = await db.query(`INSERT INTO event_types (tenant_id, code, descripcion, active) VALUES (?, 'TEST_VAC', 'Vacaciones (test)', 1)`, [TENANT]);
 
   for (const legajo of [DE_VACACIONES, SIN_LICENCIA, CON_EXCEPCION]) {
@@ -106,6 +108,7 @@ after(async () => {
   await db.query('DELETE FROM user_employee_map WHERE tenant_id = ?', [TENANT]);
   await db.query('DELETE FROM users WHERE tenant_id = ?', [TENANT]);
   await db.query('DELETE FROM employees WHERE tenant_id = ?', [TENANT]);
+  await quitarHorarioDeEmpresa(db, TENANT);
   await db.query('DELETE FROM tenants WHERE id = ?', [TENANT]);
   await deleteTestUser(TEST_UID);
   await closeDb();

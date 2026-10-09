@@ -15,6 +15,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
+const { darHorarioDeEmpresa, quitarHorarioDeEmpresa } = require('../test-helpers/horarioDeEmpresa');
 
 const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
 const TENANT = 999971;
@@ -52,6 +53,8 @@ before(async () => {
   headers = await getTestAuthHeaders(UID, { isSuperadmin: false, tenantId: TENANT, permissions: permisos });
   headersOtra = await getTestAuthHeaders(UID_OTRA, { isSuperadmin: false, tenantId: OTRA, permissions: permisos });
   await cleanup();
+  // Sin horario no hay faltas que contar (serían "Sin horario").
+  await darHorarioDeEmpresa(db, TENANT);
 
   const [et] = await db.query(`INSERT INTO event_types (tenant_id, code, descripcion, active) VALUES (?, 'ART55_AVISOS', 'Artículo 55 (test)', 1)`, [TENANT]);
   art55 = et.insertId;
@@ -77,6 +80,7 @@ before(async () => {
 
 after(async () => {
   await cleanup();
+  await quitarHorarioDeEmpresa(db, TENANT);
   await deleteTestUser(UID);
   await deleteTestUser(UID_OTRA);
   await db.query('DELETE FROM tenants WHERE id IN (?, ?)', [TENANT, OTRA]);

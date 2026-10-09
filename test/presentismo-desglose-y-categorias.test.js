@@ -25,14 +25,16 @@ test('desglose: solo activos, cada uno en un grupo, y las partes suman el total'
     fila('Absent'), fila('PartialAbsence', { totalCheckins: 1 }), fila('Excused'),
     fila('Campaign', { campaignCountsAs: 'excusado' }), fila('Campaign', { campaignCountsAs: 'trabajado' }),
     fila('WorkedHoliday', { totalCheckins: 2 }), fila('HolidayAbsent'), fila('NonWorkDay'),
+    // P3: activo sin ningún horario.
+    fila('NoSchedule'),
     // Inactivos: no cuentan; uno sin fichar (Inactive), uno un domingo (NonWorkDay), uno que fichó.
     fila('Inactive', { activo: false }), fila('NonWorkDay', { activo: false }), fila('OnTime', { activo: false, totalCheckins: 2 }),
   ];
   const d = desgloseDelDia(filas);
-  const suma = d.aTiempo + d.tarde + d.tardeJustificada + d.ausente + d.ausenciaParcial + d.excusado + d.campana + d.feriado + d.noLaborable;
-  assert.equal(d.total, 12);
+  const suma = d.aTiempo + d.tarde + d.tardeJustificada + d.ausente + d.ausenciaParcial + d.excusado + d.campana + d.feriado + d.noLaborable + d.sinHorario;
+  assert.equal(d.total, 13);
   assert.equal(suma, d.total, 'las partes suman el total');
-  assert.deepEqual([d.aTiempo, d.campana, d.feriado, d.noLaborable], [2, 2, 2, 1]);
+  assert.deepEqual([d.aTiempo, d.campana, d.feriado, d.noLaborable, d.sinHorario], [2, 2, 2, 1, 1]);
   assert.equal(d.fueraDeHorario, 1, 'aviso aparte: no se suma');
   assert.deepEqual([d.inactivos, d.inactivosQueFicharon], [3, 1]);
   // Un backend que no manda "activo" (filas viejas): se toman como activos.
