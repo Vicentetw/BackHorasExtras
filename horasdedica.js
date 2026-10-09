@@ -3824,6 +3824,10 @@ async function attendanceRangeHandler(req, res) {
       let fueraDeHorarioDays = 0;
       // P3 (2026-10-08): días sin horario propio ni de su empresa.
       let noScheduleDays = 0;
+      // Días sin horario propio medidos con el horario por defecto de la
+      // empresa (aviso, 2026-10-09) y el nombre de esa plantilla.
+      let defaultScheduleDays = 0;
+      let defaultScheduleName = null;
       // Los mismos dias de `excused`, separados por motivo ("Licencia
       // gremial" 22, "Artículo 55" 1...). El total no cambia: es para que el
       // resumen diga POR QUE esta excusado (LICENCIAS_LARGAS.md, letra D).
@@ -3891,6 +3895,16 @@ async function attendanceRangeHandler(req, res) {
         const dateSchedules = scheduleByDate[date];
         const schedule = getScheduleEntry(date, dateSchedules.assignedScheduleMap, dateSchedules.tenantScheduleMap, employeeId, u.tenantId);
         const checks = checksByDate[date] || [];
+        // Aviso (2026-10-09): sin horario propio ese día, se lo mide con el
+        // horario por defecto de su empresa. Solo se cuenta, no cambia nada.
+        // Mismo criterio que `horarioPorDefecto` del motor diario.
+        const defaultDeEmpresa = employeeActivo
+          && !(dateSchedules.assignedScheduleMap && dateSchedules.assignedScheduleMap[employeeId])
+          && dateSchedules.tenantScheduleMap && u.tenantId != null && dateSchedules.tenantScheduleMap[u.tenantId];
+        if (defaultDeEmpresa) {
+          defaultScheduleDays++;
+          defaultScheduleName = (defaultDeEmpresa.template && defaultDeEmpresa.template.name) || defaultScheduleName;
+        }
         // Feriado por ciudad (Fase 21): solo cuentan las filas de holidays
         // que aplican a ESTE empleado (toda la empresa, o su propia ciudad
         // -- ver holidayScope.js). Si varias aplican y alguna dice "no
@@ -4591,6 +4605,8 @@ async function attendanceRangeHandler(req, res) {
         // Dias con fichajes que no coinciden con su plantilla (aviso).
         fueraDeHorarioDays,
         noScheduleDays,
+        defaultScheduleDays,
+        defaultScheduleName,
         // Faltas seguidas sin aviso: la racha mas larga del periodo, y la que
         // sigue abierta al ultimo dia (la que pide actuar YA). Ver
         // rachaFaltas arriba.

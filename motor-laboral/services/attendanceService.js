@@ -66,7 +66,10 @@ function buildMotorSchedule({ date, tenantSchedule }) {
     tenantId: tenantSchedule.tenantId || null,
     template_type: tenantSchedule.template_type || null,
     blocks: tenantSchedule.blocks || [],
-    blockCount: tenantSchedule.blockCount || 0
+    blockCount: tenantSchedule.blockCount || 0,
+    // Solo para mostrarlo ("usa el horario por defecto: Administración"); no
+    // interviene en ningún cálculo.
+    templateName: (tenantSchedule.template && tenantSchedule.template.name) || null
   };
 }
 
@@ -323,6 +326,16 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       visits: multiVisit ? multiVisit.visits : null,
       exclusion: exclusion || null,
       assigned: !!(assignedScheduleMap && assignedScheduleMap[u.employeeId]),
+      // Aviso (2026-10-09, pedido del dueño): activo SIN horario propio, que
+      // se mide con el horario por defecto de su empresa. No cambia el estado
+      // ni ningún total: es para que se vea (si ese no es su horario, las
+      // tardanzas o ausencias que salgan son falsas). `nombre` puede ser null
+      // si el horario de la empresa no viene de una plantilla.
+      horarioPorDefecto: (!opciones.vistaDePlantilla && u.active
+        && !(assignedScheduleMap && assignedScheduleMap[u.employeeId])
+        && tenantScheduleMap && u.tenantId != null && tenantScheduleMap[u.tenantId])
+        ? { nombre: tenantScheduleMap[u.tenantId].templateName || null }
+        : null,
       schedule: {
         source: userSchedule.source,
         templateId: userSchedule.templateId || null,
@@ -370,7 +383,7 @@ function buildSummary(attendance) {
 // Acá: solo ACTIVOS, cada uno en exactamente un grupo, y
 //   total = aTiempo + tarde + tardeJustificada + ausente + ausenciaParcial
 //         + excusado + campana + feriado + noLaborable + sinHorario.
-// Los inactivos y "fuera de horario" van aparte, como avisos.
+// Los inactivos, "fuera de horario" y "sin horario propio" van aparte, como avisos.
 function desgloseDelDia(attendance) {
   const activos = attendance.filter(a => a.activo !== false);
   const de = (...estados) => activos.filter(a => estados.includes(a.status)).length;
@@ -388,6 +401,8 @@ function desgloseDelDia(attendance) {
     sinHorario: de('NoSchedule'),
     // Avisos, no suman:
     fueraDeHorario: activos.filter(a => a.fueraDeHorario).length,
+    // Sin horario propio: se los mide con el horario por defecto de la empresa.
+    sinHorarioPropio: activos.filter(a => a.horarioPorDefecto).length,
     inactivos: attendance.length - activos.length,
     inactivosQueFicharon: attendance.filter(a => a.activo === false && a.totalCheckins > 0).length
   };

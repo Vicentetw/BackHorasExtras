@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-08 — último: P3 "Sin horario", ver bitácora)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-09 — último: aviso "Sin horario propio", ver bitácora)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
@@ -199,6 +199,23 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-09 — "Sin horario propio" (A + C, aprobados).** El dueño le
+>   sacó el horario a AGOGLIA (3097) y en Presentismo no se veía: con una
+>   plantilla POR DEFECTO en la empresa (AVP: "Administración"), quien no
+>   tiene asignación se mide con esa en silencio. (A) Aviso, SIN cambiar
+>   ningún estado ni total: diario `horarioPorDefecto: { nombre }` por fila +
+>   `desglose.sinHorarioPropio` (chip que filtra "De los anteriores, N sin
+>   horario propio") + "usa «Administración»" y "Asignar horario" en la fila;
+>   mensual `defaultScheduleDays` / `defaultScheduleName`. (C) Empleados y
+>   Horarios de empleados dicen "Sin horario propio" + "usa «X» (por
+>   defecto)" (`plantillaQueRigePorDefecto` en el front = misma regla que
+>   `findTenantTemplate`). QA AVP: 0 diferencias contra c2444c5 (133.840
+>   filas diarias, 4.780 mensuales) y diario = mensual en los días "sin
+>   horario propio"; en la copia salen 105, 2837, 1007, 2452, 1409, 10001
+>   (Agoglia todavía tenía horario en la copia del 07/10). Chrome y Firefox,
+>   1366/390. Suite 974/974. Sin migración. Pendiente posible (B, no
+>   aprobado): opción por empresa para marcar "Sin horario" aunque haya uno
+>   por defecto.
 > - **2026-10-08 — P3 (aprobado): "Sin horario" en Presentismo.** Un empleado
 >   ACTIVO sin horario asignado ni horario de su empresa ya no se mide contra
 >   el inventado 07:00–13:40 de lunes a viernes: figura **"Sin horario"**

@@ -86,6 +86,7 @@ test('diario: activo sin horario = "Sin horario", no "Ausente"; el inactivo sigu
   const { body, activo, inactivo } = await diario(LUNES);
   assert.equal(activo.status, 'NoSchedule');
   assert.equal(activo.fueraDeHorario, null, 'sin horario no hay contra qué comparar');
+  assert.equal(activo.horarioPorDefecto, null, 'la empresa tampoco tiene: no hay "por defecto"');
   assert.equal(inactivo.status, 'Inactive');
   assert.equal(body.summary.absent, 0, 'nadie figura ausente por un horario inventado');
   assert.equal(body.summary.desglose.sinHorario, 1);
@@ -141,10 +142,26 @@ test('EL CONTRASTE: con una plantilla de empresa vuelve a medirse (el lunes sin 
   for (let dow = 1; dow <= 5; dow++) {
     await db.query("INSERT INTO shift_blocks (template_id, day_of_week, block_name, start_time, end_time, block_type, crosses_midnight, active) VALUES (?, ?, 'Oficina', '08:00:00', '16:00:00', 'WORK', 0, 1)", [plantilla, dow]);
   }
-  const { activo, body } = await diario(LUNES);
+  const { activo, inactivo, body } = await diario(LUNES);
   assert.equal(activo.status, 'Absent');
   assert.equal(body.summary.desglose.sinHorario, 0);
+  // Pero se avisa que no tiene horario propio (2026-10-09), sin cambiar nada.
+  assert.deepEqual(activo.horarioPorDefecto, { nombre: 'Lunes a Viernes (test)' });
+  assert.equal(inactivo.horarioPorDefecto, null, 'a un inactivo no se le avisa');
+  assert.equal(body.summary.desglose.sinHorarioPropio, 1);
   const a = (await mensual())(ACTIVO);
   assert.equal(a.noScheduleDays, 0);
   assert.equal(a.absent, 4, 'lunes, miércoles, jueves y viernes sin fichar');
+  assert.equal(a.defaultScheduleDays, 7);
+  assert.equal(a.defaultScheduleName, 'Lunes a Viernes (test)');
+});
+
+test('con un horario PROPIO, no hay aviso de "sin horario propio"', async () => {
+  await db.query("INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to) VALUES (?, ?, ?, '2020-01-01', NULL)", [empActivo, TENANT, plantilla]);
+  const { activo, body } = await diario(LUNES);
+  assert.equal(activo.horarioPorDefecto, null);
+  assert.equal(body.summary.desglose.sinHorarioPropio, 0);
+  const a = (await mensual())(ACTIVO);
+  assert.equal(a.defaultScheduleDays, 0);
+  assert.equal(a.absent, 4, 'los números no cambian: misma plantilla');
 });
