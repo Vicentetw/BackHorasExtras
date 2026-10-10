@@ -45,6 +45,37 @@ const SOLO_CONSULTA = [
   /\/chat/,
 ];
 
+// Acciones que merecen una frase propia (no alcanza con "Creó/cargó ..."):
+// son las que más se discuten después ("¿quién aprobó estas horas?", "¿quién
+// reabrió el mes?"). [método o null = cualquiera, ruta, frase].
+const ACCIONES = [
+  ['POST', /\/api\/solicitudes-alta\/\d+\/aprobar$/, 'Aprobó una solicitud de alta (creó la empresa)'],
+  ['POST', /\/api\/solicitudes-alta\/\d+\/rechazar$/, 'Rechazó una solicitud de alta'],
+  ['POST', /\/approve-cancellation$/, 'Aprobó la baja de una empresa'],
+  ['POST', /\/request-cancellation$/, 'Pidió la baja del servicio'],
+  ['POST', /\/api\/billing\/subscriptions\/\d+\/payments$/, 'Registró un pago'],
+  ['POST', /\/api\/billing\/plan-requests\/\d+\/resolve$/, 'Resolvió un pedido de plan'],
+  ['POST', /\/api\/billing\/plan-requests$/, 'Pidió un cambio de plan'],
+  ['POST', /\/request-payment-link$/, 'Pidió un link de pago'],
+  ['POST', /\/(mercadopago-checkout|mercadopago-payment-link)$/, 'Generó un link de pago de MercadoPago'],
+  ['POST', /\/api\/portal-empleados\/invitar$/, 'Invitó a un empleado al portal'],
+  ['POST', /\/api\/portal-empleados\/\d+\/desactivar$/, 'Desactivó la cuenta de un empleado en el portal'],
+  ['POST', /\/api\/portal-empleados\/\d+\/reactivar$/, 'Reactivó la cuenta de un empleado en el portal'],
+  ['POST', /\/api\/liquidacion-horas-extra\/cierres\/reabrir$/, 'Reabrió un mes cerrado (liquidación)'],
+  ['POST', /\/api\/liquidacion-horas-extra\/cierres$/, 'Cerró un mes (liquidación de horas extra)'],
+  ['POST', /\/api\/regimen-horas-extra\/aprobaciones$/, 'Aprobó o rechazó horas extra'],
+  ['POST', /\/api\/holidays\/import$/, 'Importó feriados'],
+  ['POST', /\/import\/checkins$/, 'Importó fichajes desde un archivo'],
+  ['POST', /\/import\/users$/, 'Importó usuarios del reloj desde un archivo'],
+  ['DELETE', /^\/clear\/checkins$/, 'Borró fichajes en bloque (limpieza)'],
+  // En la base las justificaciones se llaman "user-exclusions" (nombre
+  // histórico); para quien lee el registro son justificaciones.
+  ['POST', /^\/config\/user-exclusions\/range$/, 'Cargó justificaciones (rango de días)'],
+  ['POST', /^\/config\/user-exclusions$/, 'Cargó una justificación'],
+  ['PUT', /^\/config\/user-exclusions\/\d+$/, 'Modificó una justificación'],
+  ['DELETE', /^\/config\/user-exclusions\/\d+$/, 'Borró una justificación'],
+];
+
 // Qué se está tocando, en palabras de quien usa el sistema. El primero que
 // coincide gana, por eso lo más específico va arriba.
 const QUE_ES = [
@@ -55,10 +86,24 @@ const QUE_ES = [
   [/\/api\/labor-engine\/admin\/(templates|blocks)/, 'una plantilla de horario'],
   [/\/api\/labor-engine\/admin\/employees\/bulk-assign-calendar/, 'el horario de varios empleados'],
   [/\/api\/labor-engine\/admin\/employees\/\d+\/calendar/, 'el horario de un empleado'],
+  [/\/api\/labor-engine\/admin\/tenants\/\d+\/titular/, 'el titular de una empresa'],
   [/\/api\/labor-engine\/admin\/tenants/, 'una empresa'],
+  [/\/api\/labor-engine\/admin\/turnos/, 'un turno'],
+  [/\/api\/labor-engine\/admin\/(conventions\/\d+\/regimes|regimes)/, 'un régimen de un convenio'],
+  [/\/api\/labor-engine\/admin\/conventions/, 'un convenio'],
+  [/\/api\/labor-engine\/admin\/day-type-rules/, 'una regla por tipo de día'],
+  [/\/api\/labor-engine\/admin\/employees\/bulk-convention-assignments/, 'el convenio de varios empleados'],
+  [/\/api\/labor-engine\/admin\/employees\/\d+\/convention-assignments/, 'el convenio de un empleado'],
+  [/\/api\/labor-engine\/admin\/employees\/bulk-set-categoria/, 'la categoría de varios empleados'],
+  [/\/api\/labor-engine\/admin\/system\/firewall/, 'el firewall de la plataforma'],
   [/\/api\/labor-engine/, 'la configuración de horarios/convenios'],
   [/\/api\/employees/, 'un empleado'],
   [/\/api\/employee-events/, 'una novedad de empleado'],
+  [/\/api\/event-types\/\d+\/cupos/, 'el cupo de un motivo de ausencia'],
+  [/\/api\/event-types\/\d+\/count-modes/, 'cómo cuenta un motivo de ausencia'],
+  [/\/api\/event-types/, 'un motivo de ausencia'],
+  [/\/api\/sync-status/, 'el nombre de un reloj'],
+  [/\/api\/puesta-en-marcha/, 'un paso de la guía de inicio'],
   [/\/api\/leave-balances/, 'un saldo de licencias'],
   [/\/api\/employee-categories/, 'una categoría'],
   [/\/api\/ciudades/, 'una ciudad'],
@@ -69,10 +114,13 @@ const QUE_ES = [
   [/\/api\/import|\/import\//, 'una importación'],
   [/\/api\/manual-checkins|\/(add|update|delete)\/manual/, 'un fichaje o carga manual'],
   [/\/marker-corrections/, 'una corrección de marcador'],
-  [/\/config\/user-exclusion|\/config\/toggle-user-exclusion/, 'una exclusión'],
+  [/\/config\/user-exclusion|\/config\/toggle-user-exclusion/, 'la exclusión de un empleado del reporte'],
   [/\/config\/special-users/, 'un usuario especial'],
   [/\/campana/, 'la campaña'],
+  [/\/api\/regimen-horas-extra\/autorizaciones/, 'una autorización de horas extra'],
+  [/\/api\/regimen-horas-extra\/politicas/, 'una política de horas extra'],
   [/\/api\/regimen-horas-extra/, 'el régimen de horas extra'],
+  [/\/api\/billing\/plans/, 'un plan'],
   [/\/api\/liquidacion-horas-extra/, 'la liquidación de horas extra'],
   [/\/api\/portal-empleados/, 'el portal del empleado'],
   [/\/api\/solicitudes-alta/, 'una solicitud de alta'],
@@ -82,6 +130,8 @@ const QUE_ES = [
 ];
 
 function describir(metodo, ruta) {
+  const accion = ACCIONES.find(([m, re]) => (!m || m === metodo) && re.test(ruta));
+  if (accion) return accion[2];
   const encontrado = QUE_ES.find(([re]) => re.test(ruta));
   const que = encontrado ? encontrado[1] : ruta;
   if (metodo === 'DELETE') return `Borró ${que}`;
