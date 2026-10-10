@@ -39,6 +39,7 @@ const syncStatusRoutes = require('./routes/syncStatus');
 const { insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_MANUAL_IMPORT } = require('./motor-laboral/services/checkinsIngestService');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
 const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
+const { horarioParaSalidasSinPar, horaEnElDia } = require('./motor-laboral/services/horarioParaSalidasSinPar');
 const userRepository = require('./motor-laboral/repositories/userRepository');
 const employeeEventRepository = require('./motor-laboral/repositories/employeeEventRepository');
 const attendanceCalc = require('./motor-laboral/services/attendanceCalculations');
@@ -4820,39 +4821,42 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
         ...movementsCalc.filterEventsOpenedByFirstCheckinOfDay(closedEvents, dayCheckins).map(e => ({ ...e, hasReturn: true }))
       );
 
-      if (openEvents.size > 0) {
-        const exitTimeByEmployeeId = new Map();
-        for (const [employeeId, ev] of openEvents.entries()) {
-          const emp = employeeById.get(employeeId);
-          const schedRows = await scheduleRepository.findByDate(dateStr, emp ? emp.tenantId : tenantId, db);
-          const sched = Array.isArray(schedRows) ? schedRows[0] : schedRows;
-          const exitTimeStr = (sched && sched.timeExit) || '13:40:00';
-          const [h, m] = exitTimeStr.split(':').map(Number);
-          exitTimeByEmployeeId.set(employeeId, new Date(ev.timeOut.getFullYear(), ev.timeOut.getMonth(), ev.timeOut.getDate(), h, m, 0));
-        }
-        const closedAtScheduleExit = movementsCalc.closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId);
-        allEvents.push(...movementsCalc.filterEventsOpenedByFirstCheckinOfDay(closedAtScheduleExit, dayCheckins));
-      }
-
-      // "Entrada particular": un regreso huérfano (marcador REGRESO antes del
-      // primer fichaje del día, sin salida abierta ese día -- ver
-      // orphanReturns) también es una salida particular, solo que nunca se
-      // ficho su "salida" porque se autorizó el día anterior. Se sintetiza
-      // el horario de entrada programado como punto de partida (mismo
-      // criterio que ya usa /attendance-range para sugerir la justificación).
+      // Salidas SIN REGRESO y "entradas particulares": se completan con el
+      // horario DE LA PERSONA ese día (antes, el de la empresa: ver
+      // motor-laboral/services/horarioParaSalidasSinPar.js). Si no tiene
+      // plantilla, o ese día no trabaja, la fila lleva un aviso para que se
+      // corrija, y no se inventa una hora.
       const relevantOrphans = orphanReturns.filter(r => r.category === category);
-      if (relevantOrphans.length > 0) {
-        const entranceTimeByEmployeeId = new Map();
-        for (const r of relevantOrphans) {
-          if (entranceTimeByEmployeeId.has(r.employeeId)) continue;
-          const emp = employeeById.get(r.employeeId);
-          const schedRows = await scheduleRepository.findByDate(dateStr, emp ? emp.tenantId : tenantId, db);
-          const sched = Array.isArray(schedRows) ? schedRows[0] : schedRows;
-          const entranceTimeStr = (sched && attendanceCalc.getEntranceReference(sched)) || '07:00:00';
-          const [h, m] = entranceTimeStr.split(':').map(Number);
-          entranceTimeByEmployeeId.set(r.employeeId, new Date(r.timeIn.getFullYear(), r.timeIn.getMonth(), r.timeIn.getDate(), h, m, 0));
+      if (openEvents.size > 0 || relevantOrphans.length > 0) {
+        const legajosSinPar = [...openEvents.keys(), ...relevantOrphans.map(r => r.employeeId)]
+          .filter(l => employeeById.has(String(l)));
+        const horarios = await horarioParaSalidasSinPar(db, dateStr, legajosSinPar, tenantId);
+        const avisoDe = (legajo) => (horarios.get(String(legajo)) || {}).aviso || null;
+
+        if (openEvents.size > 0) {
+          const exitTimeByEmployeeId = new Map();
+          for (const [employeeId, ev] of openEvents.entries()) {
+            const h = horarios.get(String(employeeId));
+            exitTimeByEmployeeId.set(employeeId, h ? horaEnElDia(ev.timeOut, h.salida, h.salidaDiaSiguiente) : null);
+          }
+          const closedAtScheduleExit = movementsCalc.closeOpenEventsAtScheduleExit(openEvents, exitTimeByEmployeeId)
+            .map(e => ({ ...e, avisoHorario: avisoDe(e.employeeId) }));
+          allEvents.push(...movementsCalc.filterEventsOpenedByFirstCheckinOfDay(closedAtScheduleExit, dayCheckins));
         }
-        allEvents.push(...movementsCalc.openOrphanReturnsAtScheduleEntrance(relevantOrphans, entranceTimeByEmployeeId));
+
+        // "Entrada particular": un regreso huérfano (marcador REGRESO antes del
+        // primer fichaje del día, sin salida abierta ese día) también es una
+        // salida particular que nunca se fichó porque se autorizó el día
+        // anterior. Arranca a la hora de entrada de su horario.
+        if (relevantOrphans.length > 0) {
+          const entranceTimeByEmployeeId = new Map();
+          for (const r of relevantOrphans) {
+            const h = horarios.get(String(r.employeeId));
+            entranceTimeByEmployeeId.set(r.employeeId, h ? horaEnElDia(r.timeIn, h.entrada) : null);
+          }
+          allEvents.push(...movementsCalc.openOrphanReturnsAtScheduleEntrance(relevantOrphans, entranceTimeByEmployeeId)
+            .map(e => ({ ...e, avisoHorario: avisoDe(e.employeeId) })));
+        }
       }
     }
 
@@ -4898,6 +4902,9 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
         timeIn: formatLocalDateTime(e.timeIn),
         hasReturn: e.hasReturn,
         durationMinutes,
+        // Por qué una salida sin par no tiene duración, o se calculó con el
+        // horario general (la persona no tiene plantilla): para corregirlo.
+        avisoHorario: e.avisoHorario || null,
         // Hora exacta de cada marcador y su correccion, si la tiene: es lo
         // que usa el boton "corregir marcador" de la pantalla.
         ...campanaService.datosDeMarcadores(e, correccionesMarcadores)
@@ -4912,13 +4919,16 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
           period: periodKey(dateStr),
           count: 0,
           totalMinutes: 0,
-          openCount: 0
+          openCount: 0,
+          // Salidas de esta persona/período con aviso de horario (sin plantilla, etc.).
+          avisosHorario: 0
         });
       }
       const s = summaryMap.get(key);
       s.count += 1;
       if (durationMinutes !== null) s.totalMinutes += durationMinutes;
       if (!e.hasReturn) s.openCount += 1;
+      if (e.avisoHorario) s.avisosHorario += 1;
     });
 
     // Tope mensual de horas de salidas particulares -- nuevo (Fase 6.4), no
