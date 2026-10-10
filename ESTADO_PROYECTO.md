@@ -203,6 +203,23 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-10 — Arreglo de Salidas sin par: en la RAMA
+>   `salidas-horario-propio` (los dos repos), NO publicado: espera que el
+>   dueño revise el impacto** (`C:\Users\EURO\Documents\impacto-salidas-
+>   septiembre-2026.csv`, fuera del repo porque tiene nombres). Salida sin
+>   regreso / entrada particular se completan con el horario ASIGNADO a la
+>   persona (misma función que Presentismo); sin plantilla → horario general +
+>   aviso "asignale su horario"; día sin jornada o sin horario → sin duración
+>   + aviso; turno nocturno cierra al día siguiente. Pantalla: ícono rojo con
+>   el motivo en Salidas. Impacto septiembre (AVP): particulares 510 h → 527 h
+>   (32 personas, típico +44 min), oficiales 1.560 h → 1.393 h (sobre todo
+>   sábados con duración inventada 07:00→regreso); 2 personas sin plantilla
+>   (1007 PORRAS, 1409 REARTE). `test/salidas-horario-propio.test.js` (5,
+>   fallan con el código anterior). Con esto la copia del 2525 en la demo da
+>   IGUAL que AVP. Suite 1022/1022. Para publicar: unir la rama a main en
+>   los dos repos y `npm run deploy:live`. **Otro hallazgo, sin tocar:**
+>   marcador de regreso apretado varias veces seguidas (PEREZ 9411,
+>   05/09 21:38: 3 marcadores + 4 lecturas en 20 s) cuenta como 3 regresos.
 > - **2026-10-10 — Demo con datos reales del dueño (legajo 2525) y error de
 >   Salidas encontrado.** `crear-empresa-demo.js`: fichajes inventados desde el
 >   1/1 (antes 45 días; `--desde` para cambiarlo) y `--copiar-legajo N
