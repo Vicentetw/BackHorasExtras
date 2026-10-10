@@ -203,6 +203,23 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-10 — Demo con datos reales del dueño (legajo 2525) y error de
+>   Salidas encontrado.** `crear-empresa-demo.js`: fichajes inventados desde el
+>   1/1 (antes 45 días; `--desde` para cambiarlo) y `--copiar-legajo N
+>   --empresa-origen ID --como "APELLIDO, Nombre"` (`scripts/copiar-legajo-a-
+>   demo.js`): copia fichajes, los marcadores que la MISMA detección de los
+>   reportes le atribuyó (275 para el 2525), horarios, justificaciones,
+>   licencias, HE a mano, saldo, convenio, feriados y configuración de
+>   marcadores, sin textos libres, en un reloj propio. Probado en la copia
+>   local: idéntico a AVP en Presentismo (día por día, ene–oct), Salidas
+>   oficiales y Campaña. Única diferencia real: **ERROR DEL SISTEMA**: Salidas
+>   cierra una salida sin regreso a la hora de salida de la plantilla POR
+>   DEFECTO de la empresa (y abre una "entrada particular" a su hora de
+>   entrada), no la del horario de la persona (`/movements-range`,
+>   `scheduleRepository.findByDate`). Medido en AVP 2026: 1.732 de 1.925
+>   salidas sin regreso, 142 personas, ~43.000 min. Propuesta de arreglo
+>   pendiente de aprobación. También: `--borrar` ahora borra motivos y
+>   feriados de la demo (antes fallaba por la clave foránea).
 > - **2026-10-09 — Documentos de instalación nueva y de desastre revisados y
 >   ENSAYADOS.** Ensayo 1 (instalación nueva en Docker: estructura → siembra
 >   → superadmin → backend nuevo en 3005): 14/14 comprobaciones. Encontró

@@ -34,17 +34,35 @@
  *   node scripts/crear-empresa-demo.js            # crea o renueva
  *   node scripts/crear-empresa-demo.js --borrar   # la saca del todo
  *
+ * OPCIONES
+ *   --desde AAAA-MM-DD   desde qué día hay fichajes (por defecto, el 1 de
+ *                        enero del año en curso: así el gráfico anual tiene
+ *                        datos todo el año).
+ *   --copiar-legajo N --empresa-origen ID --como "APELLIDO, Nombre"
+ *                        además, copia a la demo los fichajes REALES de esa
+ *                        persona (con marcadores, horarios, justificaciones,
+ *                        licencias, convenio y feriados) bajo un nombre
+ *                        inventado, en un reloj propio ("Reloj portería").
+ *                        Solo lee de la empresa de origen. Ver
+ *                        scripts/copiar-legajo-a-demo.js. Ejemplo:
+ *     node scripts/crear-empresa-demo.js --copiar-legajo 2525 --empresa-origen 6 --como "MÉNDEZ, Martín"
+ *
  * DESPUES: el superadmin crea un usuario para "Empresa Demo S.A." en Usuarios
  * y Roles (rol Administrador de Empresa) y entra con ese usuario.
  */
 const mysql = require('mysql2/promise');
 const { fechaEnZona } = require('../motor-laboral/services/hoyEmpresa');
+const { copiarLegajoADemo, MARCA } = require('./copiar-legajo-a-demo');
+
+// Opciones de la línea de comandos ("--nombre valor").
+const opcion = (nombre) => { const i = process.argv.indexOf(nombre); return i > 0 ? process.argv[i + 1] : undefined; };
 
 const CODIGO = 'empresa-demo';
 const NOMBRE = 'Empresa Demo S.A.';
 const ZONA = 'America/Argentina/Buenos_Aires';
-const DIAS_DE_HISTORIA = 45;
 const RELOJ_IP = '10.20.0.11';
+const RELOJ_COPIA_IP = '10.20.0.12'; // reloj propio de la persona copiada (--copiar-legajo)
+const LEGAJO_COPIA = 125; // los inventados son 101 a 124
 const USERID_BASE = 7700000; // lejos de los USERID de un reloj real
 
 // Nombres inventados (apellido, nombre). Cualquier parecido es casualidad.
@@ -80,6 +98,9 @@ async function borrarDatos(db, t) {
   // Del mas dependiente al menos. Las tablas opcionales (segun migraciones) se
   // intentan y, si no existen, se saltean.
   const sentencias = [
+    `DELETE FROM employee_leave_balances WHERE employee_id IN (${emp}) AND ? IS NOT NULL`,
+    `DELETE FROM template_cycle_days WHERE template_id IN (${tpl}) AND ? IS NOT NULL`,
+    `DELETE FROM holidays WHERE tenant_id = ? AND reason = '${MARCA}'`,
     `DELETE FROM overtime_period_adjustments WHERE tenant_id = ?`, `DELETE FROM overtime_period_results WHERE tenant_id = ?`,
     `DELETE FROM overtime_period_closings WHERE tenant_id = ?`, `DELETE FROM overtime_excess_approvals WHERE tenant_id = ?`,
     `DELETE FROM employee_overtime_authorizations WHERE tenant_id = ?`, `DELETE FROM overtime_regime_policies WHERE tenant_id = ?`,
@@ -93,6 +114,10 @@ async function borrarDatos(db, t) {
     `DELETE FROM work_schedule_templates WHERE tenant_id = ?`,
     `UPDATE app_users SET employee_id = NULL WHERE tenant_id = ?`,
     `DELETE FROM employees WHERE tenant_id = ?`, `DELETE FROM sucursales WHERE tenant_id = ?`, `DELETE FROM ciudades WHERE tenant_id = ?`,
+    `DELETE FROM employee_categories WHERE tenant_id = ?`,
+    `DELETE FROM day_type_overtime_rules WHERE tenant_id = ?`, `DELETE FROM labor_conventions WHERE tenant_id = ?`,
+    `DELETE t FROM shift_definition_tramos t JOIN shift_definitions s ON s.id = t.shift_id WHERE s.tenant_id = ?`,
+    `DELETE FROM shift_definitions WHERE tenant_id = ?`,
     `DELETE FROM agent_sync_status WHERE tenant_id = ?`,
   ];
   for (const sql of sentencias) {
@@ -125,6 +150,13 @@ async function main() {
       console.log(`Se borraron los datos, pero la empresa queda: tiene ${u.n} usuario(s). Borralos en Usuarios y Roles y volvé a correr --borrar.`);
     } else {
       await db.query('DELETE FROM app_settings WHERE tenant_id = ?', [empresa.id]);
+      // Motivos de ausencia y feriados de la demo (cargados a mano o copiados):
+      // sin esto la empresa no se puede borrar (la base no deja borrar una
+      // empresa que todavía tiene motivos).
+      await db.query('DELETE m FROM event_type_count_modes m JOIN event_types t ON t.id = m.event_type_id WHERE t.tenant_id = ?', [empresa.id]).catch(() => {});
+      await db.query('DELETE FROM event_type_cupos WHERE event_type_id IN (SELECT id FROM event_types WHERE tenant_id = ?)', [empresa.id]).catch(() => {});
+      await db.query('DELETE FROM event_types WHERE tenant_id = ?', [empresa.id]);
+      await db.query('DELETE FROM holidays WHERE tenant_id = ?', [empresa.id]);
       await db.query('DELETE FROM vacation_scale WHERE tenant_id = ?', [empresa.id]).catch(() => {});
       await db.query('DELETE FROM payroll_regime_settings WHERE tenant_id = ?', [empresa.id]).catch(() => {});
       await db.query('DELETE FROM tenant_subscriptions WHERE tenant_id = ?', [empresa.id]);
@@ -192,9 +224,14 @@ async function main() {
     await db.query(`INSERT INTO specialusers (userId, tenant_id, badgeNumber, name, category, direction, isActive) VALUES (?, ?, ?, 'Marcador horas extra', 'HE', ?, 1)`, [uid, T, badge, dir]);
   }
 
-  // --- fichajes: de hace DIAS_DE_HISTORIA dias hasta hoy
+  // --- fichajes: desde --desde (por defecto el 1 de enero) hasta hoy
   const ahora = new Date();
   const hoy = fechaEnZona(ZONA, ahora);
+  const desde = opcion('--desde') || `${hoy.slice(0, 4)}-01-01`;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || desde > hoy) throw new Error(`--desde tiene que ser una fecha AAAA-MM-DD anterior a hoy (vino "${desde}")`);
+  const [ad, md, dd] = desde.split('-').map(Number);
+  const [ah, mh, dh] = hoy.split('-').map(Number);
+  const DIAS_DE_HISTORIA = Math.round((Date.UTC(ah, mh - 1, dh) - Date.UTC(ad, md - 1, dd)) / 86400000);
   const minutosAhora = Number(new Intl.DateTimeFormat('en-GB', { timeZone: ZONA, hour: '2-digit', minute: '2-digit', hour12: false })
     .format(ahora).split(':').reduce((h, m) => Number(h) * 60 + Number(m)));
   const filas = [];
@@ -244,7 +281,28 @@ async function main() {
   await db.query(`UPDATE agent_sync_status SET nombre = 'Reloj recepción' WHERE tenant_id = ?`, [T])
     .catch((err) => { if (err.code !== 'ER_BAD_FIELD_ERROR') throw err; }); // sin la migracion 20261013 se ve la IP
 
-  console.log(`Listo: "${NOMBRE}" (empresa ${T}) con ${empleados.length} empleados y ${filas.length} fichajes hasta el ${hoy}.`);
+  console.log(`Listo: "${NOMBRE}" (empresa ${T}) con ${empleados.length} empleados y ${filas.length} fichajes del ${desde} al ${hoy}.`);
+
+  // --- copia de una persona real (opcional)
+  const legajoACopiar = opcion('--copiar-legajo');
+  if (legajoACopiar) {
+    const origen = Number(opcion('--empresa-origen'));
+    const como = (opcion('--como') || '').trim();
+    if (!origen || !como) throw new Error('--copiar-legajo necesita --empresa-origen <id> y --como "APELLIDO, Nombre"');
+    if (origen === T) throw new Error('La empresa de origen no puede ser la demo');
+    const r = await copiarLegajoADemo(db, {
+      origen, legajo: Number(legajoACopiar), demo: T, nombre: como, legajoNuevo: LEGAJO_COPIA, userIdNuevo: USERID_BASE + LEGAJO_COPIA,
+      desde, hasta: hoy, ciudadId: ciu.insertId, sucursalId: sucursalDe['Casa central'], relojIp: RELOJ_COPIA_IP,
+      userIdMarcador: (badge) => USERID_BASE + Number(badge),
+    });
+    await db.query(
+      `INSERT INTO agent_sync_status (tenant_id, machine_ip, machine_sn, last_synced_at, last_checktime, fichajes_ultima_subida)
+       VALUES (?, ?, NULL, NOW(), NULL, 0)`, [T, RELOJ_COPIA_IP]);
+    await db.query(`UPDATE agent_sync_status SET nombre = 'Reloj portería' WHERE tenant_id = ? AND machine_ip = ?`, [T, RELOJ_COPIA_IP])
+      .catch((err) => { if (err.code !== 'ER_BAD_FIELD_ERROR') throw err; });
+    console.log(`Copiado: legajo ${legajoACopiar} como "${como}" (legajo ${LEGAJO_COPIA}): ${r.resumen}.`);
+    if (r.marcadoresSinBoton) console.log(`AVISO: ${r.marcadoresSinBoton} marcador(es) no tienen botón equivalente en la demo y no se copiaron.`);
+  }
   console.log('Siguiente paso: en Usuarios y Roles, crear un usuario para esa empresa (rol Administrador de Empresa) y entrar con él.');
   await db.end();
 }
