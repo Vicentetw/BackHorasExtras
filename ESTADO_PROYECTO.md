@@ -77,8 +77,8 @@
 >
 > | Qué | Para qué |
 > |---|---|
-> | *(Verificado en el backup del 09/10: producción ya tiene hasta la `20261016`.)* | |
-> | **Migración `20261017_registro_actividad.sql`** | Registro de actividad (quién hizo qué, incluido el soporte). Sin ella todo funciona, solo no se registra y la pantalla lo avisa. Idempotente. Ver `SOPORTE_Y_REGISTRO.md`. |
+> | *(Verificado en el backup del 09/10 23:14: producción tiene TODAS las migraciones, hasta la `20261017`.)* | |
+> | Borrar las empresas de prueba de producción ("prueba2", "Nueva de prueba"): aparecen en Empresas, en el selector de empresa y en la campanita | Antes de grabar el video o mostrar el sistema |
 > | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
