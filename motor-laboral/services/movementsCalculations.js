@@ -328,6 +328,9 @@ function detectMovements(checkins, markerMap, options = {}) {
   const closedEvents = [];
   const orphanReturns = [];
   const lastRealCheckinByEmployeeId = new Map();
+  // Último regreso de cada persona (cierre o regreso sin salida): para unir
+  // un regreso repetido (ver "Marcador repetido" más abajo).
+  const ultimoRegresoPorEmpleado = new Map();
 
   for (const row of sorted) {
     const marker = markerMap[row.userId];
@@ -461,6 +464,27 @@ function detectMovements(checkins, markerMap, options = {}) {
       lastRealCheckinByEmployeeId.set(row.employeeId, row.checktime);
       continue;
     }
+    // MARCADOR REPETIDO (decisión del dueño, 2026-10-11): "el marcador nunca
+    // es una persona". Si la persona repite el MISMO gesto dentro de la
+    // ventana de rebote (marcador de salida + dedo, otra vez el mismo
+    // marcador + dedo), es UNA sola acción y vale el ÚLTIMO par: la salida
+    // sigue abierta desde la última lectura, en vez de cerrarse a los
+    // segundos. No aplica a las horas extra mientras la persona está
+    // LLEGANDO (resguardo de arriba): ahí el 9 repetido al entrar, o al volver
+    // después de una pausa larga, puede ser el inicio de su turno y no horas
+    // extra (AGUILAR 17/02/2026) -- con los marcadores solos no se distingue
+    // del que empieza horas extra de verdad (2549 05/01/2026). Eso lo tiene
+    // que decidir la plantilla (pendiente, ver ESTADO_PROYECTO.md).
+    if (open && isOwnBounce && marcadorAplicable && marcadorAplicable.direction === 'SALIDA'
+        && marcadorAplicable.category === open.category && !reglaViejaParaHE(open.category)) {
+      open.timeOut = row.checktime;
+      open.salidaMarkerUserId = marcadorAplicable.userId;
+      open.salidaMarkerAt = marcadorAplicable.markedAt;
+      open.salidaCorregida = marcadorAplicable.corregido === true;
+      if (pendiente) marcadoresPorReloj.delete(pendiente.clave);
+      lastRealCheckinByEmployeeId.set(row.employeeId, row.checktime);
+      continue;
+    }
     if (open) {
       // Este empleado ya tenia una salida abierta: este fichaje la cierra,
       // sin importar si tambien vino precedido de un marcador de regreso.
@@ -485,6 +509,7 @@ function detectMovements(checkins, markerMap, options = {}) {
         regresoCorregido: marcadorAplicable ? marcadorAplicable.corregido === true : false
       });
       openEvents.delete(row.employeeId);
+      ultimoRegresoPorEmpleado.set(row.employeeId, closedEvents[closedEvents.length - 1]);
       // Solo se consume el marcador de ESTE reloj: los de los otros siguen
       // esperando a quien los apretó.
       if (pendiente) marcadoresPorReloj.delete(pendiente.clave);
@@ -511,6 +536,20 @@ function detectMovements(checkins, markerMap, options = {}) {
         salidaCorregida: marcadorAplicable.corregido === true
       });
     } else if (marcadorAplicable && marcadorAplicable.direction === 'REGRESO') {
+      // Mismo criterio: regreso repetido (otra vez el marcador de regreso +
+      // dedo, dentro de la ventana) = el mismo regreso; vale el último par.
+      // Antes cada repetición era un regreso más (PEREZ 9411, 05/09/2026:
+      // tres regresos en 20 s, y Salidas los contaba tres veces).
+      const previo = ultimoRegresoPorEmpleado.get(row.employeeId);
+      if (previo && isOwnBounce && previo.category === marcadorAplicable.category
+          && (row.checktime - previo.timeIn) <= ownCheckinBounceMs && !reglaViejaParaHE(marcadorAplicable.category)) {
+        previo.timeIn = row.checktime;
+        previo.regresoMarkerUserId = marcadorAplicable.userId;
+        previo.regresoMarkerAt = marcadorAplicable.markedAt;
+        previo.regresoCorregido = marcadorAplicable.corregido === true;
+        if (pendiente) marcadoresPorReloj.delete(pendiente.clave);
+        continue;
+      }
       orphanReturns.push({
         employeeId: row.employeeId,
         category: marcadorAplicable.category,
@@ -519,6 +558,7 @@ function detectMovements(checkins, markerMap, options = {}) {
         regresoMarkerAt: marcadorAplicable.markedAt,
         regresoCorregido: marcadorAplicable.corregido === true
       });
+      ultimoRegresoPorEmpleado.set(row.employeeId, orphanReturns[orphanReturns.length - 1]);
     }
     // Se consume SOLO el de este reloj. Si no habia ninguno para este
     // aparato, los de los otros quedan intactos.
