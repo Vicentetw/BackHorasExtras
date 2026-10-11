@@ -203,6 +203,19 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-11 — Marcador repetido = un gesto (RAMA `marcadores-repetidos`,
+>   solo backend, NO publicada).** Marcador + dedo repetido en la ventana
+>   (20 s) vale el último par: no cierra la salida a los segundos ni suma
+>   regresos. Excepción: HE mientras la persona llega (resguardo
+>   NAIN/AGUILAR), porque con marcadores solos 2549 05/01 (HE real) y AGUILAR
+>   17/02 (su turno) son idénticos: eso lo tiene que decidir la plantilla.
+>   Impacto: sep HE +0,3 h; oficiales 230→221 (−4.963 min duplicados);
+>   campaña 2026: 4 personas recuperan 32 días que figuraban Ausente
+>   (VAZQUEZ 9410 23/06–04/07). Tests de junio actualizados con explicación.
+>   Suite 1024/1024. **Pendiente de decisión (B):** que "Salida posterior"
+>   de la plantilla funcione sin el modo motor (hoy 2 plantillas de AVP
+>   tienen "HE si está autorizado" y no hace nada; el modo solo lo ve el
+>   superadmin). **(C):** AVP usa "todos computan HE" (solo 10/169 tildados).
 > - **2026-10-10 — Arreglo de Salidas sin par: en la RAMA
 >   `salidas-horario-propio` (los dos repos), NO publicado: espera que el
 >   dueño revise el impacto** (`C:\Users\EURO\Documents\impacto-salidas-
