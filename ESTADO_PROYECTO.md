@@ -203,6 +203,7 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-13 — PUBLICADAS** las ramas `salidas-horario-propio`, `marcadores-repetidos` y `adicionales-campana` (backend `50e5d27`, frontend desplegado). Suite 1036/1036.
 > - **2026-10-13 — Módulo "Adicionales de campaña" (RAMA `adicionales-campana`,
 >   los dos repos, NO publicada).** CCT 572/09 art. 33 B: Dedicación Funcional
 >   Exclusiva a quien pernocta en campaña más de 12 días en 30 corridos; art.
