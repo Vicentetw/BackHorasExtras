@@ -203,6 +203,14 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-13 — Módulo "Adicionales de campaña" (RAMA `adicionales-campana`,
+>   los dos repos, NO publicada).** CCT 572/09 art. 33 B: Dedicación Funcional
+>   Exclusiva a quien pernocta en campaña más de 12 días en 30 corridos; art.
+>   33 E desarraigo (más de 20 días, hasta 60 %). El superadmin lo prende por
+>   empresa (Empresas > editar); la empresa ajusta los números en
+>   Configuración General (12/30/20 por defecto). Salidas > Campaña muestra
+>   noches en el período, máximo en 30 días y chips. No calcula importes.
+>   Probado en la copia de AVP (junio). Suite 1024/1024.
 > - **2026-10-11 — Marcador repetido = un gesto (RAMA `marcadores-repetidos`,
 >   solo backend, NO publicada).** Marcador + dedo repetido en la ventana
 >   (20 s) vale el último par: no cierra la salida a los segundos ni suma
