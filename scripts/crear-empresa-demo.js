@@ -216,13 +216,26 @@ async function main() {
     await db.query(`INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to) VALUES (?, ?, ?, '2020-01-01', NULL)`, [e.insertId, T, turno.templateId]);
     empleados.push({ i, id: e.insertId, userId, turno });
   }
-  // Marcadores de horas extra (los "botones" 9 y 10 del reloj).
-  const M9 = USERID_BASE + 9;
-  const M10 = USERID_BASE + 10;
-  for (const [uid, badge, dir] of [[M9, '9', 'SALIDA'], [M10, '10', 'REGRESO']]) {
-    await db.query(`INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, 'Marcador')`, [uid, T, badge]);
-    await db.query(`INSERT INTO specialusers (userId, tenant_id, badgeNumber, name, category, direction, isActive) VALUES (?, ?, ?, 'Marcador horas extra', 'HE', ?, 1)`, [uid, T, badge, dir]);
+  // Los que salen a campaña (ver CAMPANAS más abajo), marcados como
+  // "afectados a campaña". Sin la migración 20261004 la columna no existe.
+  await db.query('UPDATE employees SET afectado_campana = 1 WHERE tenant_id = ? AND employee_id IN (?)', [T, [101 + 18, 101 + 19]])
+    .catch((err) => { if (err.code !== 'ER_BAD_FIELD_ERROR') throw err; });
+  // Marcadores (los "botones" del reloj), con la misma numeración que un
+  // reloj real: 3/4 salida oficial, 5/6 salida particular, 7/8 campaña,
+  // 9/10 horas extra (el primero de cada par es el regreso).
+  const MARCADORES = [
+    [3, 'OFICIAL', 'REGRESO', 'Regreso salida oficial'], [4, 'OFICIAL', 'SALIDA', 'Salida oficial'],
+    [5, 'PARTICULAR', 'REGRESO', 'Regreso salida particular'], [6, 'PARTICULAR', 'SALIDA', 'Salida particular'],
+    [7, 'CAMPANA', 'REGRESO', 'Regreso de campaña'], [8, 'CAMPANA', 'SALIDA', 'Salida a campaña'],
+    [9, 'HE', 'SALIDA', 'Inicio horas extra'], [10, 'HE', 'REGRESO', 'Fin horas extra'],
+  ];
+  for (const [badge, cat, dir, nombre] of MARCADORES) {
+    await db.query(`INSERT INTO users (USERID, tenant_id, Badgenumber, Name) VALUES (?, ?, ?, 'Marcador')`, [USERID_BASE + badge, T, String(badge)]);
+    await db.query(`INSERT INTO specialusers (userId, tenant_id, badgeNumber, name, category, direction, isActive) VALUES (?, ?, ?, ?, ?, ?, 1)`, [USERID_BASE + badge, T, String(badge), nombre, cat, dir]);
   }
+  const M = (badge) => USERID_BASE + badge;
+  const M9 = M(9);
+  const M10 = M(10);
 
   // --- fichajes: desde --desde (por defecto el 1 de enero) hasta hoy
   const ahora = new Date();
@@ -236,6 +249,27 @@ async function main() {
     .format(ahora).split(':').reduce((h, m) => Number(h) * 60 + Number(m)));
   const filas = [];
   const poner = (userId, fecha, minutos, seg) => filas.push([userId, T, `${fecha} ${hora(minutos, seg)}`, RELOJ_IP]);
+  // Marcador + dedo, como en un reloj real: el botón 3 segundos antes. Los
+  // segundos dependen de la persona, así dos personas nunca aprietan el
+  // mismo botón en el mismo segundo (la base no admite fichajes repetidos).
+  const conMarcador = (badge, emp, fecha, minutos) => { poner(M(badge), fecha, minutos, 20 + emp.i); poner(emp.userId, fecha, minutos, 23 + emp.i); };
+  // Campañas (trabajo de campo, varios días sin fichar): dos personas del
+  // depósito. Una sale una semana cada tres (4 noches); la otra, tres semanas
+  // seguidas cada seis (18 noches: más de 12 en 30 días, para que se vea la
+  // Dedicación Funcional Exclusiva del módulo de adicionales de campaña).
+  const CAMPANAS = { 18: { cada: 3, semanas: 1 }, 19: { cada: 6, semanas: 3 } };
+  const lunesBase = (() => { const [y, mo, da] = desde.split('-').map(Number); const f = new Date(y, mo - 1, da); f.setDate(f.getDate() - ((f.getDay() + 6) % 7)); return f; })();
+  const estadoCampana = (emp, fecha, dow) => {
+    const c = CAMPANAS[emp.i];
+    if (!c) return null;
+    const [y, mo, da] = fecha.split('-').map(Number);
+    const semana = Math.floor((new Date(y, mo - 1, da) - lunesBase) / (7 * 86400000));
+    const enCiclo = semana % c.cada;
+    if (enCiclo < 1 || enCiclo > c.semanas) return null; // la semana 0 de cada ciclo trabaja normal
+    if (enCiclo === 1 && dow === 1) return 'sale';
+    if (enCiclo === c.semanas && dow === 5) return 'vuelve';
+    return 'afuera';
+  };
   for (let atras = DIAS_DE_HISTORIA; atras >= 0; atras--) {
     const fecha = fechaEnZona(ZONA, new Date(ahora.getTime() - atras * 86400000));
     const [a, m, d] = fecha.split('-').map(Number);
@@ -243,6 +277,22 @@ async function main() {
     if (dow === 0 || dow === 6) continue; // sin fichajes el fin de semana
     for (const emp of empleados) {
       const r = azar(`${emp.i}-${fecha}`);
+      const campana = estadoCampana(emp, fecha, dow);
+      if (campana === 'afuera') continue; // en el campo: no ficha
+      if (campana === 'vuelve') {
+        // Cada uno a un minuto distinto: si dos aprietan el marcador a la vez,
+        // en un reloj real vale el último y uno de los dos se queda sin campaña.
+        const regresa = 18 * 60 + 2 + emp.i;
+        if (fecha !== hoy || minutosAhora > regresa + 3) conMarcador(7, emp, fecha, regresa);
+        continue;
+      }
+      if (campana === 'sale') {
+        const llega = emp.turno.inicio * 60 - 5;
+        poner(emp.userId, fecha, llega, emp.i % 50);
+        const parte = llega + 60 + emp.i; // un minuto distinto por persona (ver regreso)
+        if (fecha !== hoy || minutosAhora > parte + 5) conMarcador(8, emp, fecha, parte);
+        continue;
+      }
       const suerte = r();
       if (suerte < 0.06) continue; // ausente
       const tarde = suerte < 0.16; // ~10% llega tarde
@@ -264,6 +314,18 @@ async function main() {
         poner(M9, fecha, empieza - 1, 55); poner(emp.userId, fecha, empieza, 0);
         poner(M10, fecha, empieza + duracion - 1, 55); poner(emp.userId, fecha, empieza + duracion, 0);
       } else {
+        // Salida particular (~5 % de los días) u oficial (~3 %), a media
+        // jornada, con su marcador. Una de cada diez particulares no vuelve
+        // ese día ("sin regreso": se cierra al fin de su horario).
+        const otra = r();
+        const sale = entrada + 120 + Math.floor(r() * 120);
+        const vuelve = sale + 30 + Math.floor(r() * 90);
+        if (otra < 0.08 && !esHoy) {
+          const particular = otra < 0.05;
+          conMarcador(particular ? 6 : 4, emp, fecha, sale);
+          if (particular && r() < 0.1) continue; // se fue y no volvió
+          conMarcador(particular ? 5 : 3, emp, fecha, vuelve);
+        }
         const salida = fin + Math.floor(r() * 11);
         if (esHoy && salida > minutosAhora) continue; // sigue trabajando
         poner(emp.userId, fecha, salida, emp.i % 50);

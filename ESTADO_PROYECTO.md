@@ -203,6 +203,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-13 — Video de demostración verificado y guion** (`GUION_VIDEO_DEMO.md`).
+>   Recorrido automático de 25 pasos como admin de la Demo (1366 y 390 px):
+>   sin errores, PDF/Excel OK. La Demo ahora genera salidas particulares,
+>   oficiales y campañas (TOLEDO 4 días, URQUIZA 18) y marca a esos dos como
+>   afectados. Hallazgo del generador (no del sistema): dos marcadores de
+>   campaña en el mismo segundo -> vale el último (escalonado por persona).
 > - **2026-10-13 — PUBLICADAS** las ramas `salidas-horario-propio`, `marcadores-repetidos` y `adicionales-campana` (backend `50e5d27`, frontend desplegado). Suite 1036/1036.
 > - **2026-10-13 — Módulo "Adicionales de campaña" (RAMA `adicionales-campana`,
 >   los dos repos, NO publicada).** CCT 572/09 art. 33 B: Dedicación Funcional
