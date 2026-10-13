@@ -39,6 +39,8 @@ const syncStatusRoutes = require('./routes/syncStatus');
 const { insertCheckinsBatch, upsertUsersBatch, MAX_RECORDS_PER_MANUAL_IMPORT } = require('./motor-laboral/services/checkinsIngestService');
 const createMotorLaboralRoutes = require('./motor-laboral/index');
 const scheduleRepository = require('./motor-laboral/repositories/scheduleRepository');
+const adicionalesCampana = require('./motor-laboral/services/adicionalesCampana');
+const { moduloHabilitado } = require('./motor-laboral/services/modulos');
 const userRepository = require('./motor-laboral/repositories/userRepository');
 const employeeEventRepository = require('./motor-laboral/repositories/employeeEventRepository');
 const attendanceCalc = require('./motor-laboral/services/attendanceCalculations');
@@ -5008,7 +5010,23 @@ app.get('/campana-range', requirePermission('attendance', 'read'), reportesRateL
       };
     });
 
-    res.json({ from, to, cutoffTime, rows });
+    // Noches en campaña y adicionales por convenio: solo si la empresa tiene
+    // el módulo (lo prende el superadmin). Ver adicionalesCampana.js.
+    let adicionales = null;
+    if (tenantId != null && await moduloHabilitado(db, tenantId, 'adicionalesCampana')) {
+      const config = await fetchConfigAdicionalesCampana(tenantId);
+      // Para la ventana de N días corridos hacen falta las campañas de antes del "from".
+      const desdeVentana = adicionalesCampana.sumarDias(from, -(config.ventanaDias - 1));
+      const campanasVentana = (await detectarCampanas(tenantId, desdeVentana, to)).filter(e => employeeById.has(e.employeeId));
+      const porEmpleado = adicionalesCampana.resumirNoches(campanasVentana, from, to, config).map(r => {
+        const emp = employeeById.get(r.employeeId);
+        return { ...r, employeeName: emp.Name, badge: emp.Badgenumber };
+      });
+      rows.forEach(r => { r.desarraigoMayor = r.dias != null && r.dias > config.diasParaDesarraigoMayor; });
+      adicionales = { config, porEmpleado };
+    }
+
+    res.json({ from, to, cutoffTime, rows, adicionales });
   } catch (err) {
     console.error('ERROR fetching campana-range:', err);
     if (err.code === 'ECONNREFUSED') {
@@ -5017,6 +5035,49 @@ app.get('/campana-range', requirePermission('attendance', 'read'), reportesRateL
       });
     }
     res.status(500).json({ error: 'Error en campana-range' });
+  }
+});
+
+// GET/POST /config/campana-adicionales -- los números de los adicionales de
+// campaña (noches para Dedicación Funcional Exclusiva, ventana de días,
+// días para desarraigo mayor). Los edita el administrador de la empresa, pero
+// solo si la empresa tiene el módulo (lo prende el superadmin).
+async function fetchConfigAdicionalesCampana(tenantId) {
+  const raw = await getAppSetting('campanaAdicionales', tenantId, db);
+  let guardada = {};
+  try { guardada = raw ? JSON.parse(raw) : {}; } catch (_) { guardada = {}; }
+  return adicionalesCampana.normalizarConfig(guardada);
+}
+
+app.get('/config/campana-adicionales', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const habilitado = tenantId != null && await moduloHabilitado(db, tenantId, 'adicionalesCampana');
+    res.json({ habilitado, ...(await fetchConfigAdicionalesCampana(tenantId)), porDefecto: adicionalesCampana.POR_DEFECTO });
+  } catch (err) {
+    console.error('ERROR fetching campana adicionales:', err);
+    res.status(500).json({ error: 'Error leyendo la configuración' });
+  }
+});
+
+app.post('/config/campana-adicionales', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantForWrite(req);
+    if (tenantId == null) return res.status(400).json({ error: MENSAJE_ELEGIR_EMPRESA });
+    if (!await moduloHabilitado(db, tenantId, 'adicionalesCampana')) {
+      return res.status(403).json({ error: 'Tu empresa no tiene habilitado el módulo de adicionales de campaña.' });
+    }
+    const limpio = {};
+    for (const [k, [min, max]] of Object.entries(adicionalesCampana.RANGOS)) {
+      const n = Number(req.body[k]);
+      if (!Number.isInteger(n) || n < min || n > max) return res.status(400).json({ error: `${k} debe ser un número entero entre ${min} y ${max}` });
+      limpio[k] = n;
+    }
+    await setAppSetting('campanaAdicionales', tenantId, JSON.stringify(limpio), db);
+    res.json({ ok: true, ...limpio });
+  } catch (err) {
+    console.error('ERROR saving campana adicionales:', err);
+    res.status(500).json({ error: 'Error guardando la configuración' });
   }
 });
 

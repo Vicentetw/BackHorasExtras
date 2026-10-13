@@ -8,6 +8,10 @@ const { getAppSetting, setAppSetting } = require('../repositories/appSettingsRep
 
 const MODULOS = {
   portalEmpleado: 'modulo_portal_empleado', // portal del empleado (PORTAL_EMPLEADO.md)
+  // Noches en campaña y adicionales por convenio (Dedicación Funcional
+  // Exclusiva, desarraigo): ver adicionalesCampana.js. Solo para empresas cuyo
+  // convenio lo tiene (vialidad, CCT 572/09).
+  adicionalesCampana: 'modulo_adicionales_campana',
 };
 
 async function moduloHabilitado(db, tenantId, modulo) {
