@@ -60,8 +60,12 @@ test('/api/labor-engine/attendance/:date 2026-06-30 (dia cerrado): mismos totale
   assert.equal(json.summary.onTime, 75);
   assert.equal(json.summary.late, 35);
   assert.equal(json.summary.lateJustified, 0);
-  assert.equal(json.summary.absent, 46);
-  assert.equal(json.summary.campaign, 14);
+  // Actualizado 2026-10-11: 46 -> 45. Regla "marcador repetido": VAZQUEZ
+  // (9410) apretó dos veces el 8 (salida a campaña) el 23/06; la 2ª lectura
+  // cerraba la campaña a los 20 s y del 24/06 al 04/07 figuraba Ausente.
+  // Ahora la campaña dura hasta su regreso del 04/07: el 30/06 está en campaña.
+  assert.equal(json.summary.absent, 45);
+  assert.equal(json.summary.campaign, 15); // 14 -> 15: el mismo VAZQUEZ (ver arriba)
   assert.equal(json.summary.excused, 1);
 });
 

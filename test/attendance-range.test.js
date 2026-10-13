@@ -115,7 +115,12 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   // Se pide con ?tenantId=6: desde el aislamiento por empresa, la
   // configuracion de AVP (corte de HE, limites, campaña) es de la empresa 6.
   // Los valores de Perrotta (test siguiente) no cambiaron: 40.30 h, 21 dias.
-  assert.equal(sumOvertime.toFixed(2), '2576.66', 'suma total de horas extras del mes');
+  // Actualizado 2026-10-11: 2576.66 -> 2576.77. Regla "marcador repetido"
+  // (decisión del dueño): marcador + dedo repetido en 20 s es un solo gesto y
+  // vale el último par. Ej.: el 10 apretado dos veces cerraba la HE en el
+  // primer par (16:04:12) y dejaba un regreso suelto; ahora cierra en el
+  // último (16:04:22). Verificado evento por evento contra el código anterior.
+  assert.equal(sumOvertime.toFixed(2), '2576.77', 'suma total de horas extras del mes');
   assert.equal(withOvertime, 113, 'cantidad de empleados con horas extras > 0');
 });
 

@@ -64,26 +64,27 @@ test('detectMovements: caso real legajo 2518 (23/07/2026), con ruido y marcadore
   });
 });
 
-test('detectMovements: doble lectura del mismo empleado cierra en vez de abrir un evento fantasma', () => {
-  // Salida marcada, el empleado ficha (abre), y 6 segundos despues vuelve a
-  // fichar precedido de OTRO marcador de salida -- ese segundo fichaje debe
-  // CERRAR la salida abierta, no abrir una nueva de 6 segundos.
+test('detectMovements: el mismo marcador de salida repetido es UNA salida y vale el último par', () => {
+  // Antes (hasta 2026-10-10) la segunda lectura CERRABA la salida a los 6 s.
+  // Decisión del dueño (2026-10-11): "el marcador nunca es una persona" --
+  // repetir marcador + dedo dentro de la ventana es el mismo gesto; la
+  // salida sigue abierta desde la última lectura (no se cierra a los segundos
+  // ni se abre una segunda).
   const checkins = [
     { checktime: dt('14:34:00'), userId: 4, employeeId: null },
     { checktime: dt('14:34:02'), userId: 2609, employeeId: '2609' }, // abre OFICIAL
     { checktime: dt('14:34:06'), userId: 4, employeeId: null },
-    { checktime: dt('14:34:08'), userId: 2609, employeeId: '2609' }  // cierra, no abre otra
+    { checktime: dt('14:34:08'), userId: 2609, employeeId: '2609' }  // mismo gesto otra vez
   ];
   const markers = { 4: { category: 'OFICIAL', direction: 'SALIDA' } };
 
   const { closedEvents, openEvents } = detectMovements(checkins, markers);
 
-  assert.equal(openEvents.size, 0);
-  assert.equal(closedEvents.length, 1);
-  assert.equal(closedEvents[0].timeOut.getTime(), dt('14:34:02').getTime());
-  assert.equal(closedEvents[0].timeIn.getTime(), dt('14:34:08').getTime());
-  assert.equal(closedEvents[0].salidaMarkerUserId, 4);
-  assert.equal(closedEvents[0].regresoMarkerUserId, 4, 'el marcador 4 vuelto a fichar justo antes queda como diagnostico, aunque su direccion configurada sea SALIDA');
+  assert.equal(closedEvents.length, 0);
+  assert.equal(openEvents.size, 1);
+  const abierta = openEvents.get('2609');
+  assert.equal(abierta.timeOut.getTime(), dt('14:34:08').getTime());
+  assert.equal(abierta.salidaMarkerAt.getTime(), dt('14:34:06').getTime());
 });
 
 test('detectMovements: sin fichaje de regreso ese dia queda abierta', () => {
