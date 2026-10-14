@@ -167,6 +167,76 @@ async function main() {
   }
 }
 
-main()
-  .catch((err) => { console.error('ERROR:', err.message); process.exitCode = 1; })
-  .finally(() => db.end());
+// ============================================================================
+// Cuentas de login que dejan los tests (Firebase)
+// ============================================================================
+//
+// Cada test entra con una cuenta de Firebase descartable (test-helpers/
+// firebaseTestAuth.js) y la borra al terminar. Si el test se corta antes,
+// la cuenta queda en Firebase para siempre: el 2026-10-14 había 8 juntadas
+// desde julio. Y ese Firebase es el MISMO que usa producción (proyecto
+// asistenciatw), así que hay que distinguir muy bien qué es de prueba.
+//
+// CÓMO SE RECONOCE UNA CUENTA DE PRUEBA
+// -------------------------------------
+// No tiene email NI ningún método de ingreso (ni contraseña, ni Google).
+// Una cuenta así solo se puede crear con la llave de administrador
+// (createCustomToken), que es lo que hacen los tests. El sistema real NUNCA
+// la crea: toda cuenta de una persona tiene email (appUserRepository.js
+// crea con email; el registro también). Si eso cambiara algún día, este
+// criterio hay que revisarlo ANTES.
+//
+// Además solo se borran cuentas de más de 15 minutos, para no pisar a un
+// test que esté corriendo en otra terminal en ese mismo momento. Las de una
+// corrida que se cortó recién se limpian en la próxima corrida.
+const MINUTOS_DE_GRACIA = 15;
+
+function esCuentaDePrueba(u, ahora = Date.now()) {
+  const sinIdentidad = !u.email && !u.phoneNumber && (!u.providerData || u.providerData.length === 0);
+  const creada = Date.parse(u.metadata && u.metadata.creationTime);
+  const vieja = Number.isFinite(creada) && ahora - creada > MINUTOS_DE_GRACIA * 60 * 1000;
+  return sinIdentidad && vieja;
+}
+
+async function limpiarCuentasDeLogin(aplicar) {
+  const path = require('path');
+  const admin = require('firebase-admin');
+  const json = process.env.FIREBASE_SERVICE_ACCOUNT;
+  const ruta = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  if (!json && !ruta) {
+    console.log('Cuentas de login: sin credenciales de Firebase, no se revisan.');
+    return;
+  }
+  if (!admin.apps.length) {
+    admin.initializeApp({ credential: admin.credential.cert(json ? JSON.parse(json) : require(path.resolve(ruta))) });
+  }
+  const huerfanas = [];
+  let pagina;
+  do {
+    const r = await admin.auth().listUsers(1000, pagina);
+    huerfanas.push(...r.users.filter((u) => esCuentaDePrueba(u)));
+    pagina = r.pageToken;
+  } while (pagina);
+  if (!huerfanas.length) {
+    if (aplicar) console.log('Cuentas de login: no quedaron cuentas de prueba.');
+    return;
+  }
+  console.log(`Cuentas de login de prueba que quedaron: ${huerfanas.length}`);
+  huerfanas.forEach((u) => console.log(`   ${u.uid}`));
+  if (!aplicar) return;
+  const r = await admin.auth().deleteUsers(huerfanas.map((u) => u.uid));
+  console.log(`Cuentas de login de prueba borradas: ${r.successCount} de ${huerfanas.length}`);
+  if (r.failureCount) {
+    r.errors.forEach((e) => console.error(`   ${huerfanas[e.index].uid}: ${e.error.message}`));
+    process.exitCode = 1;
+  }
+}
+
+if (require.main === module) {
+  main()
+    .then(() => limpiarCuentasDeLogin(process.argv.includes('--aplicar')))
+    .catch((err) => { console.error('ERROR:', err.message); process.exitCode = 1; })
+    .finally(() => db.end());
+}
+
+module.exports = { esCuentaDePrueba };
