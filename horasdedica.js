@@ -253,10 +253,18 @@ app.use('/api/registro', require('./routes/registro')(db));
 // Solicitudes del sistema sin aprobar: se borran a los 30 días (y su cuenta
 // de login). Una pasada al minuto de arrancar y después cada 6 horas.
 {
+  // Y las cuentas creadas por el registro que en 7 días no hicieron nada
+  // (ver cuentasDeRegistro.js).
   const { borrarSolicitudesVencidas } = require('./motor-laboral/services/registroService');
-  const limpiar = () => borrarSolicitudesVencidas(db)
-    .then((n) => { if (n) console.log(`Registro: ${n} solicitud(es) sin aprobar borradas (más de 30 días).`); })
-    .catch((err) => console.error('Registro: falló la limpieza de solicitudes vencidas:', err.message));
+  const { borrarCuentasSinUso } = require('./motor-laboral/services/cuentasDeRegistro');
+  const limpiar = () => Promise.all([
+    borrarSolicitudesVencidas(db)
+      .then((n) => { if (n) console.log(`Registro: ${n} solicitud(es) sin aprobar borradas (más de 30 días).`); })
+      .catch((err) => console.error('Registro: falló la limpieza de solicitudes vencidas:', err.message)),
+    borrarCuentasSinUso(db)
+      .then((n) => { if (n) console.log(`Registro: ${n} cuenta(s) de login sin uso borradas (más de 7 días).`); })
+      .catch((err) => console.error('Registro: falló la limpieza de cuentas sin uso:', err.message)),
+  ]);
   if (process.env.NODE_ENV !== 'test') {
     setTimeout(limpiar, 60 * 1000).unref();
     setInterval(limpiar, 6 * 60 * 60 * 1000).unref();

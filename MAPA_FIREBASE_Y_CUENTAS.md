@@ -48,7 +48,7 @@ Se entra en https://console.firebase.google.com **con la cuenta dueña de
 | Qué | Dónde está en la consola | Estado recomendado |
 |---|---|---|
 | Métodos de login | Authentication → **Sign-in method** | Email/contraseña: **sí**. Google: **sí** (para el registro con Google) |
-| Quién puede crear cuentas | Authentication → Settings → **User actions** → "Enable create (sign-up)" | **Destildado**: las cuentas las crea solo nuestro servidor |
+| Quién puede crear cuentas | Authentication → Settings → **User actions** → "Enable create (sign-up)" | **Destildado**: las cuentas las crea solo nuestro servidor (`cuentasDeRegistro.js`). El test `registro-seguro` falla si alguien lo vuelve a tildar |
 | Que cada uno borre su cuenta | Authentication → Settings → User actions → "Enable delete" | **Destildado**: el borrado pasa por el sistema, que deja constancia (Ley 25.326) |
 | Protección de enumeración de correo | Authentication → Settings → User actions | **Tildado**: no deja averiguar qué emails tienen cuenta |
 | Dominios autorizados | Authentication → Settings → **Authorized domains** | Tiene que estar `horasdedicacionavp.web.app` (y `localhost` para probar). Si la página se muda a otro dominio, **agregarlo acá o el login falla** |
@@ -58,6 +58,7 @@ Se entra en https://console.firebase.google.com **con la cuenta dueña de
 | Nombre que ven los usuarios (mails y ventana de Google) | ⚙️ Project settings → General → **Public-facing name** | "Horas Dedica". Hasta el 2026-10-14 decía `project-948260225701` (948260225701 es el número del proyecto) |
 | ID de cliente web de Google | Authentication → Sign-in method → Google → "Web SDK configuration" | `948260225701-ekc31….apps.googleusercontent.com`. **No es secreto**: lo usa el registro con Google |
 | Pantalla "Continuar con Google" | Google Cloud Console (mismo proyecto `asistenciatw`) → APIs y servicios → **Pantalla de consentimiento de OAuth** | Nombre de la app "Horas Dedica", con logo y email de soporte. Si no se configura, Google muestra "asistenciatw.firebaseapp.com" |
+| Desde qué páginas se puede usar el botón "Registrarse con Google" | Google Cloud Console → APIs y servicios → **Credenciales** → "Web client (auto created by Google Service)" → **Orígenes autorizados de JavaScript** | `https://horasdedicacionavp.web.app`, `http://localhost:4200` y `http://localhost`. Si la página se muda, agregar el dominio nuevo o el botón de Google no aparece |
 
 ### Archivos y variables que dependen de `asistenciatw`
 
@@ -66,6 +67,8 @@ Se entra en https://console.firebase.google.com **con la cuenta dueña de
 | Frontend `src/environments/environment.ts` (producción) | `firebaseConfig` con `projectId: 'asistenciatw'` y `authDomain: 'asistenciatw.firebaseapp.com'` | Pegar el `firebaseConfig` del proyecto nuevo |
 | Frontend `src/environments/environment.development.ts` (local) | lo mismo | Ídem. Hoy local y producción **comparten** el mismo login |
 | Frontend `firebase.json` → cabecera CSP, `frame-src` | `https://asistenciatw.firebaseapp.com` (la ventanita de login de Google) | Cambiar por el `authDomain` nuevo, o el login con Google queda bloqueado cuando se active el modo bloqueo de la CSP |
+| Frontend `environment*.ts` → `googleClientId` | ID de cliente web de Google (botón "Registrarse con Google") | El del proyecto nuevo |
+| Backend, Render → `GOOGLE_OAUTH_CLIENT_ID` | el mismo ID: el servidor solo acepta certificados de Google emitidos para él | **Obligatoria si el proyecto no es `asistenciatw`** |
 | Backend, Render → `FIREBASE_SERVICE_ACCOUNT` | JSON de la cuenta de servicio | El del proyecto nuevo. Si es de otro proyecto, **nadie entra**, y el error no dice nada de proyectos |
 | Backend, Render → `FIREBASE_WEB_API_KEY` | apiKey web, para mandar el mail de "poner tu contraseña" | **Obligatoria si el proyecto no es `asistenciatw`**. Sin ella, el mail no llega a nadie |
 | Backend local `.env` → `FIREBASE_SERVICE_ACCOUNT_PATH` | ruta al JSON de la cuenta de servicio en esta PC | Apuntar al JSON nuevo. El archivo **nunca** se sube a GitHub |

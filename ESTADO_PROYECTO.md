@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-09 — último: superadmin "trabajando en una empresa" + Registro de actividad, ver bitácora)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-14 — último: registro seguro en rama `registro-seguro`, ver bitácora)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
@@ -205,6 +205,34 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-14 — Registro SEGURO (RAMA `registro-seguro`, los dos repos, NO
+>   publicada).** Motivo: pepe@gmail.com se creó una cuenta sin control
+>   (el alta desde el navegador estaba abierta en Firebase). Regla nueva:
+>   **ninguna cuenta se crea desde el navegador**; en Firebase (`asistenciatw`)
+>   el dueño apagó "Enable create (sign-up)" y "Enable delete" (protección de
+>   enumeración: encendida). Las crea el servidor
+>   (`motor-laboral/services/cuentasDeRegistro.js`, rutas
+>   `/api/public/registro/cuenta` y `/cuenta-google`) después de: datos
+>   válidos, contraseña razonable, email no descartable ni bloqueado, captcha
+>   y límite por conexión. Google: el botón oficial (Google Identity
+>   Services) da un certificado firmado que el servidor verifica con
+>   `google-auth-library` (dependencia nueva) y crea la cuenta con Google
+>   vinculado. Cada cuenta lleva la marca `registro: true`; las que en 7
+>   días no tienen usuario ni solicitud se borran solas (cada 6 h, junto a
+>   la de 30 días). En el menú del usuario: "Vincular mi cuenta con Google"
+>   (solo la cuenta de Google del mismo email). La CSP suma
+>   `accounts.google.com/gsi`. Tests: `registro-seguro` (12, incluye que
+>   Firebase RECHACE un alta desde afuera) y `limpieza-cuentas-de-prueba` (6);
+>   QA en el navegador. **No probado:** el alta con una cuenta de Google real
+>   (necesita una persona en la ventana de Google). Antes, ya publicado ese
+>   día: "Crear cuenta" mandaba a WhatsApp y los errores del login en
+>   castellano (`b3a40fe`). Para publicar: en Google Cloud Console
+>   (`asistenciatw`) → Credenciales → cliente web → **orígenes autorizados**
+>   `https://horasdedicacionavp.web.app`. Mapa de Firebase y cuentas:
+>   `MAPA_FIREBASE_Y_CUENTAS.md`. Borrar cuentas de prueba: la lista de
+>   historial de `routes/appUsers.js` ya estaba completa (20 claves); la
+>   cuenta "Nueva de prueba" no se borra porque tiene un pedido de plan
+>   (historial): falta "Eliminar empresa de prueba".
 > - **2026-10-14 — PUBLICADO el registro en el sistema** (backend `b819889`, frontend desplegado, suite 1047/1047). Falta en producción: migración `20261018`, dominio en Turnstile, plantilla del mail de verificación y completar los textos legales.
 > - **2026-10-14 — Registro dentro del sistema (RAMA `registro-en-sistema`,
 >   los dos repos, NO publicada).** Login → "Crear cuenta" (email o Google)

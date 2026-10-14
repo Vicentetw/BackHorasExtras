@@ -54,7 +54,8 @@ no en Render (no hay dónde dejar el archivo).
 
 | Variable | Qué habilita | Si falta |
 |---|---|---|
-| `TURNSTILE_SECRET_KEY` | El captcha del alta autoservicio | `/api/public/signup` responde 503 |
+| `TURNSTILE_SECRET_KEY` | El captcha del alta autoservicio y de "Crear cuenta" | `/api/public/signup` y `/api/public/registro/cuenta*` responden 503: nadie puede crear una cuenta |
+| `GOOGLE_OAUTH_CLIENT_ID` | El ID de cliente web de Google del proyecto de autenticación (público) | Usa el de `asistenciatw`. **En una instalación con otro proyecto de autenticación, "Registrarse con Google" rechaza todos los certificados** (son para otro cliente). Ver `MAPA_FIREBASE_Y_CUENTAS.md` |
 | `ANTHROPIC_API_KEY` | El chat de ventas | `/api/public/chat` responde 503 |
 | `MERCADOPAGO_ACCESS_TOKEN` | Cobros y links de pago | No se pueden generar links ni sincronizar |
 | `MERCADOPAGO_WEBHOOK_SECRET` | Validar la firma del webhook | No se puede verificar que el aviso venga de MercadoPago |
