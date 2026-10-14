@@ -205,8 +205,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
-> - **2026-10-14 — Registro SEGURO (RAMA `registro-seguro`, los dos repos, NO
->   publicada).** Motivo: pepe@gmail.com se creó una cuenta sin control
+> - **2026-10-14 — PUBLICADO el registro seguro** (backend `e2ee9b5`, frontend
+>   desplegado, suite 1065/1065). Verificado en producción: el captcha y el
+>   botón de Google cargan (sin error de origen) y el servidor rechaza todo
+>   alta sin captcha. Falta: que el dueño cree una cuenta de prueba con su
+>   navegador (con email y con Google) y la borre desde Solicitudes.
+> - **2026-10-14 — Registro SEGURO (RAMA `registro-seguro`, los dos repos).** Motivo: pepe@gmail.com se creó una cuenta sin control
 >   (el alta desde el navegador estaba abierta en Firebase). Regla nueva:
 >   **ninguna cuenta se crea desde el navegador**; en Firebase (`asistenciatw`)
 >   el dueño apagó "Enable create (sign-up)" y "Enable delete" (protección de
