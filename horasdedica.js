@@ -248,6 +248,20 @@ app.use('/api/sync-status', syncStatusRoutes(db));
 app.use('/api/puesta-en-marcha', require('./routes/puestaEnMarcha')(db));
 // Registro de actividad: quién hizo qué (lo escribe registroActividad.js).
 app.use('/api/registro-actividad', require('./routes/registroActividad')(db));
+// Registro dentro del sistema: cuentas de login que todavía no tienen acceso.
+app.use('/api/registro', require('./routes/registro')(db));
+// Solicitudes del sistema sin aprobar: se borran a los 30 días (y su cuenta
+// de login). Una pasada al minuto de arrancar y después cada 6 horas.
+{
+  const { borrarSolicitudesVencidas } = require('./motor-laboral/services/registroService');
+  const limpiar = () => borrarSolicitudesVencidas(db)
+    .then((n) => { if (n) console.log(`Registro: ${n} solicitud(es) sin aprobar borradas (más de 30 días).`); })
+    .catch((err) => console.error('Registro: falló la limpieza de solicitudes vencidas:', err.message));
+  if (process.env.NODE_ENV !== 'test') {
+    setTimeout(limpiar, 60 * 1000).unref();
+    setInterval(limpiar, 6 * 60 * 60 * 1000).unref();
+  }
+}
 
 function parseCheckTime(value) {
   if (!value) return null;

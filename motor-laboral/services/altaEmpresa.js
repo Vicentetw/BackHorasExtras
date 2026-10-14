@@ -20,6 +20,7 @@ const appUserRepository = require('../repositories/appUserRepository');
 const { computeFreeTrialPeriod } = require('./billingCalculations');
 const { darKitInicial } = require('./kitInicialEmpresa');
 const { enviarEmailDeContrasena } = require('./firebaseEmail');
+const { asociarAceptacionesALaEmpresa } = require('./registroService');
 
 const ACENTOS = { á: 'a', é: 'e', í: 'i', ó: 'o', ú: 'u', ü: 'u', ñ: 'n' };
 function slugify(str) {
@@ -39,6 +40,15 @@ async function aprobarSolicitud(db, leadId, { companyName, email } = {}, revisad
   const [[lead]] = await db.query('SELECT * FROM signup_leads WHERE id = ?', [leadId]);
   if (!lead) throw new ErrorDeAlta(404, 'Solicitud no encontrada');
   if (lead.status !== 'pending') throw new ErrorDeAlta(409, 'Esa solicitud ya fue resuelta');
+  // Registro en el sistema (migración 20261018): la persona YA tiene su cuenta
+  // de login (y su contraseña o Google). El email no se puede cambiar al
+  // aprobar (está atado a esa cuenta) y no hace falta el mail de contraseña.
+  const [[extra]] = await db.query('SELECT origen, firebase_uid FROM signup_leads WHERE id = ?', [leadId])
+    .catch((err) => { if (err.code === 'ER_BAD_FIELD_ERROR') return [[{}]]; throw err; });
+  const delSistema = !!(extra && extra.origen === 'sistema' && extra.firebase_uid);
+  if (delSistema && email && String(email).trim().toLowerCase() !== String(lead.email).toLowerCase()) {
+    throw new ErrorDeAlta(400, 'Esta persona se registró en el sistema con ese email: no se puede cambiar al aprobar.');
+  }
 
   const empresa = String(companyName || lead.company_name).trim();
   const mail = String(email || lead.email).trim().toLowerCase();
@@ -77,6 +87,8 @@ async function aprobarSolicitud(db, leadId, { companyName, email } = {}, revisad
     await db.query('UPDATE signup_leads SET error_message = ? WHERE id = ?', [String(err.message).slice(0, 1000), leadId]).catch(() => {});
     throw err;
   }
+  await asociarAceptacionesALaEmpresa(db, leadId, tenantId);
+  if (delSistema) return { tenantId, email: mail, emailEnviado: false, yaTeniaCuenta: true };
   const envio = await enviarEmailDeContrasena(mail);
   if (!envio.enviado && envio.motivo !== 'dominio de prueba') {
     await db.query('UPDATE signup_leads SET error_message = ? WHERE id = ?',

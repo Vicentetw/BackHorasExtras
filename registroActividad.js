@@ -51,6 +51,10 @@ const SOLO_CONSULTA = [
 const ACCIONES = [
   ['POST', /\/api\/solicitudes-alta\/\d+\/aprobar$/, 'Aprobó una solicitud de alta (creó la empresa)'],
   ['POST', /\/api\/solicitudes-alta\/\d+\/rechazar$/, 'Rechazó una solicitud de alta'],
+  ['POST', /\/api\/solicitudes-alta\/\d+\/borrar$/, 'Borró una solicitud de alta (spam) y su cuenta de login'],
+  ['POST', /\/api\/solicitudes-alta\/\d+\/bloquear$/, 'Bloqueó una solicitud de alta (spam)'],
+  ['DELETE', /\/api\/solicitudes-alta\/bloqueos\/\d+$/, 'Quitó un bloqueo de registro'],
+  ['POST', /\/api\/registro\/solicitud$/, 'Envió su solicitud de alta (registro en el sistema)'],
   ['POST', /\/approve-cancellation$/, 'Aprobó la baja de una empresa'],
   ['POST', /\/request-cancellation$/, 'Pidió la baja del servicio'],
   ['POST', /\/api\/billing\/subscriptions\/\d+\/payments$/, 'Registró un pago'],

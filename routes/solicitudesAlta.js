@@ -8,8 +8,9 @@
 const express = require('express');
 const { requireSuperadmin } = require('../appUserMiddleware');
 const { aprobarSolicitud, rechazarSolicitud } = require('../motor-laboral/services/altaEmpresa');
+const registroService = require('../motor-laboral/services/registroService');
 
-const ESTADOS = ['pending', 'provisioned', 'rejected', 'failed'];
+const ESTADOS = ['pending', 'provisioned', 'rejected', 'failed', 'blocked'];
 
 module.exports = function (db) {
   const router = express.Router();
@@ -29,13 +30,17 @@ module.exports = function (db) {
     if (estado !== 'todas' && !ESTADOS.includes(estado)) return res.status(400).json({ error: 'estado inválido' });
     try {
       // Sin chat_history ni chat_token_hash: no hacen falta para decidir.
-      const [rows] = await db.query(
+      const consulta = (extra) => db.query(
         `SELECT l.id, l.name, l.company_name, l.email, l.phone, l.contact_preference, l.employee_count, l.clock_count,
                 l.schedule_type, l.status, l.tenant_id, l.error_message, l.created_at,
-                l.reviewed_at, l.review_note, au.email AS reviewed_by_email
+                l.reviewed_at, l.review_note, au.email AS reviewed_by_email ${extra}
          FROM signup_leads l LEFT JOIN app_users au ON au.id = l.reviewed_by
          ${estado === 'todas' ? '' : 'WHERE l.status = ?'}
          ORDER BY l.created_at DESC LIMIT 500`, estado === 'todas' ? [] : [estado]);
+      // Registro en el sistema (migración 20261018): de dónde vino y si aceptó los términos.
+      const [rows] = await consulta(`, l.origen, l.email_verificado, l.ip,
+                (SELECT COUNT(*) FROM aceptaciones_legales a WHERE a.signup_lead_id = l.id) AS aceptaciones`)
+        .catch((e) => { if (e.code === 'ER_BAD_FIELD_ERROR' || e.code === 'ER_NO_SUCH_TABLE') return consulta(''); throw e; });
       res.json({ solicitudes: rows });
     } catch (err) {
       if (err.code === 'ER_BAD_FIELD_ERROR') {
@@ -69,6 +74,32 @@ module.exports = function (db) {
     } catch (err) {
       responderError(res, err, 'rechazar');
     }
+  });
+
+  // --- Spam (registro en el sistema, 2026-10-14) ---
+  // Borrar ya: la solicitud y, si no tiene acceso al sistema, su cuenta de login.
+  router.post('/:id/borrar', async (req, res) => {
+    try {
+      res.json({ ok: true, ...(await registroService.borrarSolicitud(db, Number(req.params.id))) });
+    } catch (err) { responderError(res, err, 'borrar'); }
+  });
+
+  // Bloquear: no puede volver a registrarse (por email o por dominio) y se
+  // deshabilita su cuenta de login.
+  router.post('/:id/bloquear', async (req, res) => {
+    const b = req.body || {};
+    try {
+      res.json({ ok: true, ...(await registroService.bloquearSolicitud(db, Number(req.params.id),
+        { porDominio: b.porDominio === true, motivo: b.motivo }, req.appUser.id)) });
+    } catch (err) { responderError(res, err, 'bloquear'); }
+  });
+
+  router.get('/bloqueos/lista', async (req, res) => {
+    try { res.json({ bloqueos: await registroService.listarBloqueos(db) }); } catch (err) { responderError(res, err, 'leer'); }
+  });
+
+  router.delete('/bloqueos/:id', async (req, res) => {
+    try { await registroService.quitarBloqueo(db, Number(req.params.id)); res.json({ ok: true }); } catch (err) { responderError(res, err, 'desbloquear'); }
   });
 
   return router;
