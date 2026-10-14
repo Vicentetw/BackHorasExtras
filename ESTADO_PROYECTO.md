@@ -203,6 +203,19 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-14 — Registro dentro del sistema (RAMA `registro-en-sistema`,
+>   los dos repos, NO publicada).** Login → "Crear cuenta" (email o Google)
+>   → verificar email → datos de la empresa + aceptar Términos, Acuerdo de
+>   datos y Privacidad (`docs/legal/`, se guarda versión y huella en
+>   `aceptaciones_legales`) → "en revisión": el servidor solo deja usar
+>   `/api/registro` (appUserMiddleware). Telegram al superadmin. Aprobar en
+>   Solicitudes de alta (sin mail de contraseña). Spam: Borrar (solicitud +
+>   login) y Bloquear (email/dominio, deshabilita login). Limpieza a los 30
+>   días. Migración `20261018` (sin ella: landing y todo igual; registro
+>   avisa). Tests 11 + suite 1047/1047; QA navegador de punta a punta.
+>   Para publicar: migración, dominio del sistema en Turnstile (Cloudflare),
+>   plantilla en español del mail de verificación (Firebase), completar
+>   `[COMPLETAR]` de los textos legales.
 > - **2026-10-13 — Video de demostración verificado y guion** (`GUION_VIDEO_DEMO.md`).
 >   Recorrido automático de 25 pasos como admin de la Demo (1366 y 390 px):
 >   sin errores, PDF/Excel OK. La Demo ahora genera salidas particulares,
