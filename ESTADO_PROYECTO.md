@@ -78,7 +78,7 @@
 > | Qué | Para qué |
 > |---|---|
 > | *(Verificado en el backup del 09/10 23:14: producción tiene TODAS las migraciones, hasta la `20261017`.)* | |
-> | Borrar las empresas de prueba de producción ("prueba2", "Nueva de prueba"): aparecen en Empresas, en el selector de empresa y en la campanita | Antes de grabar el video o mostrar el sistema |
+> | Borrar las empresas de prueba de producción ("prueba2", "Nueva de prueba") con **Empresas → Eliminar** (desde el 14/10 borra todo y se niega si la empresa es real) | Antes de grabar el video o mostrar el sistema |
 > | *(Verificado en el backup del 14/10 14:50: la migración `20261018` ya está en producción.)* | |
 > | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
@@ -205,8 +205,11 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-14 — PUBLICADO "Eliminar empresa de prueba"** (backend `9766f0e`,
+>   frontend desplegado, suite 1070/1070). Falta: que el dueño borre
+>   "prueba2" y "Nueva de prueba" desde Empresas.
 > - **2026-10-14 — "Eliminar empresa de prueba" (RAMA `eliminar-empresa-prueba`,
->   los dos repos, NO publicada).** El "Eliminar" de Empresas fallaba con
+>   los dos repos).** El "Eliminar" de Empresas fallaba con
 >   "No se pudo eliminar" apenas la empresa tenía usuarios, suscripción o
 >   pedidos (claves foráneas). Ahora abre una ventana que muestra qué tiene la
 >   empresa y **se niega si es real** (fichajes o pagos registrados); si es de
