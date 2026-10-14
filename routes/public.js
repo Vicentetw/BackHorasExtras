@@ -7,6 +7,8 @@ const { verifyTurnstileToken } = require('../motor-laboral/services/turnstileSer
 const { askSalesChat, tratoInapropiado, RESPUESTA_SEGURA } = require('../motor-laboral/services/salesChatService');
 const { consumirMensaje } = require('../motor-laboral/services/presupuestoChat');
 const { createCountryFirewallMiddleware } = require('../motor-laboral/middleware/countryFirewallMiddleware');
+const cuentas = require('../motor-laboral/services/cuentasDeRegistro');
+const { ErrorDeRegistro } = require('../motor-laboral/services/registroService');
 
 // Fase 11: landing publica + alta de cliente autoservicio + chatbot de
 // ventas. UNICA superficie del sistema alcanzable sin ninguna credencial
@@ -80,6 +82,23 @@ const signupPorDia = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Ya recibimos varias solicitudes desde esta conexión. Escribinos por WhatsApp.' }
+});
+
+// Alta de cuentas de login (registro en el sistema): topes propios, para que
+// no compartan cupo con el formulario de la landing.
+const cuentaLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados intentos, esperá un momento y probá de nuevo.' }
+});
+const cuentaPorDia = rateLimit({
+  windowMs: UN_DIA,
+  limit: numeroDeEntorno('SIGNUP_TOPE_DIARIO_POR_IP', 20),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Ya se crearon varias cuentas desde esta conexión. Escribinos por WhatsApp.' }
 });
 
 const chatLimiter = rateLimit({
@@ -213,6 +232,40 @@ module.exports = function (db) {
       res.status(500).json({ error: 'No se pudo enviar la solicitud. Escribinos por WhatsApp y te ayudamos a mano.' });
     }
   });
+
+  // CREAR UNA CUENTA DE LOGIN (registro en el sistema). La ÚNICA forma de
+  // crear una cuenta desde afuera: en Firebase el alta desde el navegador
+  // está cerrada. Ver motor-laboral/services/cuentasDeRegistro.js.
+  //
+  // Orden de los controles: primero los datos (no dependen de nadie), después
+  // el captcha (si Cloudflare falla, 503: no es culpa de quien se registra),
+  // y recién ahí se crea la cuenta.
+  const crearCuenta = (validar, crear) => async (req, res) => {
+    const b = req.body || {};
+    const secretKey = process.env.TURNSTILE_SECRET_KEY;
+    if (!secretKey) return res.status(503).json({ error: 'TURNSTILE_SECRET_KEY no está configurado en el servidor' });
+    try {
+      validar(b);
+      let captcha;
+      try {
+        captcha = await verifyTurnstileToken({ token: b.turnstileToken, remoteIp: req.ip, secretKey });
+      } catch (err) {
+        console.error('Registro: no se pudo verificar el captcha:', err.message);
+        return res.status(503).json({ error: 'No pudimos verificar el captcha. Esperá unos segundos y probá de nuevo.' });
+      }
+      if (!captcha.success) return res.status(400).json({ error: 'Verificación anti-bot fallida: recargá la página e intentá de nuevo.' });
+      const r = await crear(db, b);
+      res.status(201).json({ ok: true, email: r.email });
+    } catch (err) {
+      if (err instanceof ErrorDeRegistro) return res.status(err.status).json({ error: err.message, codigo: err.codigo });
+      console.error('ERROR creando la cuenta del registro:', err);
+      res.status(500).json({ error: 'No se pudo crear la cuenta. Probá de nuevo o escribinos por WhatsApp.' });
+    }
+  };
+  router.post('/registro/cuenta', cuentaPorDia, cuentaLimiter,
+    crearCuenta(cuentas.validarCuentaConEmail, cuentas.crearCuentaConEmail));
+  router.post('/registro/cuenta-google', cuentaPorDia, cuentaLimiter,
+    crearCuenta(cuentas.validarCuentaConGoogle, cuentas.crearCuentaConGoogle));
 
   // Valida leadId + token y devuelve la solicitud. La MISMA respuesta para
   // "ese lead no existe" y "el token no es el de ese lead": distinguirlos

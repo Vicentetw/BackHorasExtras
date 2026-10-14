@@ -84,6 +84,7 @@ esté en la lista, incluido el código escrito dentro del HTML.
 | `style-src` | Nuestro sitio, Google Fonts, y estilos en línea (Angular Material los usa. Inyectar estilos es mucho menos peligroso que inyectar scripts) |
 | `connect-src` | Nuestro backend de Render y los servicios de login de Google |
 | `frame-src` | El iframe de login de Firebase y el captcha |
+| `accounts.google.com/gsi/…` (en `script-src`, `style-src`, `connect-src` y `frame-src`) | El botón oficial "Registrarse con Google" (2026-10-14, ver `cuentasDeRegistro.js`). Solo esa ruta de Google, no todo `accounts.google.com` |
 | `object-src 'none'`, `base-uri 'self'`, `form-action 'self'` | Cierran tres trucos clásicos de inyección |
 
 **Por qué la landing ahora tiene `landing.js`.** Su código estaba escrito
