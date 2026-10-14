@@ -55,6 +55,8 @@ Se entra en https://console.firebase.google.com **con la cuenta dueña de
 | Textos de los mails (verificar email, contraseña) | Authentication → **Templates** | Idioma: español. Nombre del remitente: "Horas Dedica" |
 | Cuenta de servicio del backend | ⚙️ Project settings → **Service accounts** → "Generate new private key" | Ese JSON va en `FIREBASE_SERVICE_ACCOUNT` (Render). **Es secreto** |
 | `firebaseConfig` web (apiKey, etc.) | ⚙️ Project settings → General → "Your apps" → app web | Va en los `environment*.ts` del frontend. **No es secreto**: viaja al navegador a propósito |
+| Nombre que ven los usuarios (mails y ventana de Google) | ⚙️ Project settings → General → **Public-facing name** | "Horas Dedica". Hasta el 2026-10-14 decía `project-948260225701` (948260225701 es el número del proyecto) |
+| ID de cliente web de Google | Authentication → Sign-in method → Google → "Web SDK configuration" | `948260225701-ekc31….apps.googleusercontent.com`. **No es secreto**: lo usa el registro con Google |
 | Pantalla "Continuar con Google" | Google Cloud Console (mismo proyecto `asistenciatw`) → APIs y servicios → **Pantalla de consentimiento de OAuth** | Nombre de la app "Horas Dedica", con logo y email de soporte. Si no se configura, Google muestra "asistenciatw.firebaseapp.com" |
 
 ### Archivos y variables que dependen de `asistenciatw`
