@@ -185,6 +185,7 @@
 > | Tema | Documento |
 > |---|---|
 > | **Montar el sistema en 3 servidores nuevos (otra instalación) — ensayado** | `REPLICAR_INSTALACION.md` |
+> | **Qué va en cada proyecto de Firebase (hosting `horasdedicacionavp` / login `asistenciatw`), qué archivo depende de cuál y qué cuenta es dueña** | `MAPA_FIREBASE_Y_CUENTAS.md` |
 > | **Qué hacer si se cae o se pierde algo (base, Render, Firebase) — ensayado** | `RECUPERACION_ANTE_DESASTRE.md` |
 > | Variables de entorno del backend y qué pasa si falta cada una | `VARIABLES_DE_ENTORNO.md` |
 > | Horas extra: regímenes, topes, liquidación, cierre de mes, ajustes | `HORAS_EXTRA_REGIMENES.md` |
