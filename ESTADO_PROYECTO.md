@@ -205,6 +205,23 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-14 — "Eliminar empresa de prueba" (RAMA `eliminar-empresa-prueba`,
+>   los dos repos, NO publicada).** El "Eliminar" de Empresas fallaba con
+>   "No se pudo eliminar" apenas la empresa tenía usuarios, suscripción o
+>   pedidos (claves foráneas). Ahora abre una ventana que muestra qué tiene la
+>   empresa y **se niega si es real** (fichajes o pagos registrados); si es de
+>   prueba, pide escribir su nombre y borra TODO en una transacción, más las
+>   cuentas de login de sus usuarios. Conserva sin empresa: solicitudes de
+>   alta, aceptación de términos, registro de actividad y avisos de
+>   MercadoPago. Las tablas se descubren solas (`tenant_id` + hijas por FK +
+>   `HIJAS_SIN_FK`), así una tabla nueva queda incluida. Servicio
+>   `motor-laboral/services/eliminarEmpresaPrueba.js`; rutas `GET/POST
+>   /api/labor-engine/admin/tenants/:id/eliminacion|eliminar-prueba`.
+>   Probado: test `eliminar-empresa-prueba` (5); sobre una COPIA LOCAL del
+>   backup de producción del 13/10 ("prueba2" y "Nueva de prueba" se borran,
+>   AVP con 164.165 fichajes y la Demo se niegan, AVP intacta; la copia se
+>   borró después); y en el navegador. Con esto el dueño borra "prueba2" y
+>   "Nueva de prueba" desde Empresas (y la cuenta tupctrelew@gmail.com).
 > - **2026-10-14 — PUBLICADO el registro seguro** (backend `e2ee9b5`, frontend
 >   desplegado, suite 1065/1065). Verificado en producción: el captcha y el
 >   botón de Google cargan (sin error de origen) y el servidor rechaza todo

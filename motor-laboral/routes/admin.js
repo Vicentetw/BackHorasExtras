@@ -20,6 +20,7 @@ const turnosRepository = require('../repositories/turnosRepository');
 const { cruzaMedianoche } = require('../services/cicloDeTurnos');
 const { aplicarReemplazo } = require('../services/vigenciasHorario');
 const asistente = require('../services/asistenteHorario');
+const { revisarEliminacion, eliminarEmpresaPrueba, ErrorDeEliminacion } = require('../services/eliminarEmpresaPrueba');
 
 // Mismo motivo que ya documenta /attendance-range en horasdedica.js:
 // toISOString() usa UTC, y en un servidor con huso horario negativo
@@ -245,6 +246,31 @@ function createMotorLaboralAdminRoutes(db) {
       if (err.code === 'ER_BAD_FIELD_ERROR') return res.status(503).json({ error: 'Falta correr la migración 20261011 (titular de la empresa).' });
       console.error('Motor Laboral admin clear titular error:', err);
       res.status(500).json({ error: 'Error al quitar el titular' });
+    }
+  });
+
+  // --- Eliminar una empresa de PRUEBA con todos sus datos (2026-10-14) ---
+  // Ver motor-laboral/services/eliminarEmpresaPrueba.js. Primero se revisa
+  // (qué tiene, si es real); después se borra escribiendo su nombre.
+  router.get('/tenants/:id/eliminacion', requireSuperadmin, async (req, res) => {
+    try {
+      res.json(await revisarEliminacion(db, Number(req.params.id)));
+    } catch (err) {
+      if (err instanceof ErrorDeEliminacion) return res.status(err.status).json({ error: err.message });
+      console.error('Motor Laboral admin revisar eliminacion error:', err);
+      res.status(500).json({ error: 'Error al revisar la empresa' });
+    }
+  });
+
+  router.post('/tenants/:id/eliminar-prueba', requireSuperadmin, async (req, res) => {
+    try {
+      // `nombre` (y no "confirmacion"): el registro de actividad oculta todo
+      // campo que contenga "firma", y así quedaría sin saber qué se borró.
+      res.json(await eliminarEmpresaPrueba(db, Number(req.params.id), (req.body || {}).nombre));
+    } catch (err) {
+      if (err instanceof ErrorDeEliminacion) return res.status(err.status).json({ error: err.message, bloqueos: err.bloqueos });
+      console.error('Motor Laboral admin eliminar empresa de prueba error:', err);
+      res.status(500).json({ error: 'Error al eliminar la empresa. No se borró nada.' });
     }
   });
 
