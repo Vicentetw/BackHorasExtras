@@ -79,6 +79,7 @@
 > |---|---|
 > | *(Verificado en el backup del 09/10 23:14: producción tiene TODAS las migraciones, hasta la `20261017`.)* | |
 > | Borrar las empresas de prueba de producción ("prueba2", "Nueva de prueba"): aparecen en Empresas, en el selector de empresa y en la campanita | Antes de grabar el video o mostrar el sistema |
+> | **Migración `20261018_registro_en_sistema.sql`** | Registro dentro del sistema (crear cuenta, aceptar términos, aprobación). Sin ella todo funciona y el registro avisa que falta. Idempotente. |
 > | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
@@ -203,6 +204,7 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-14 — PUBLICADO el registro en el sistema** (backend `b819889`, frontend desplegado, suite 1047/1047). Falta en producción: migración `20261018`, dominio en Turnstile, plantilla del mail de verificación y completar los textos legales.
 > - **2026-10-14 — Registro dentro del sistema (RAMA `registro-en-sistema`,
 >   los dos repos, NO publicada).** Login → "Crear cuenta" (email o Google)
 >   → verificar email → datos de la empresa + aceptar Términos, Acuerdo de
