@@ -32,6 +32,11 @@ async function appUserMiddleware(req, res, next) {
   try {
     const appUser = await appUserRepository.findByFirebaseUid(req.user.uid, db);
     if (!appUser || !appUser.isActive) {
+      // REGISTRO EN EL SISTEMA (2026-10-14): una cuenta de login sin acceso
+      // todavía (o deshabilitada) solo puede usar /api/registro (ver su
+      // estado, leer los términos, mandar su solicitud). Nada de ahí toca
+      // datos de una empresa. Todo lo demás sigue cerrado como siempre.
+      if (esRutaDeRegistro(req.path)) return next();
       return res.status(403).json({ error: 'Usuario no habilitado en el sistema' });
     }
 
@@ -120,6 +125,11 @@ async function appUserMiddleware(req, res, next) {
     console.error('appUserMiddleware error:', err);
     return res.status(500).json({ error: 'Error resolviendo permisos del usuario' });
   }
+}
+
+// Rutas que puede usar una cuenta de login SIN acceso al sistema (registro).
+function esRutaDeRegistro(ruta) {
+  return ruta === '/api/registro' || ruta.startsWith('/api/registro/');
 }
 
 // Rutas que puede usar una cuenta de empleado (portal).
@@ -303,6 +313,7 @@ function requireActiveSubscription(req, res, next) {
 module.exports = {
   appUserMiddleware,
   esRutaDelPortal,
+  esRutaDeRegistro,
   requirePermission,
   requireAnyPermission,
   requireAppUser,
