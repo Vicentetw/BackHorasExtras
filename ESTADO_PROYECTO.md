@@ -241,9 +241,33 @@
 >     máximos cargados. No se pueden cargar dos reglas activas del mismo tipo
 >     de día y alcance (409).
 >   - Probado: suite 1102/1102, `test/orden-horas-extra.test.js` (7), Chrome
->     como administrador (sin errores). **Falta:** publicar (cuando el dueño
->     lo diga) y las decisiones D2/D3 (recargos sin máximos; horas extra no
->     autorizadas y avisos).
+>     como administrador (sin errores).
+>   - **Impacto medido sobre el backup de producción del 15/10 14:25** (copia
+>     local, borrada después): versión publicada (`main`) y rama corriendo a la
+>     vez sobre la misma copia. Totales por persona ene–oct: iguales.
+>     Día por día del 1/9 al 14/10, todos los campos: **0 diferencias** en
+>     22.132 días (AVP 479 personas + Demo 24).
+>   - **Reversión:** sin migración y sin datos nuevos guardados. Volver atrás =
+>     `git revert` del commit de cada repo (uno solo en cada uno) + deploy; el
+>     frontend también se puede volver desde Firebase Hosting → versiones.
+>     Lo único que no "se deshace" son reglas duplicadas que el 409 haya
+>     impedido crear (no existen, no hay nada que limpiar).
+> - **2026-10-15 — Decisiones del dueño sobre horas extra:**
+>   - **D2 (recargos):** por ahora NO aplicar porcentajes. Lo que se necesita
+>     es **informar la cantidad de horas extra: el total (ya existe) y
+>     discriminadas por tipo de día** (laborable, sábado, domingo, feriado),
+>     con filtro por tipo. Es aditivo (no cambia ningún cálculo). Siguiente
+>     etapa de desarrollo.
+>   - **D3 (horas extra sin autorización):** enfoque aprobado (calcular
+>     siempre, estado "autorizado sí/no" visible, marca "HE sin autorización"
+>     + avisos, opción por empresa con default = hoy). Se implementa DESPUÉS
+>     de estabilizar el desglose.
+>   - **Alcance:** reglas de cálculo comunes en el código; lo particular de
+>     cada empresa, como configuración explícita y visible. Sin excepciones
+>     ocultas por cliente.
+>   - **Publicación:** una fase por vez, con versión identificable (`/health`
+>     devuelve el commit) y el dueño aprueba el resultado antes de la
+>     siguiente.
 > - **2026-10-15 — PUBLICADA la E2** (backend `a8339e2`, frontend desplegado,
 >   suite 1094/1094). El dueño corrió la migración `20261020` (confirmar en el
 >   próximo backup). E3 decidida: la bolsa de trámites es POR CONVENIO y su
