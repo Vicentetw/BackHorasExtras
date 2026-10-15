@@ -201,6 +201,7 @@
 > | **Qué hacer si se cae o se pierde algo (base, Render, Firebase) — ensayado** | `RECUPERACION_ANTE_DESASTRE.md` |
 > | Variables de entorno del backend y qué pasa si falta cada una | `VARIABLES_DE_ENTORNO.md` |
 > | Horas extra: regímenes, topes, liquidación, cierre de mes, ajustes | `HORAS_EXTRA_REGIMENES.md` |
+> | **Qué opción de horas extra se aplica y cuál no (auditoría 2026-10-15): inventario, lo cargado en AVP que no hace nada, duplicaciones** | `AUDITORIA_HORAS_EXTRA.md` |
 > | Portal del empleado, módulos por empresa, fichaje móvil | `PORTAL_EMPLEADO.md` |
 > | Alta de empresas (solicitudes), chat de ventas, titular | `SOLICITUDES_DE_ALTA.md` |
 > | Campaña | `CAMPANA.md` |
