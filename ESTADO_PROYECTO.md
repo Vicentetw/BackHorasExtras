@@ -82,6 +82,16 @@
 > | *(Verificado en el backup del 14/10 14:50: la migración `20261018` ya está en producción.)* | |
 > | *(El dueño dice que corrió la `20261019` el 15/10: confirmarlo en el próximo backup.)* | |
 > | **Migración `20261020_justificar_salidas.sql`** (cuando se publique la E2) | Justificar salidas con un motivo y las dos opciones de cada motivo. Sin ella todo funciona como hoy. Idempotente. |
+>
+> **Pendiente de desarrollo (pedido 2026-10-15): borrar un motivo que nunca se usó.**
+> En Motivos de Ausencia, "Eliminar" solo DESACTIVA (a propósito: un motivo
+> usado es historial). Caso real: AVP tiene "Registro duplicado" (id 7), que
+> vino del catálogo inicial (`migrations/20260707_add_absence_reasons_catalog.sql`,
+> armado con los textos libres del sitio viejo); ningún código lo usa. Propuesta:
+> botón "Eliminar definitivamente" solo si el motivo no aparece en ninguna
+> justificación, licencia, salida justificada, cupo, modalidad de conteo ni
+> mapeo; si se usó, decir cuántas veces y dejarlo desactivado. Queda en el
+> registro de actividad.
 > | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
