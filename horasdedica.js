@@ -65,6 +65,7 @@ const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
 const limitesAsistencia = require('./motor-laboral/services/limitesAsistencia');
+const autorizacionSalidas = require('./motor-laboral/services/autorizacionSalidas');
 // Etapa 12 del plan "Motor de reglas de asistencia configurable" (ver
 // "fases para impletentar avance.txt") -- modo de comparacion/sombra.
 // Solo se activa para una plantilla puntual con rules_engine_mode='shadow'
@@ -2286,6 +2287,51 @@ app.post('/config/particular-exit-limit', requirePermission('schedules', 'update
   }
 });
 
+// AUTORIZACIÓN DE SALIDAS PARTICULARES (E1, 2026-10-15) -- ver
+// motor-laboral/services/autorizacionSalidas.js. La opción la prende cada
+// empresa; las decisiones las toma quien tenga "Salidas: modificar" o, para
+// no dejar afuera a ningún administrador de hoy, "Presentismo: modificar".
+app.get('/config/salidas-autorizacion', requireAnyPermission([['attendance', 'read'], ['settings', 'read']]), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    res.json({
+      requiere: await autorizacionSalidas.requiereAutorizacion(db, tenantId),
+      migracion: await autorizacionSalidas.tablaDisponible(db),
+    });
+  } catch (err) {
+    console.error('ERROR leyendo la opción de autorización de salidas:', err);
+    res.status(500).json({ error: 'No se pudo leer la opción' });
+  }
+});
+
+app.put('/config/salidas-autorizacion', requirePermission('settings', 'update'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const requiere = (req.body || {}).requiere === true;
+    if (requiere && !(await autorizacionSalidas.tablaDisponible(db))) {
+      return res.status(503).json({ error: 'Falta correr la migración 20261019 (autorización de salidas).' });
+    }
+    await autorizacionSalidas.setRequiereAutorizacion(db, tenantId, requiere);
+    res.json({ ok: true, requiere });
+  } catch (err) {
+    if (err instanceof autorizacionSalidas.ErrorDeAutorizacion) return res.status(err.status).json({ error: err.message });
+    console.error('ERROR guardando la opción de autorización de salidas:', err);
+    res.status(500).json({ error: 'No se pudo guardar la opción' });
+  }
+});
+
+app.post('/salidas/autorizaciones', requireAnyPermission([['salidas', 'update'], ['attendance', 'update']]), async (req, res) => {
+  try {
+    const u = req.appUser || {};
+    const quien = u.soporte ? { id: u.soporte.superadminId, email: u.soporte.email } : { id: u.id, email: u.email };
+    res.json(await autorizacionSalidas.decidir(db, resolveTenantId(req), req.body || {}, quien));
+  } catch (err) {
+    if (err instanceof autorizacionSalidas.ErrorDeAutorizacion) return res.status(err.status).json({ error: err.message });
+    console.error('ERROR autorizando salidas:', err);
+    res.status(500).json({ error: 'No se pudo guardar la autorización' });
+  }
+});
+
 // GET/PUT /config/limites-asistencia (2026-10-15) -- UN SOLO LUGAR para los
 // límites de llegadas tarde (sin justificar y justificadas) y de salidas
 // particulares, por cantidad y por tiempo. Ver limitesAsistencia.js. Los dos
@@ -3775,6 +3821,15 @@ async function attendanceRangeHandler(req, res) {
     const correccionesMarcadores = await campanaService.fetchCorreccionesMarcadores(db, from, exclusiveEndDateStr, tenantId);
     const possibleJustificationByEmployeeDate = new Map();
     const particularExitByEmployeeDate = new Set(); // `${employeeId}|${date}`
+    // Autorización de salidas (E1): si la empresa la exige, una ENTRADA con
+    // el marcador de permiso (llegó tarde con permiso) cuenta como tardanza
+    // justificada solo cuando alguien la AUTORIZÓ; pendiente o no autorizada,
+    // sigue figurando Tarde, con el aviso. Apagada: nada cambia.
+    const requiereAutSalidas = await autorizacionSalidas.requiereAutorizacion(db, tenantId);
+    const decisionesSalidas = requiereAutSalidas
+      ? await autorizacionSalidas.leerDecisiones(db, tenantId, from, formatLocalDate(effectiveEndDate))
+      : new Map();
+    const entradaParticularByEmployeeDate = new Map(); // `${employeeId}|${date}` -> {estado, por, en, hora}
     {
       const particularMarkerMap = await fetchMarkerMap('PARTICULAR', tenantId);
       const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
@@ -3817,7 +3872,14 @@ async function attendanceRangeHandler(req, res) {
         // revisa en Salidas si estaba autorizada.
         orphanReturns
           .filter(r => r.category === 'PARTICULAR')
-          .forEach(r => particularExitByEmployeeDate.add(`${r.employeeId}|${date}`));
+          .forEach(r => {
+            particularExitByEmployeeDate.add(`${r.employeeId}|${date}`);
+            if (requiereAutSalidas) {
+              const hora = `${String(r.timeIn.getHours()).padStart(2, '0')}:${String(r.timeIn.getMinutes()).padStart(2, '0')}`;
+              const d = decisionesSalidas.get(autorizacionSalidas.clave(r.employeeId, date, 'entrada', hora));
+              entradaParticularByEmployeeDate.set(`${r.employeeId}|${date}`, d ? { ...d, hora } : { estado: 'pendiente', hora });
+            }
+          });
         if (detailEmployeeId) {
           orphanReturns
             .filter(r => r.employeeId === detailEmployeeId)
@@ -4426,6 +4488,14 @@ async function attendanceRangeHandler(req, res) {
             isPartialAbsence = !!(multiVisit && multiVisit.isPartial);
           }
 
+          // E1: entró tarde con el marcador de permiso. Solo si la empresa
+          // exige autorización: autorizada = tardanza justificada ("Salida
+          // particular autorizada"); pendiente o no autorizada = sigue Tarde,
+          // y el día lo dice (ver entradaParticular más abajo).
+          const entradaParticular = requiereAutSalidas ? (entradaParticularByEmployeeDate.get(`${employeeId}|${date}`) || null) : null;
+          const entradaAutorizada = !!(isLate && !lateJustifiedThisDay && entradaParticular && entradaParticular.estado === 'autorizada');
+          if (entradaAutorizada) lateJustifiedThisDay = true;
+
           // Fichó teniendo una licencia cargada, o una excepcion que no
           // justifico nada (llego y se fue a horario) -- mismo criterio que la
           // vista diaria, ver resolverAvisoLicencia en attendanceCalculations.js.
@@ -4581,9 +4651,13 @@ async function attendanceRangeHandler(req, res) {
               // nada) -- ver avisoLicencia arriba.
               leaveConflict: avisoLicencia,
               lateMinutes: isLate ? lateMinutes : 0,
-              reason: isLate && lateJustifiedThisDay ? (exclusion.reason || null) : undefined,
-              eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion.eventTypeCode || null) : undefined,
-              eventTypeDescripcion: isLate && lateJustifiedThisDay ? (exclusion.eventTypeDescripcion || null) : undefined,
+              reason: isLate && lateJustifiedThisDay ? (exclusion ? (exclusion.reason || null) : null) : undefined,
+              eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion ? (exclusion.eventTypeCode || null) : null) : undefined,
+              eventTypeDescripcion: isLate && lateJustifiedThisDay
+                ? (exclusion ? (exclusion.eventTypeDescripcion || null) : (entradaAutorizada ? 'Salida particular autorizada' : null))
+                : undefined,
+              // E1: la entrada con permiso de ese día y su autorización.
+              entradaParticular: entradaParticular || undefined,
               possibleJustification,
               hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
               // Etapa 12: solo presente cuando la plantilla de este dia
@@ -4973,6 +5047,16 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
     // (mismo markerMap ya cargado arriba, no hace falta otra consulta).
     const badgeByMarkerUserId = (userId) => (userId != null && markerMap[userId]) ? markerMap[userId].badgeNumber : null;
 
+    // Autorización de salidas particulares (E1, autorizacionSalidas.js): si
+    // la empresa la exige, cada salida dice si está autorizada, no
+    // autorizada o pendiente, y quién lo decidió. Apagada, no cambia nada.
+    let requiereAutorizacion = false;
+    let decisiones = new Map();
+    if (category === 'PARTICULAR') {
+      requiereAutorizacion = await autorizacionSalidas.requiereAutorizacion(db, tenantId);
+      decisiones = await autorizacionSalidas.leerDecisiones(db, tenantId, from, to);
+    }
+
     const rows = [];
     const summaryMap = new Map();
     filteredEvents.forEach(e => {
@@ -4985,8 +5069,22 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
       // `e.timeIn - null` en JS NO da NaN, coerciona null a 0 y da un
       // numero gigante sin sentido -- hay que chequear timeOut tambien.
       const durationMinutes = (e.timeIn && e.timeOut) ? Math.round((e.timeIn - e.timeOut) / 60000) : null;
+      let autorizacion;
+      if (category === 'PARTICULAR') {
+        const { tipo, hora } = autorizacionSalidas.identidad(e);
+        const decision = hora ? decisiones.get(autorizacionSalidas.clave(e.employeeId, dateStr, tipo, hora)) : null;
+        autorizacion = {
+          tipo, hora,
+          estado: decision ? decision.estado : (requiereAutorizacion ? 'pendiente' : null),
+          por: decision ? decision.por : null,
+          en: decision ? decision.en : null,
+          nota: decision ? decision.nota : null,
+        };
+      }
 
       rows.push({
+        // Solo en Particulares: tipo/hora (para identificarla) y su estado.
+        autorizacion,
         date: dateStr,
         employeeId: e.employeeId,
         employeeName: emp.Name,
@@ -5017,11 +5115,16 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
           totalMinutes: 0,
           openCount: 0,
           // Salidas de esta persona/período con aviso de horario (sin plantilla, etc.).
-          avisosHorario: 0
+          avisosHorario: 0,
+          // Cuántas falta autorizar (solo si la empresa exige autorización).
+          pendientesDeAutorizar: 0,
+          noAutorizadas: 0
         });
       }
       const s = summaryMap.get(key);
       s.count += 1;
+      if (autorizacion && autorizacion.estado === 'pendiente') s.pendientesDeAutorizar += 1;
+      if (autorizacion && autorizacion.estado === 'no_autorizada') s.noAutorizadas += 1;
       if (durationMinutes !== null) s.totalMinutes += durationMinutes;
       if (!e.hasReturn) s.openCount += 1;
       if (e.avisoHorario) s.avisosHorario += 1;
@@ -5044,7 +5147,7 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
       overLimit: particularExitLimitMinutes > 0 && s.totalMinutes > particularExitLimitMinutes
     }));
 
-    res.json({ from, to, category, groupBy, rows, summary });
+    res.json({ from, to, category, groupBy, rows, summary, requiereAutorizacion });
   } catch (err) {
     console.error('ERROR fetching movements-range:', err);
     if (err.code === 'ECONNREFUSED') {

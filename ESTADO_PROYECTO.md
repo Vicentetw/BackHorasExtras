@@ -80,6 +80,7 @@
 > | *(Verificado en el backup del 09/10 23:14: producción tiene TODAS las migraciones, hasta la `20261017`.)* | |
 > | Borrar las empresas de prueba de producción ("prueba2", "Nueva de prueba") con **Empresas → Eliminar** (desde el 14/10 borra todo y se niega si la empresa es real) | Antes de grabar el video o mostrar el sistema |
 > | *(Verificado en el backup del 14/10 14:50: la migración `20261018` ya está en producción.)* | |
+> | **Migración `20261019_autorizacion_salidas.sql`** (cuando se publique la E1) | Autorización de salidas particulares. Sin ella todo funciona y la opción no se puede encender. Idempotente. |
 > | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
@@ -205,6 +206,22 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-15 — E1: autorización de salidas particulares (RAMA
+>   `autorizacion-salidas`, los dos repos, NO publicada).** Opción por empresa
+>   en Configuración General (apagada = como siempre). Encendida: cada salida
+>   particular (salir y volver, entrar tarde con el marcador de permiso, irse
+>   antes) queda Pendiente → Autorizada / No autorizada, con quién, cuándo y
+>   nota; en Salidas → Particulares: columna "Autorización", menú por fila,
+>   selección y decisión en lote, "Ver solo pendientes", resumen con
+>   pendientes por persona, Excel/PDF con el estado. La entrada con permiso
+>   autorizada deja de ser Tarde en el detalle Y en la vista diaria (misma
+>   detección). Aviso en Inicio: salidas sin autorizar de los últimos 7 días.
+>   Permiso nuevo "Autorizar salidas particulares" (`salidas:update`); también
+>   puede `attendance:update`. **Migración `20261019_autorizacion_salidas.sql`**
+>   (sin ella: la opción no se puede encender y avisa). Tests
+>   `autorizacion-salidas` (7); QA en navegador sobre AVP local (septiembre:
+>   268 pendientes; entrada de ZAPATA 01/09 autorizada → Tarde justificada en
+>   detalle y vista diaria). Detalle técnico: `MARCADORES_Y_SALIDAS.md` §5 bis.
 > - **2026-10-15 — Se publica SOLO la parte de justificaciones** (rama
 >   `justificaciones`): A1, A2, A3 y el vocabulario. La pantalla de límites,
 >   el paso de Inicio y el cambio del tope de Salidas quedan en la rama

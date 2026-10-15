@@ -195,7 +195,11 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
           toleranceMinutes: toleranceMin,
           exclusion
         });
-        status = !isLate ? 'OnTime' : (justified ? 'LateJustified' : 'Late');
+        // E1: entró tarde con permiso y alguien lo AUTORIZÓ -> justificada
+        // (igual que /attendance-range). Pendiente o no autorizada: Tarde.
+        const entrada = opciones.entradasParticulares ? opciones.entradasParticulares.get(String(u.employeeId)) : null;
+        const entradaAutorizada = isLate && !justified && !!entrada && entrada.estado === 'autorizada';
+        status = !isLate ? 'OnTime' : ((justified || entradaAutorizada) ? 'LateJustified' : 'Late');
         llegoTarde = isLate;
       }
       if (isHoliday) {
@@ -323,6 +327,9 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       lastCheckin,
       totalCheckins: checkinsSorted.length,
       checkins: checkinsSorted,
+      // E1: entrada con permiso de ese día y su autorización (si la empresa la exige).
+      // (Solo se agrega el campo si la empresa la exige: apagada, el resultado es idéntico al de siempre.)
+      ...(opciones.entradasParticulares ? { entradaParticular: opciones.entradasParticulares.get(String(u.employeeId)) || null } : {}),
       visits: multiVisit ? multiVisit.visits : null,
       exclusion: exclusion || null,
       assigned: !!(assignedScheduleMap && assignedScheduleMap[u.employeeId]),
@@ -514,7 +521,14 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
     ? await repositories.campana.empleadosEnCampanaElDia(normalizedDate, tenantId)
     : null;
 
-  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana, { umbralFueraDeHorario, vistaDePlantilla: templateId !== undefined && templateId !== null && templateId !== '' });
+  // Autorización de salidas (E1, autorizacionSalidas.js): quiénes entraron
+  // con el marcador de permiso y si alguien lo autorizó. null = la empresa no
+  // la exige (nada cambia). Opcional, como `campana`.
+  const entradasParticulares = repositories.salidas
+    ? await repositories.salidas.entradasDelDia(normalizedDate, tenantId)
+    : null;
+
+  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana, { umbralFueraDeHorario, vistaDePlantilla: templateId !== undefined && templateId !== null && templateId !== '', entradasParticulares });
   const summary = buildSummary(attendance);
   const anyMotorSchedule = attendance.some(a => a.schedule.source === 'motor');
   const usedMotorSchedule = schedule.source === 'motor' || anyMotorSchedule;

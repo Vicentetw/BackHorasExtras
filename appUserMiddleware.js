@@ -13,7 +13,8 @@ const { resolveEffectiveStatus, isWriteBlocked, isFullyBlocked, DEFAULT_GRACE_DA
 
 // Todos los permisos de una empresa (los que usa cada pantalla): los que tiene
 // el superadmin cuando trabaja en una empresa (modo soporte).
-const PERMISOS_DE_EMPRESA = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'settings', 'users']
+// + 'salidas' (2026-10-15): "Salidas: modificar" = autorizar salidas particulares.
+const PERMISOS_DE_EMPRESA = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'settings', 'users', 'salidas']
   .flatMap((m) => ['read', 'create', 'update', 'delete'].map((a) => `${m}:${a}`));
 
 // Corre DESPUES de firebaseAuthMiddleware (necesita req.user ya resuelto).
