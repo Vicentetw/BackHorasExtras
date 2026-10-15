@@ -35,6 +35,10 @@ function createLaborEngineRoutes(db) {
     },
     campana: {
       empleadosEnCampanaElDia: (date, tenantId) => campanaService.empleadosEnCampanaElDia(db, tenantId, date)
+    },
+    // Autorización de salidas (E1): entradas con permiso del día y su decisión.
+    salidas: {
+      entradasDelDia: (date, tenantId) => require('./services/autorizacionSalidas').entradasDelDia(db, tenantId, date)
     }
   };
 

@@ -274,6 +274,30 @@ HE" ya existen (motor nuevo + políticas), pero hoy no se usan en AVP y su
 modo solo lo cambia el superadmin. El modo `shadow` (calcula los dos y
 registra diferencias) es la vía segura para migrar una plantilla.
 
+## 5 bis. Autorización de salidas particulares (E1, 2026-10-15)
+
+Opción por empresa (Configuración General → "Las salidas particulares
+requieren autorización"; apagada por defecto). Encendida, cada salida
+particular queda **Pendiente** hasta que alguien la **Autorice** o **No la
+autorice**, con quién y cuándo (tabla `salidas_autorizaciones`, migración
+`20261019`; servicio `motor-laboral/services/autorizacionSalidas.js`).
+
+- **Qué es una salida** acá es exactamente lo que muestra Salidas →
+  Particulares: `salida` (salió y volvió), `entrada` (llegó con el marcador
+  de regreso sin haber salido: entró tarde con permiso, contada desde su hora
+  de entrada) y `sin_regreso` (se fue antes). Se identifica por legajo +
+  fecha + tipo + **hora real** del fichaje. Si un marcador se corrige y la
+  salida cambia de hora, vuelve a quedar pendiente (a propósito).
+- **Una sola verdad:** la entrada con permiso AUTORIZADA cuenta como tardanza
+  justificada ("Salida particular autorizada") en el detalle
+  (`/attendance-range`), en la vista diaria (`attendanceService.js`, vía
+  `entradasDelDia`, con TODOS los fichajes de la empresa del día) y en Salidas.
+  Pendiente o no autorizada: sigue "Tarde", con el aviso.
+- Pueden decidir quienes tienen `salidas:update` (permiso nuevo, para un
+  encargado) o `attendance:update`.
+- Pendiente: justificar una salida con un motivo (E2), la bolsa de trámites
+  particulares (E3) y la pantalla de límites (E4).
+
 ## 6. Antes de cambiar algo de esto, preguntarse
 
 - ¿Cambia **qué fichajes** recibe `detectMovements`? → Regla 1.
