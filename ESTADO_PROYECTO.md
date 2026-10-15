@@ -205,6 +205,15 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-15 — Se publica SOLO la parte de justificaciones** (rama
+>   `justificaciones`): A1, A2, A3 y el vocabulario. La pantalla de límites,
+>   el paso de Inicio y el cambio del tope de Salidas quedan en la rama
+>   `justificaciones-y-limites` y se rehacen en la etapa E4 (decisión del
+>   dueño: autorización de salidas E1, justificar una salida con motivo E2,
+>   bolsa de trámites particulares por empresa/convenio E3, pantalla de
+>   límites E4). En el backend publicado quedan, sin pantalla que los use,
+>   `GET/PUT /config/limites-asistencia`, `limites` en cada fila de
+>   Presentismo y el dato del paso de Inicio (aditivos, sin efecto visible).
 > - **2026-10-15 — Justificaciones visibles + límites en un solo lugar (RAMA
 >   `justificaciones-y-limites`, los dos repos, NO publicada).** Del recorrido
 >   del dueño en la Demo (BENÍTEZ 08/09): no encontraba dónde se configuraba

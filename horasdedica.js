@@ -5031,27 +5031,18 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
     // existia en el sistema viejo (el limite que decia "salida particular"
     // en dashboard.html en realidad solo cubria llegadas tarde justificadas,
     // ver personalLeaveMonthlyLimitMinutes). 0 = sin tope configurado.
-    //
-    // 2026-10-15: también por CANTIDAD de salidas (opcional), y el límite se
-    // multiplica por los meses del rango. Antes, mirando octubre y noviembre
-    // juntos, se comparaba contra el tope de UN mes. Se configura en "Llegadas
-    // tarde y salidas" (limitesAsistencia.js), con las mismas claves de antes.
-    let limiteSalidas = { cantidad: 0, minutos: 0 };
+    // (2026-10-15: el límite por cantidad y por meses del rango queda para la
+    // etapa E4, junto con la bolsa de trámites particulares. Acá, como siempre.)
+    let particularExitLimitMinutes = 0;
     if (category === 'PARTICULAR') {
-      limiteSalidas = (await limitesAsistencia.leerLimites(db, tenantId)).salidasParticulares;
+      const limitValue = await getAppSetting('particularExitMonthlyLimitMinutes', tenantId, db);
+      particularExitLimitMinutes = limitValue ? Number(limitValue) : 0;
     }
-    const mesesDelRango = limitesAsistencia.mesesDelRango(from, to);
-    const summary = Array.from(summaryMap.values()).map(s => {
-      const ev = limitesAsistencia.evaluar({ cantidad: s.count, minutos: s.totalMinutes }, limiteSalidas, mesesDelRango);
-      return {
-        ...s,
-        limitMinutes: ev.maxMinutos,
-        limitCount: ev.maxCantidad,
-        overLimitMinutes: ev.excedidoMinutos,
-        overLimitCount: ev.excedidoCantidad,
-        overLimit: ev.excedido,
-      };
-    });
+    const summary = Array.from(summaryMap.values()).map(s => ({
+      ...s,
+      limitMinutes: particularExitLimitMinutes,
+      overLimit: particularExitLimitMinutes > 0 && s.totalMinutes > particularExitLimitMinutes
+    }));
 
     res.json({ from, to, category, groupBy, rows, summary });
   } catch (err) {
