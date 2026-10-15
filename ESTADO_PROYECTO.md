@@ -81,7 +81,7 @@
 > | Borrar las empresas de prueba de producción ("prueba2", "Nueva de prueba") con **Empresas → Eliminar** (desde el 14/10 borra todo y se niega si la empresa es real) | Antes de grabar el video o mostrar el sistema |
 > | *(Verificado en el backup del 14/10 14:50: la migración `20261018` ya está en producción.)* | |
 > | *(El dueño dice que corrió la `20261019` el 15/10: confirmarlo en el próximo backup.)* | |
-> | **Migración `20261020_justificar_salidas.sql`** (cuando se publique la E2) | Justificar salidas con un motivo y las dos opciones de cada motivo. Sin ella todo funciona como hoy. Idempotente. |
+> | *(El dueño dice que corrió la `20261020` el 15/10: confirmarlo en el próximo backup.)* | |
 >
 > **Pendiente de desarrollo (pedido 2026-10-15): borrar un motivo que nunca se usó.**
 > En Motivos de Ausencia, "Eliminar" solo DESACTIVA (a propósito: un motivo
@@ -217,8 +217,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-15 — PUBLICADA la E2** (backend `a8339e2`, frontend desplegado,
+>   suite 1094/1094). El dueño corrió la migración `20261020` (confirmar en el
+>   próximo backup). E3 decidida: la bolsa de trámites es POR CONVENIO y su
+>   período también (AVP: por mes).
 > - **2026-10-15 — E2: justificar salidas con un motivo (RAMA
->   `justificar-salidas`, los dos repos, NO publicada).** Motivos de Ausencia:
+>   `justificar-salidas`, los dos repos).** Motivos de Ausencia:
 >   dos opciones nuevas por motivo, "Igual se descuenta de las horas
 >   particulares" (por defecto sí) y "Pide comprobante". Salidas →
 >   Particulares: columna "Justificación", botón por fila y "Justificar…" en
