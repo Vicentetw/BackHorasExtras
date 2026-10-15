@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-15 — último: orden de horas extra Etapa 1 + D1 en rama `orden-horas-extra`, sin publicar; ver bitácora)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-15 — último: PUBLICADA orden de horas extra Etapa 1 + D1; siguiente: desglose de HE por tipo de día; ver bitácora)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
@@ -218,6 +218,11 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-15 — PUBLICADA orden de horas extra, Etapa 1 + D1** (backend
+>   `0d5d865` verificado en `/health`, frontend `399887e` desplegado y
+>   verificado en el sitio). Sin migración. Pendiente: el dueño revisa 2 o 3
+>   personas conocidas en Presentismo y la pantalla Convenios antes de la
+>   próxima fase (desglose de horas extra por tipo de día).
 > - **2026-10-15 — Orden de horas extra, Etapa 1 + D1 (RAMA `orden-horas-extra`,
 >   los dos repos, SIN publicar).** Sale de la auditoría `AUDITORIA_HORAS_EXTRA.md`.
 >   - **D1 (cambia el cálculo, decidido por el dueño):** la "Tolerancia de
