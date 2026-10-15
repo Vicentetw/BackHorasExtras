@@ -81,6 +81,7 @@
 > | Borrar las empresas de prueba de producción ("prueba2", "Nueva de prueba") con **Empresas → Eliminar** (desde el 14/10 borra todo y se niega si la empresa es real) | Antes de grabar el video o mostrar el sistema |
 > | *(Verificado en el backup del 14/10 14:50: la migración `20261018` ya está en producción.)* | |
 > | *(El dueño dice que corrió la `20261019` el 15/10: confirmarlo en el próximo backup.)* | |
+> | **Migración `20261020_justificar_salidas.sql`** (cuando se publique la E2) | Justificar salidas con un motivo y las dos opciones de cada motivo. Sin ella todo funciona como hoy. Idempotente. |
 > | **Limpieza `scripts/normalizar-asignaciones.js --empresa 6`** | Primero sin `--aplicar` (solo muestra), con backup. En la copia local: 0 diferencias en Presentismo. |
 > | En Empresas, elegir `tupctw@gmail.com` como titular de AVP | Sin titular, nadie de AVP puede pedir la baja |
 > | Decir si tiene **dominio o nombre de marca** | Bloquea la etapa de separar la landing |
@@ -206,6 +207,19 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-15 — E2: justificar salidas con un motivo (RAMA
+>   `justificar-salidas`, los dos repos, NO publicada).** Motivos de Ausencia:
+>   dos opciones nuevas por motivo, "Igual se descuenta de las horas
+>   particulares" (por defecto sí) y "Pide comprobante". Salidas →
+>   Particulares: columna "Justificación", botón por fila y "Justificar…" en
+>   lote (ventana que muestra, antes de guardar, si el tiempo se descuenta y si
+>   hay que pedir el certificado). Lo justificado con un motivo que no descuenta
+>   se ve en el total pero no cuenta para el tope; la entrada con permiso
+>   justificada es "Tarde justificada" con ese motivo en el detalle y la vista
+>   diaria, y no se descuenta de la "licencia personal" si el motivo no
+>   descuenta. Con autorización exigida, justificar = autorizar. **Migración
+>   `20261020_justificar_salidas.sql`.** Tests `justificar-salidas` (8); QA en
+>   navegador (AVP local, 01/09: ZAPATA y PRITCHARD con "Médico con certificado").
 > - **2026-10-15 — PUBLICADA la E1** (backend `7d6eb37`, frontend desplegado,
 >   suite 1086/1086). El dueño corrió la migración `20261019` (confirmar en el
 >   próximo backup). La opción queda apagada en todas las empresas hasta que

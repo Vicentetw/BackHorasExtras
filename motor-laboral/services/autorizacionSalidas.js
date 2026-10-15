@@ -88,25 +88,7 @@ async function leerDecisiones(db, tenantId, desde, hasta) {
 async function decidir(db, tenantId, { items, estado, nota }, usuario) {
   if (tenantId == null) throw new ErrorDeAutorizacion(400, 'Elegí la empresa.');
   if (!ESTADOS.includes(estado)) throw new ErrorDeAutorizacion(400, 'Estado inválido.');
-  if (!Array.isArray(items) || !items.length) throw new ErrorDeAutorizacion(400, 'No hay salidas elegidas.');
-  if (items.length > MAX_POR_PEDIDO) throw new ErrorDeAutorizacion(400, `Como máximo ${MAX_POR_PEDIDO} salidas por vez.`);
-  const limpios = items.map((it) => ({
-    legajo: String(it && it.legajo ? it.legajo : '').trim().slice(0, 32),
-    fecha: String(it && it.fecha ? it.fecha : ''),
-    tipo: String(it && it.tipo ? it.tipo : ''),
-    hora: String(it && it.hora ? it.hora : ''),
-  }));
-  for (const it of limpios) {
-    if (!it.legajo || !/^\d{4}-\d{2}-\d{2}$/.test(it.fecha) || !TIPOS.includes(it.tipo) || !/^\d{2}:\d{2}$/.test(it.hora)) {
-      throw new ErrorDeAutorizacion(400, 'Una de las salidas elegidas tiene datos inválidos. Recargá la pantalla.');
-    }
-  }
-  // Solo personas de ESTA empresa.
-  const legajos = [...new Set(limpios.map((i) => i.legajo))];
-  const [deLaEmpresa] = await db.query('SELECT employee_id FROM employees WHERE tenant_id = ? AND employee_id IN (?)', [tenantId, legajos]);
-  const validos = new Set(deLaEmpresa.map((r) => String(r.employee_id)));
-  if (legajos.some((l) => !validos.has(l))) throw new ErrorDeAutorizacion(404, 'Una de las personas elegidas no es de esta empresa.');
-
+  const limpios = await validarItems(db, tenantId, items);
   const notaLimpia = String(nota ?? '').trim().slice(0, 255) || null;
   try {
     for (const it of limpios) {
@@ -129,6 +111,104 @@ async function decidir(db, tenantId, { items, estado, nota }, usuario) {
   return { ok: true, cantidad: limpios.length, estado };
 }
 
+// Valida las salidas elegidas: formato, y que las personas sean de ESTA empresa.
+async function validarItems(db, tenantId, items) {
+  if (!Array.isArray(items) || !items.length) throw new ErrorDeAutorizacion(400, 'No hay salidas elegidas.');
+  if (items.length > MAX_POR_PEDIDO) throw new ErrorDeAutorizacion(400, `Como máximo ${MAX_POR_PEDIDO} salidas por vez.`);
+  const limpios = items.map((it) => ({
+    legajo: String(it && it.legajo ? it.legajo : '').trim().slice(0, 32),
+    fecha: String(it && it.fecha ? it.fecha : ''),
+    tipo: String(it && it.tipo ? it.tipo : ''),
+    hora: String(it && it.hora ? it.hora : ''),
+  }));
+  for (const it of limpios) {
+    if (!it.legajo || !/^\d{4}-\d{2}-\d{2}$/.test(it.fecha) || !TIPOS.includes(it.tipo) || !/^\d{2}:\d{2}$/.test(it.hora)) {
+      throw new ErrorDeAutorizacion(400, 'Una de las salidas elegidas tiene datos inválidos. Recargá la pantalla.');
+    }
+  }
+  // Solo personas de ESTA empresa.
+  const legajos = [...new Set(limpios.map((i) => i.legajo))];
+  const [deLaEmpresa] = await db.query('SELECT employee_id FROM employees WHERE tenant_id = ? AND employee_id IN (?)', [tenantId, legajos]);
+  const validos = new Set(deLaEmpresa.map((r) => String(r.employee_id)));
+  if (legajos.some((l) => !validos.has(l))) throw new ErrorDeAutorizacion(404, 'Una de las personas elegidas no es de esta empresa.');
+  return limpios;
+}
+
+// ============================================================================
+// E2 (2026-10-15): JUSTIFICAR una salida particular con un motivo
+// ============================================================================
+// Ej.: fue al médico y trajo certificado. Cada MOTIVO dice (Motivos de
+// Ausencia) si una salida justificada con él igual se descuenta de la bolsa
+// de trámites particulares (consume_bolsa_particular, por defecto sí) y si
+// hay que pedir comprobante. Tabla: migración 20261020.
+// Justificar también deja la salida AUTORIZADA si la empresa exige
+// autorización: una salida justificada con certificado no puede seguir
+// figurando "sin permiso".
+
+/** Justificaciones del rango: Map clave → {eventTypeId, motivo, consume, pideComprobante, nota, por, en}. */
+async function leerJustificaciones(db, tenantId, desde, hasta) {
+  const mapa = new Map();
+  if (tenantId == null) return mapa;
+  try {
+    const [rows] = await db.query(
+      `SELECT j.legajo, DATE_FORMAT(j.fecha, '%Y-%m-%d') AS fecha, j.tipo, j.hora, j.event_type_id, j.nota,
+              j.justificada_por_email, DATE_FORMAT(j.justificada_en, '%Y-%m-%dT%H:%i:%sZ') AS en,
+              et.descripcion AS motivo, et.consume_bolsa_particular AS consume, et.pide_comprobante AS pide
+         FROM salidas_justificaciones j LEFT JOIN event_types et ON et.id = j.event_type_id
+        WHERE j.tenant_id = ? AND j.fecha BETWEEN ? AND ?`, [tenantId, desde, hasta]);
+    for (const r of rows) {
+      mapa.set(clave(r.legajo, r.fecha, r.tipo, r.hora), {
+        eventTypeId: r.event_type_id, motivo: r.motivo || 'Motivo borrado',
+        consume: r.consume == null ? true : !!Number(r.consume), pideComprobante: !!Number(r.pide || 0),
+        nota: r.nota || null, por: r.justificada_por_email || null, en: r.en,
+      });
+    }
+  } catch (err) {
+    if (!faltaTabla(err)) throw err;
+  }
+  return mapa;
+}
+
+/**
+ * Justifica (o quita la justificación de) varias salidas.
+ * @param eventTypeId  el motivo; null = quitar la justificación
+ */
+async function justificar(db, tenantId, { items, eventTypeId, nota }, usuario) {
+  if (tenantId == null) throw new ErrorDeAutorizacion(400, 'Elegí la empresa.');
+  const limpios = await validarItems(db, tenantId, items);
+  const quitar = eventTypeId === null || eventTypeId === undefined || eventTypeId === '';
+  let motivo = null;
+  if (!quitar) {
+    const [[et]] = await db.query('SELECT id, descripcion, tenant_id FROM event_types WHERE id = ? AND active = 1', [Number(eventTypeId)]);
+    if (!et || (et.tenant_id != null && Number(et.tenant_id) !== Number(tenantId))) throw new ErrorDeAutorizacion(404, 'Ese motivo no existe en esta empresa.');
+    motivo = et.descripcion;
+  }
+  const notaLimpia = String(nota ?? '').trim().slice(0, 255) || null;
+  try {
+    for (const it of limpios) {
+      if (quitar) {
+        await db.query('DELETE FROM salidas_justificaciones WHERE tenant_id = ? AND legajo = ? AND fecha = ? AND tipo = ? AND hora = ?',
+          [tenantId, it.legajo, it.fecha, it.tipo, it.hora]);
+      } else {
+        await db.query(
+          `INSERT INTO salidas_justificaciones (tenant_id, legajo, fecha, tipo, hora, event_type_id, nota, justificada_por, justificada_por_email, justificada_en)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())
+           ON DUPLICATE KEY UPDATE event_type_id = VALUES(event_type_id), nota = VALUES(nota), justificada_por = VALUES(justificada_por),
+             justificada_por_email = VALUES(justificada_por_email), justificada_en = VALUES(justificada_en)`,
+          [tenantId, it.legajo, it.fecha, it.tipo, it.hora, Number(eventTypeId), notaLimpia, usuario && usuario.id || null, usuario && usuario.email || null]);
+      }
+    }
+  } catch (err) {
+    if (faltaTabla(err)) throw new ErrorDeAutorizacion(503, 'Falta correr la migración 20261020 (justificar salidas).');
+    throw err;
+  }
+  // Justificada => autorizada (si la empresa exige autorización).
+  if (!quitar && await requiereAutorizacion(db, tenantId) && await tablaDisponible(db)) {
+    await decidir(db, tenantId, { items: limpios, estado: 'autorizada', nota: `Justificada: ${motivo}${notaLimpia ? ' · ' + notaLimpia : ''}` }, usuario);
+  }
+  return { ok: true, cantidad: limpios.length, motivo };
+}
+
 /**
  * Para la vista DIARIA de Presentismo: las entradas con permiso del día y su
  * decisión. Misma detección que Salidas y que /attendance-range (todos los
@@ -137,7 +217,10 @@ async function decidir(db, tenantId, { items, estado, nota }, usuario) {
  * @returns {Map<legajo, {estado, hora, por, en, nota}> | null}  null = la empresa no exige autorización
  */
 async function entradasDelDia(db, tenantId, fecha) {
-  if (!(await requiereAutorizacion(db, tenantId))) return null;
+  const requiere = await requiereAutorizacion(db, tenantId);
+  // E2: también las entradas JUSTIFICADAS con un motivo, exija o no autorización.
+  const justificadas = await leerJustificaciones(db, tenantId, fecha, fecha);
+  if (!requiere && !justificadas.size) return null;
   // require acá adentro: campanaService y movementsCalculations son pesados
   // y solo hacen falta si la empresa usa la autorización.
   const campana = require('./campanaService');
@@ -155,17 +238,20 @@ async function entradasDelDia(db, tenantId, fecha) {
     correccionesMarcadores: await campana.fetchCorreccionesMarcadores(db, fecha, hasta, tenantId),
     ownCheckinBounceMs: await campana.fetchVentanaReboteMs(db, tenantId),
   });
-  const decisiones = await leerDecisiones(db, tenantId, fecha, fecha);
+  const decisiones = requiere ? await leerDecisiones(db, tenantId, fecha, fecha) : new Map();
   for (const r of orphanReturns.filter((x) => x.category === 'PARTICULAR')) {
     const hora = hhmm(r.timeIn);
-    const dec = decisiones.get(clave(r.employeeId, fecha, 'entrada', hora));
-    resultado.set(String(r.employeeId), dec ? { ...dec, hora } : { estado: 'pendiente', hora });
+    const k = clave(r.employeeId, fecha, 'entrada', hora);
+    const just = justificadas.get(k) || null;
+    if (!requiere && !just) continue;
+    const dec = decisiones.get(k);
+    resultado.set(String(r.employeeId), { ...(dec || {}), estado: requiere ? (dec ? dec.estado : 'pendiente') : null, hora, justificacion: just });
   }
   return resultado;
 }
 
 module.exports = {
-  entradasDelDia,
+  entradasDelDia, leerJustificaciones, justificar,
   SETTING, requiereAutorizacion, setRequiereAutorizacion, tablaDisponible,
   identidad, clave, leerDecisiones, decidir, ErrorDeAutorizacion,
 };

@@ -77,6 +77,7 @@ const ACCIONES = [
   // histórico); para quien lee el registro son justificaciones.
   ['PUT', /^\/config\/limites-asistencia$/, 'Cambió los límites de llegadas tarde y salidas'],
   ['POST', /^\/salidas\/autorizaciones$/, 'Autorizó / no autorizó salidas particulares'],
+  ['POST', /^\/salidas\/justificaciones$/, 'Justificó salidas particulares con un motivo (o quitó la justificación)'],
   ['PUT', /^\/config\/salidas-autorizacion$/, 'Cambió si las salidas particulares requieren autorización'],
   ['POST', /^\/config\/user-exclusions\/range$/, 'Cargó justificaciones (rango de días)'],
   ['POST', /^\/config\/user-exclusions$/, 'Cargó una justificación'],
@@ -128,6 +129,7 @@ const QUE_ES = [
   [/\/config\/user-exclusion|\/config\/toggle-user-exclusion/, 'la exclusión de un empleado del reporte'],
   [/\/config\/(limites-asistencia|personal-leave-limit|particular-exit-limit)/, 'los límites de llegadas tarde y salidas'],
   [/\/salidas\/autorizaciones|\/config\/salidas-autorizacion/, 'la autorización de salidas particulares'],
+  [/\/salidas\/justificaciones/, 'la justificación de salidas particulares'],
   [/\/config\/special-users/, 'un usuario especial'],
   [/\/campana/, 'la campaña'],
   [/\/api\/regimen-horas-extra\/autorizaciones/, 'una autorización de horas extra'],
