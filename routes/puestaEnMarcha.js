@@ -10,9 +10,10 @@ const express = require('express');
 const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
 const { setAppSetting } = require('../motor-laboral/repositories/appSettingsRepository');
 const { buscarQuienFichaSinFigurar } = require('./matching.routes');
+const { configurados: configuradosLimites } = require('../motor-laboral/services/limitesAsistencia');
 
 // Pasos que se marcan a mano. Lista cerrada: no se guarda cualquier cosa.
-const PASOS_MANUALES = ['feriados', 'motivos', 'marcadores', 'convenios'];
+const PASOS_MANUALES = ['feriados', 'motivos', 'marcadores', 'convenios', 'limites'];
 const SETTING = 'puestaEnMarchaManual';
 const DIAS_FICHAJES_RECIENTES = 30;
 
@@ -52,7 +53,7 @@ async function calcular(db, tenantId) {
   const manual = (await seguro(() => leerManuales(db, tenantId))) || {};
   const anio = new Date().getFullYear();
 
-  const [relojes, hayFichajes, empleados, vincular, feriados, motivos, plantillas, sinHorario, marcadores, convenios, usuarios] = await Promise.all([
+  const [relojes, hayFichajes, empleados, vincular, feriados, motivos, plantillas, sinHorario, marcadores, convenios, usuarios, limites] = await Promise.all([
     seguro(() => uno('SELECT COUNT(*) AS n, MAX(last_synced_at) AS ultima FROM agent_sync_status WHERE tenant_id = ?', [tenantId])),
     seguro(async () => !!(await uno('SELECT 1 AS si FROM Checkins WHERE tenant_id = ? LIMIT 1', [tenantId]))),
     seguro(() => uno('SELECT COUNT(*) AS n FROM employees WHERE tenant_id = ? AND COALESCE(activo, 1) = 1', [tenantId])),
@@ -69,6 +70,9 @@ async function calcular(db, tenantId) {
     seguro(() => uno('SELECT COUNT(*) AS n FROM specialusers WHERE tenant_id = ? AND COALESCE(isActive, 1) = 1', [tenantId])),
     seguro(() => uno('SELECT COUNT(*) AS n FROM employee_convention_assignments WHERE tenant_id = ?', [tenantId])),
     seguro(() => uno('SELECT COUNT(*) AS n FROM app_users WHERE tenant_id = ? AND is_active = 1 AND employee_id IS NULL', [tenantId])),
+    // Límites de llegadas tarde y salidas (2026-10-15): ¿la empresa ya los
+    // guardó alguna vez? Si no los usa, se tilda a mano ("no uso límites").
+    seguro(() => configuradosLimites(db, tenantId)),
   ]);
 
   const n = (r) => (r == null ? null : Number(r.n));
@@ -102,6 +106,7 @@ async function calcular(db, tenantId) {
       marcadores: { hecho: n(marcadores) > 0 || !!manual.marcadores, cantidad: n(marcadores), manual: true, opcional: true },
       convenios: { hecho: n(convenios) > 0 || !!manual.convenios, asignaciones: n(convenios), manual: true, opcional: true },
       usuarios: { hecho: n(usuarios) > 1, cantidad: n(usuarios), opcional: true },
+      limites: { hecho: limites === true || !!manual.limites, configurados: limites, manual: true, opcional: true },
     },
   };
 }

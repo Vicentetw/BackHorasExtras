@@ -205,6 +205,40 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-15 — Se publica SOLO la parte de justificaciones** (rama
+>   `justificaciones`): A1, A2, A3 y el vocabulario. La pantalla de límites,
+>   el paso de Inicio y el cambio del tope de Salidas quedan en la rama
+>   `justificaciones-y-limites` y se rehacen en la etapa E4 (decisión del
+>   dueño: autorización de salidas E1, justificar una salida con motivo E2,
+>   bolsa de trámites particulares por empresa/convenio E3, pantalla de
+>   límites E4). En el backend publicado quedan, sin pantalla que los use,
+>   `GET/PUT /config/limites-asistencia`, `limites` en cada fila de
+>   Presentismo y el dato del paso de Inicio (aditivos, sin efecto visible).
+> - **2026-10-15 — Justificaciones visibles + límites en un solo lugar (RAMA
+>   `justificaciones-y-limites`, los dos repos, NO publicada).** Del recorrido
+>   del dueño en la Demo (BENÍTEZ 08/09): no encontraba dónde se configuraba
+>   el límite (había dos lugares), no podía quitar la justificación ni ver
+>   quién la cargó, y el PDF no lo decía. Hecho: (A1) en el detalle de una
+>   persona cada día trae su justificación con motivo, horario, razón, quién
+>   la cargó/modificó y botones Editar (por su número, `?id=`) y Quitar (con
+>   confirmación); licencias de varios días con "Ver en Licencias"; la ventana
+>   de edición también tiene Quitar. (A2) PDF/Excel del detalle: columna
+>   "Justificación" y "Quién lo cargó" con "Justificó: X (fecha)". (A3)
+>   portal: "Justificado por la empresa · motivo", sin email ni nota. Límites:
+>   pantalla nueva Administración → "Llegadas tarde y salidas"
+>   (`/limites-asistencia`, `limitesAsistencia.js`, `GET/PUT
+>   /config/limites-asistencia`): llegadas tarde sin justificar, justificadas
+>   (la ex "licencia personal") y salidas particulares, cada una por cantidad
+>   y/o tiempo, por mes; mismas claves de antes (nadie pierde lo cargado).
+>   Configuración General y Salidas ya no editan el límite: lo muestran y
+>   enlazan. Presentismo muestra los dos de tardanzas con ayuda y "Cambiar
+>   límite". Salidas: límite también por cantidad y **multiplicado por meses
+>   del rango** (antes comparaba contra un mes). Inicio: paso nuevo opcional
+>   ("No uso límites"). Vocabulario: "Justificación" en mensajes del servidor y
+>   registro de actividad (no "exclusión"), "Justificado" en vez de
+>   "Excusado". Tests: `justificaciones-y-limites` (9), suite 1079/1079; QA en
+>   navegador sobre AVP local. **No probado en navegador:** el portal (probado
+>   por test de su función).
 > - **2026-10-14 — PUBLICADO "Eliminar empresa de prueba"** (backend `9766f0e`,
 >   frontend desplegado, suite 1070/1070). Falta: que el dueño borre
 >   "prueba2" y "Nueva de prueba" desde Empresas.
