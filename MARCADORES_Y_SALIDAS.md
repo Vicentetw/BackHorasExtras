@@ -295,8 +295,19 @@ autorice**, con quién y cuándo (tabla `salidas_autorizaciones`, migración
   Pendiente o no autorizada: sigue "Tarde", con el aviso.
 - Pueden decidir quienes tienen `salidas:update` (permiso nuevo, para un
   encargado) o `attendance:update`.
-- Pendiente: justificar una salida con un motivo (E2), la bolsa de trámites
-  particulares (E3) y la pantalla de límites (E4).
+- **E2 (2026-10-15): justificar una salida con un motivo** (tabla
+  `salidas_justificaciones`, migración `20261020`). Cada motivo dice, en
+  Motivos de Ausencia, si una salida justificada con él **igual se descuenta**
+  de las horas particulares (`event_types.consume_bolsa_particular`, por
+  defecto sí) y si **pide comprobante**. Justificada con un motivo que no
+  descuenta: se muestra, pero no cuenta para el tope de Salidas
+  (`minutosJustificadosSinConsumir`) ni para la "licencia personal" de
+  Presentismo. Una entrada con permiso justificada es tardanza justificada con
+  ese motivo (detalle y vista diaria), exija o no la empresa autorización; si
+  la exige, justificar también la deja autorizada. La misma regla de "no
+  descuenta" vale para una tardanza justificada desde Justificaciones.
+- Pendiente: la bolsa de trámites particulares por empresa/convenio (E3) y la
+  pantalla de límites (E4).
 
 ## 6. Antes de cambiar algo de esto, preguntarse
 

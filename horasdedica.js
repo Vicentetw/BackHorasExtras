@@ -2320,6 +2320,20 @@ app.put('/config/salidas-autorizacion', requirePermission('settings', 'update'),
   }
 });
 
+// E2: justificar una o varias salidas con un motivo (eventTypeId null = quitar).
+// Mismo permiso que justificar un día (exclusions) o que autorizar.
+app.post('/salidas/justificaciones', requireAnyPermission([['exclusions', 'create'], ['salidas', 'update'], ['attendance', 'update']]), async (req, res) => {
+  try {
+    const u = req.appUser || {};
+    const quien = u.soporte ? { id: u.soporte.superadminId, email: u.soporte.email } : { id: u.id, email: u.email };
+    res.json(await autorizacionSalidas.justificar(db, resolveTenantId(req), req.body || {}, quien));
+  } catch (err) {
+    if (err instanceof autorizacionSalidas.ErrorDeAutorizacion) return res.status(err.status).json({ error: err.message });
+    console.error('ERROR justificando salidas:', err);
+    res.status(500).json({ error: 'No se pudo guardar la justificación' });
+  }
+});
+
 app.post('/salidas/autorizaciones', requireAnyPermission([['salidas', 'update'], ['attendance', 'update']]), async (req, res) => {
   try {
     const u = req.appUser || {};
@@ -3659,7 +3673,16 @@ async function attendanceRangeHandler(req, res) {
       exclusionsRangeQuery += ` AND ue.tenant_id = ?`;
       exclusionsRangeParams.push(tenantId);
     }
-    const [exclusions] = await db.query(exclusionsRangeQuery, exclusionsRangeParams);
+    // E2: + si el motivo consume la bolsa (columna de la migración 20261020).
+    // Sin la migración la columna no existe: se repite la consulta sin ella y
+    // todo motivo consume, como siempre.
+    let exclusions;
+    try {
+      [exclusions] = await db.query(exclusionsRangeQuery.replace('et.descripcion AS eventTypeDescripcion,', 'et.descripcion AS eventTypeDescripcion, et.consume_bolsa_particular AS consumeBolsa,'), exclusionsRangeParams);
+    } catch (err) {
+      if (err.code !== 'ER_BAD_FIELD_ERROR') throw err;
+      [exclusions] = await db.query(exclusionsRangeQuery, exclusionsRangeParams);
+    }
     const exclusionsMap = new Map(exclusions.map(e => [`${e.userId}_${e.excDate}`, e]));
 
     // Licencias multi-día (vacaciones, enfermedad, etc.) cargadas en employee_events:
@@ -3829,7 +3852,11 @@ async function attendanceRangeHandler(req, res) {
     const decisionesSalidas = requiereAutSalidas
       ? await autorizacionSalidas.leerDecisiones(db, tenantId, from, formatLocalDate(effectiveEndDate))
       : new Map();
-    const entradaParticularByEmployeeDate = new Map(); // `${employeeId}|${date}` -> {estado, por, en, hora}
+    // E2: una entrada con permiso JUSTIFICADA con un motivo (ej. médico con
+    // certificado) es una tardanza justificada con ese motivo, exija o no la
+    // empresa autorización. Ver autorizacionSalidas.justificar.
+    const justificacionesSalidas = await autorizacionSalidas.leerJustificaciones(db, tenantId, from, formatLocalDate(effectiveEndDate));
+    const entradaParticularByEmployeeDate = new Map(); // `${employeeId}|${date}` -> {estado, por, en, hora, justificacion}
     {
       const particularMarkerMap = await fetchMarkerMap('PARTICULAR', tenantId);
       const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
@@ -3874,10 +3901,14 @@ async function attendanceRangeHandler(req, res) {
           .filter(r => r.category === 'PARTICULAR')
           .forEach(r => {
             particularExitByEmployeeDate.add(`${r.employeeId}|${date}`);
-            if (requiereAutSalidas) {
-              const hora = `${String(r.timeIn.getHours()).padStart(2, '0')}:${String(r.timeIn.getMinutes()).padStart(2, '0')}`;
-              const d = decisionesSalidas.get(autorizacionSalidas.clave(r.employeeId, date, 'entrada', hora));
-              entradaParticularByEmployeeDate.set(`${r.employeeId}|${date}`, d ? { ...d, hora } : { estado: 'pendiente', hora });
+            const hora = `${String(r.timeIn.getHours()).padStart(2, '0')}:${String(r.timeIn.getMinutes()).padStart(2, '0')}`;
+            const k = autorizacionSalidas.clave(r.employeeId, date, 'entrada', hora);
+            const just = justificacionesSalidas.get(k) || null;
+            if (requiereAutSalidas || just) {
+              const d = requiereAutSalidas ? decisionesSalidas.get(k) : null;
+              entradaParticularByEmployeeDate.set(`${r.employeeId}|${date}`, {
+                ...(d || {}), estado: requiereAutSalidas ? (d ? d.estado : 'pendiente') : null, hora, justificacion: just,
+              });
             }
           });
         if (detailEmployeeId) {
@@ -4492,9 +4523,17 @@ async function attendanceRangeHandler(req, res) {
           // exige autorización: autorizada = tardanza justificada ("Salida
           // particular autorizada"); pendiente o no autorizada = sigue Tarde,
           // y el día lo dice (ver entradaParticular más abajo).
-          const entradaParticular = requiereAutSalidas ? (entradaParticularByEmployeeDate.get(`${employeeId}|${date}`) || null) : null;
+          const entradaParticular = entradaParticularByEmployeeDate.get(`${employeeId}|${date}`) || null;
+          // E2: justificada con un motivo = justificada (con ese motivo).
+          const entradaJustificada = !!(isLate && !lateJustifiedThisDay && entradaParticular && entradaParticular.justificacion);
           const entradaAutorizada = !!(isLate && !lateJustifiedThisDay && entradaParticular && entradaParticular.estado === 'autorizada');
-          if (entradaAutorizada) lateJustifiedThisDay = true;
+          if (entradaAutorizada || entradaJustificada) lateJustifiedThisDay = true;
+          // ¿Ese tiempo se descuenta de la bolsa de la persona? Depende del
+          // MOTIVO (Motivos de Ausencia → "consume la bolsa"). Por defecto sí,
+          // como siempre. Vale igual para una justificación del día cargada en
+          // Justificaciones (exclusion) que para la de la salida.
+          const motivoNoConsume = (entradaJustificada && entradaParticular.justificacion.consume === false)
+            || (!entradaJustificada && !entradaAutorizada && exclusion && exclusion.consumeBolsa === 0);
 
           // Fichó teniendo una licencia cargada, o una excepcion que no
           // justifico nada (llego y se fue a horario) -- mismo criterio que la
@@ -4516,7 +4555,7 @@ async function attendanceRangeHandler(req, res) {
             partialAbsence++;
           } else if (isLate && lateJustifiedThisDay) {
             lateJustified++;
-            personalLeaveMinutes += lateMinutes;
+            if (!motivoNoConsume) personalLeaveMinutes += lateMinutes;
           } else if (isLate) {
             late++;
             lateUnjustifiedMinutes += lateMinutes;
@@ -4654,7 +4693,9 @@ async function attendanceRangeHandler(req, res) {
               reason: isLate && lateJustifiedThisDay ? (exclusion ? (exclusion.reason || null) : null) : undefined,
               eventTypeCode: isLate && lateJustifiedThisDay ? (exclusion ? (exclusion.eventTypeCode || null) : null) : undefined,
               eventTypeDescripcion: isLate && lateJustifiedThisDay
-                ? (exclusion ? (exclusion.eventTypeDescripcion || null) : (entradaAutorizada ? 'Salida particular autorizada' : null))
+                ? (exclusion ? (exclusion.eventTypeDescripcion || null)
+                  : entradaJustificada ? (entradaParticular.justificacion.motivo || null)
+                  : (entradaAutorizada ? 'Salida particular autorizada' : null))
                 : undefined,
               // E1: la entrada con permiso de ese día y su autorización.
               entradaParticular: entradaParticular || undefined,
@@ -5052,9 +5093,12 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
     // autorizada o pendiente, y quién lo decidió. Apagada, no cambia nada.
     let requiereAutorizacion = false;
     let decisiones = new Map();
+    let justificaciones = new Map();
     if (category === 'PARTICULAR') {
       requiereAutorizacion = await autorizacionSalidas.requiereAutorizacion(db, tenantId);
       decisiones = await autorizacionSalidas.leerDecisiones(db, tenantId, from, to);
+      // E2: el motivo con que se justificó cada salida (si se justificó).
+      justificaciones = await autorizacionSalidas.leerJustificaciones(db, tenantId, from, to);
     }
 
     const rows = [];
@@ -5070,9 +5114,11 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
       // numero gigante sin sentido -- hay que chequear timeOut tambien.
       const durationMinutes = (e.timeIn && e.timeOut) ? Math.round((e.timeIn - e.timeOut) / 60000) : null;
       let autorizacion;
+      let justificacion = null;
       if (category === 'PARTICULAR') {
         const { tipo, hora } = autorizacionSalidas.identidad(e);
         const decision = hora ? decisiones.get(autorizacionSalidas.clave(e.employeeId, dateStr, tipo, hora)) : null;
+        justificacion = hora ? (justificaciones.get(autorizacionSalidas.clave(e.employeeId, dateStr, tipo, hora)) || null) : null;
         autorizacion = {
           tipo, hora,
           estado: decision ? decision.estado : (requiereAutorizacion ? 'pendiente' : null),
@@ -5085,6 +5131,8 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
       rows.push({
         // Solo en Particulares: tipo/hora (para identificarla) y su estado.
         autorizacion,
+        // E2: con qué motivo se justificó, y si ese motivo consume la bolsa.
+        justificacion: justificacion || undefined,
         date: dateStr,
         employeeId: e.employeeId,
         employeeName: emp.Name,
@@ -5118,7 +5166,10 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
           avisosHorario: 0,
           // Cuántas falta autorizar (solo si la empresa exige autorización).
           pendientesDeAutorizar: 0,
-          noAutorizadas: 0
+          noAutorizadas: 0,
+          // E2: minutos justificados con un motivo que NO consume la bolsa
+          // (ej. médico con certificado). Se muestran, pero no cuentan para el tope.
+          minutosJustificadosSinConsumir: 0
         });
       }
       const s = summaryMap.get(key);
@@ -5126,6 +5177,7 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
       if (autorizacion && autorizacion.estado === 'pendiente') s.pendientesDeAutorizar += 1;
       if (autorizacion && autorizacion.estado === 'no_autorizada') s.noAutorizadas += 1;
       if (durationMinutes !== null) s.totalMinutes += durationMinutes;
+      if (durationMinutes !== null && justificacion && justificacion.consume === false) s.minutosJustificadosSinConsumir += durationMinutes;
       if (!e.hasReturn) s.openCount += 1;
       if (e.avisoHorario) s.avisosHorario += 1;
     });
@@ -5141,10 +5193,13 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
       const limitValue = await getAppSetting('particularExitMonthlyLimitMinutes', tenantId, db);
       particularExitLimitMinutes = limitValue ? Number(limitValue) : 0;
     }
+    // E2: el tope se compara con lo que CONSUME la bolsa: lo justificado con un
+    // motivo que no consume (médico con certificado...) no cuenta. Sin
+    // justificaciones (lo de siempre) es exactamente totalMinutes.
     const summary = Array.from(summaryMap.values()).map(s => ({
       ...s,
       limitMinutes: particularExitLimitMinutes,
-      overLimit: particularExitLimitMinutes > 0 && s.totalMinutes > particularExitLimitMinutes
+      overLimit: particularExitLimitMinutes > 0 && (s.totalMinutes - s.minutosJustificadosSinConsumir) > particularExitLimitMinutes
     }));
 
     res.json({ from, to, category, groupBy, rows, summary, requiereAutorizacion });

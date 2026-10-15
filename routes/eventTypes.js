@@ -6,6 +6,26 @@ const { hoyDeEmpresa } = require('../motor-laboral/services/hoyEmpresa');
 
 const MODOS_VALIDOS = ['corridos', 'habiles'];
 
+// E2 (2026-10-15): dos opciones por motivo, para justificar salidas
+// particulares (migración 20261020). Se guardan aparte y de forma tolerante:
+// sin la migración, el motivo se guarda igual y se avisa.
+//   consume_bolsa_particular  1 = una salida justificada con este motivo igual
+//                             se descuenta de la bolsa (por defecto, como siempre)
+//   pide_comprobante          1 = recordar pedir el comprobante
+async function guardarOpcionesDeSalida(db, id, body) {
+  const sets = []; const vals = [];
+  if (body.consume_bolsa_particular !== undefined) { sets.push('consume_bolsa_particular = ?'); vals.push(body.consume_bolsa_particular ? 1 : 0); }
+  if (body.pide_comprobante !== undefined) { sets.push('pide_comprobante = ?'); vals.push(body.pide_comprobante ? 1 : 0); }
+  if (!sets.length) return null;
+  try {
+    await db.query(`UPDATE event_types SET ${sets.join(', ')} WHERE id = ?`, [...vals, id]);
+    return null;
+  } catch (err) {
+    if (err.code === 'ER_BAD_FIELD_ERROR') return 'Las opciones de salidas no se guardaron: falta correr la migración 20261020.';
+    throw err;
+  }
+}
+
 module.exports = function (db) {
   const router = express.Router();
 
@@ -55,7 +75,8 @@ module.exports = function (db) {
         [tenantId, code, descripcion, descuenta_vacaciones ? 1 : 0, requiere_aprobacion ? 1 : 0]
       );
 
-      res.json({ success: true, id: result.insertId });
+      const aviso = await guardarOpcionesDeSalida(db, result.insertId, req.body);
+      res.json({ success: true, id: result.insertId, aviso });
     } catch (err) {
       console.error('ERROR creating event type:', err);
       if (err.code === 'ER_DUP_ENTRY') {
@@ -95,7 +116,8 @@ module.exports = function (db) {
         return res.status(404).json({ success: false, error: 'Motivo no encontrado' });
       }
 
-      res.json({ success: true });
+      const aviso = await guardarOpcionesDeSalida(db, id, req.body);
+      res.json({ success: true, aviso });
     } catch (err) {
       console.error('ERROR updating event type:', err);
       res.status(500).json({ success: false, error: 'Error updating event type' });

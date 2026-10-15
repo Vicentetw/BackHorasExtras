@@ -198,7 +198,8 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
         // E1: entró tarde con permiso y alguien lo AUTORIZÓ -> justificada
         // (igual que /attendance-range). Pendiente o no autorizada: Tarde.
         const entrada = opciones.entradasParticulares ? opciones.entradasParticulares.get(String(u.employeeId)) : null;
-        const entradaAutorizada = isLate && !justified && !!entrada && entrada.estado === 'autorizada';
+        // E2: o JUSTIFICADA con un motivo (médico con certificado...).
+        const entradaAutorizada = isLate && !justified && !!entrada && (entrada.estado === 'autorizada' || !!entrada.justificacion);
         status = !isLate ? 'OnTime' : ((justified || entradaAutorizada) ? 'LateJustified' : 'Late');
         llegoTarde = isLate;
       }
