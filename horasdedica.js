@@ -64,6 +64,7 @@ async function verificarCupoJustificacion({ tenantId, userId, eventTypeId, type,
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
+const limitesAsistencia = require('./motor-laboral/services/limitesAsistencia');
 // Etapa 12 del plan "Motor de reglas de asistencia configurable" (ver
 // "fases para impletentar avance.txt") -- modo de comparacion/sombra.
 // Solo se activa para una plantilla puntual con rules_engine_mode='shadow'
@@ -1829,7 +1830,14 @@ app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), asyn
       params = [`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`];
     }
 
-    if (userId && excDate) {
+    // Una justificación puntual por su número (2026-10-15): "Editar" desde el
+    // detalle de Presentismo abre EXACTAMENTE esa, en vez de buscarla por
+    // persona y fecha (si no la encontraba, abría una ventana vacía y parecía
+    // que no se podía modificar). Mismo filtro de empresa que el resto.
+    if (req.query.id) {
+      where += (where ? ' AND' : 'WHERE') + ' ue.id = ?';
+      params.push(Number(req.query.id));
+    } else if (userId && excDate) {
       where += (where ? ' AND' : 'WHERE') + ' ue.userId = ? AND ue.excDate = ?';
       params.push(userId, excDate);
     } else if (userId && dateFrom && dateTo) {
@@ -2017,10 +2025,10 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
         });
       });
 
-      res.json({ ok: true, message: 'Exclusión creada', avisoCupo: cupo.mensaje });
+      res.json({ ok: true, message: 'Justificación cargada', avisoCupo: cupo.mensaje });
     } catch (err) {
       if (err.code === 'ER_DUP_ENTRY') {
-        return res.status(409).json({ error: 'Este usuario ya tiene una exclusión para esta fecha' });
+        return res.status(409).json({ error: 'Esta persona ya tiene una justificación ese día: editala desde el detalle' });
       }
       throw err;
     }
@@ -2031,7 +2039,7 @@ app.post('/config/user-exclusions', requirePermission('exclusions', 'create'), a
         error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
       });
     }
-    res.status(500).json({ error: 'Error creando exclusión' });
+    res.status(500).json({ error: 'Error cargando la justificación' });
   }
 });
 
@@ -2108,7 +2116,7 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
         created++;
       } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') {
-          skipped.push({ excDate, reason: 'Ya existía una exclusión para esa fecha' });
+          skipped.push({ excDate, reason: 'Ya tenía una justificación ese día' });
         } else {
           skipped.push({ excDate, reason: 'Error al crear' });
         }
@@ -2118,7 +2126,7 @@ app.post('/config/user-exclusions/range', requirePermission('exclusions', 'creat
     res.json({ ok: true, totalDays: dates.length, created, skipped, avisoCupo: cupo.mensaje });
   } catch (err) {
     console.error('ERROR creating exclusion range:', err);
-    res.status(500).json({ error: 'Error creando el rango de exclusiones' });
+    res.status(500).json({ error: 'Error cargando las justificaciones' });
   }
 });
 
@@ -2133,7 +2141,7 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
     // son justamente los datos que se discuten en un reclamo.
     const previous = await loadExclusionForCaller(id, req);
     if (!previous) {
-      return res.status(404).json({ error: 'Exclusión no encontrada' });
+      return res.status(404).json({ error: 'Justificación no encontrada' });
     }
     if (faltaRazon(reason) && await exigeRazonJustificacion(previous.tenant_id)) {
       return res.status(400).json({ error: MENSAJE_RAZON_EXIGIDA });
@@ -2163,7 +2171,7 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
       });
     });
 
-    res.json({ ok: true, message: 'Exclusión actualizada', avisoCupo: cupo.mensaje });
+    res.json({ ok: true, message: 'Justificación modificada', avisoCupo: cupo.mensaje });
   } catch (err) {
     console.error('ERROR updating exclusion:', err);
     if (err.code === 'ECONNREFUSED') {
@@ -2171,7 +2179,7 @@ app.put('/config/user-exclusions/:id', requirePermission('exclusions', 'update')
         error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
       });
     }
-    res.status(500).json({ error: 'Error actualizando exclusión' });
+    res.status(500).json({ error: 'Error modificando la justificación' });
   }
 });
 
@@ -2184,7 +2192,7 @@ app.delete('/config/user-exclusions/:id', requirePermission('exclusions', 'delet
     // no habria de donde sacar los datos.
     const previous = await loadExclusionForCaller(id, req);
     if (!previous) {
-      return res.status(404).json({ error: 'Exclusión no encontrada' });
+      return res.status(404).json({ error: 'Justificación no encontrada' });
     }
     const performedBy = auditLog.actorId(req);
 
@@ -2208,7 +2216,7 @@ app.delete('/config/user-exclusions/:id', requirePermission('exclusions', 'delet
       await conn.query(`DELETE FROM \`userexclusions\` WHERE id = ?`, [previous.id]);
     });
 
-    res.json({ ok: true, message: 'Exclusión eliminada' });
+    res.json({ ok: true, message: 'Justificación quitada' });
   } catch (err) {
     console.error('ERROR deleting exclusion:', err);
     if (err.code === 'ECONNREFUSED') {
@@ -2216,7 +2224,7 @@ app.delete('/config/user-exclusions/:id', requirePermission('exclusions', 'delet
         error: 'Error de conexión con la base de datos. Verifica que el servidor de base de datos esté funcionando.' 
       });
     }
-    res.status(500).json({ error: 'Error eliminando exclusión' });
+    res.status(500).json({ error: 'Error quitando la justificación' });
   }
 });
 
@@ -2275,6 +2283,29 @@ app.post('/config/particular-exit-limit', requirePermission('schedules', 'update
   } catch (err) {
     console.error('ERROR saving particular exit limit:', err);
     res.status(500).json({ error: 'Error saving particular exit limit' });
+  }
+});
+
+// GET/PUT /config/limites-asistencia (2026-10-15) -- UN SOLO LUGAR para los
+// límites de llegadas tarde (sin justificar y justificadas) y de salidas
+// particulares, por cantidad y por tiempo. Ver limitesAsistencia.js. Los dos
+// endpoints de arriba siguen andando (mismas claves) para no romper nada.
+app.get('/config/limites-asistencia', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
+  try {
+    res.json({ limites: await limitesAsistencia.leerLimites(db, resolveTenantId(req)) });
+  } catch (err) {
+    console.error('ERROR leyendo límites de asistencia:', err);
+    res.status(500).json({ error: 'No se pudieron leer los límites' });
+  }
+});
+
+app.put('/config/limites-asistencia', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    res.json({ ok: true, limites: await limitesAsistencia.guardarLimites(db, resolveTenantId(req), (req.body || {}).limites) });
+  } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    console.error('ERROR guardando límites de asistencia:', err);
+    res.status(500).json({ error: 'No se pudieron guardar los límites' });
   }
 });
 
@@ -3174,6 +3205,8 @@ async function attendanceRangeHandler(req, res) {
     const personalLeaveMonthlyLimitMinutes = personalLeaveLimitValue ? Number(personalLeaveLimitValue) : 0;
     const distinctMonthsInRange = new Set(dateRange.map(d => d.slice(0, 7))).size;
     const personalLeaveLimitMinutesForRange = personalLeaveMonthlyLimitMinutes * distinctMonthsInRange;
+    // Límites de tardanzas por cantidad y por tiempo (limitesAsistencia.js).
+    const limitesMensuales = await limitesAsistencia.leerLimites(db, tenantId);
 
     const detailEmployeeId = req.query.employeeId ? String(req.query.employeeId) : null;
     let employees = await userRepository.findAll({ tenantId }, db);
@@ -3569,9 +3602,12 @@ async function attendanceRangeHandler(req, res) {
 
     const exclusionsRangeParams = [from, formatLocalDate(effectiveEndDate)];
     let exclusionsRangeQuery = `
-      SELECT ue.userId, ue.excDate, ue.type, ue.reason, ue.excFrom, ue.excTo, et.code AS eventTypeCode, et.descripcion AS eventTypeDescripcion
+      SELECT ue.id, ue.userId, ue.excDate, ue.type, ue.reason, ue.excFrom, ue.excTo, et.code AS eventTypeCode, et.descripcion AS eventTypeDescripcion,
+             ue.createdAt, ue.updatedAt, cb.email AS createdByEmail, ub.email AS updatedByEmail
       FROM userexclusions ue
       LEFT JOIN event_types et ON et.id = ue.event_type_id
+      LEFT JOIN app_users cb ON cb.id = ue.created_by
+      LEFT JOIN app_users ub ON ub.id = ue.updated_by
       WHERE ue.excDate BETWEEN ? AND ?`;
     if (tenantId !== null) {
       exclusionsRangeQuery += ` AND ue.tenant_id = ?`;
@@ -3922,6 +3958,7 @@ async function attendanceRangeHandler(req, res) {
       let partialAbsence = 0;
       let overtimeMinutes = 0;
       let personalLeaveMinutes = 0;
+      let lateUnjustifiedMinutes = 0;
       let inactiveWarningDays = 0;
       let campaignDays = 0;
       let leaveConflictDays = 0;
@@ -4412,6 +4449,7 @@ async function attendanceRangeHandler(req, res) {
             personalLeaveMinutes += lateMinutes;
           } else if (isLate) {
             late++;
+            lateUnjustifiedMinutes += lateMinutes;
           }
           if (dayOvertimeMinutes > 0) overtimeMinutes += dayOvertimeMinutes;
 
@@ -4620,6 +4658,34 @@ async function attendanceRangeHandler(req, res) {
       });
       cerrarDiaParaRacha();
 
+      // DETALLE DE UNA PERSONA (2026-10-15): cada día lleva su justificación
+      // completa, con QUIÉN la cargó y quién la modificó, y su licencia si
+      // tiene una. Pedido del dueño: "¿quién justificó esta llegada tarde?",
+      // tanto en pantalla como en el PDF. Solo en el detalle (`days` existe
+      // solo cuando se pide un empleado): en la tabla de toda la empresa no
+      // se lee y la haría más pesada.
+      if (days) {
+        for (const d of days) {
+          const exc = u.USERID ? exclusionsMap.get(`${u.USERID}_${d.date}`) : null;
+          if (exc) {
+            d.justificacion = {
+              id: exc.id,
+              motivo: exc.eventTypeDescripcion || null,
+              diaCompleto: exc.type === 'FULL_DAY',
+              desde: exc.excFrom ? String(exc.excFrom).slice(0, 5) : null,
+              hasta: exc.excTo ? String(exc.excTo).slice(0, 5) : null,
+              razon: exc.reason || null,
+              cargadaPor: exc.createdByEmail || null,
+              cargadaEl: exc.createdAt || null,
+              modificadaPor: exc.updatedByEmail || null,
+              modificadaEl: exc.updatedByEmail ? (exc.updatedAt || null) : null,
+            };
+          }
+          const lic = leaveEventMap.get(`${employeeId}_${d.date}`);
+          if (lic) d.licencia = { id: lic.id, motivo: lic.eventTypeDescripcion || null, desde: lic.fecha_desde, hasta: lic.fecha_hasta, observaciones: lic.observaciones || null };
+        }
+      }
+
       // isOvertimeAuthorized se recalcula por dia dentro del forEach de
       // arriba (puede variar si el modo es 'custom' y el flag del empleado
       // cambio a mitad del rango, aunque en la practica es constante por
@@ -4674,6 +4740,12 @@ async function attendanceRangeHandler(req, res) {
         personalLeaveHours: (personalLeaveMinutes / 60).toFixed(2),
         personalLeaveLimitHours: (personalLeaveLimitMinutesForRange / 60).toFixed(2),
         overLimitHours: (Math.max(0, personalLeaveMinutes - personalLeaveLimitMinutesForRange) / 60).toFixed(2),
+        // Llegadas tarde sin justificar y justificadas contra sus límites
+        // (cantidad y tiempo, cada uno opcional). Ver limitesAsistencia.js.
+        limites: {
+          tardanzas: limitesAsistencia.evaluar({ cantidad: late, minutos: lateUnjustifiedMinutes }, limitesMensuales.tardanzas, distinctMonthsInRange),
+          tardanzasJustificadas: limitesAsistencia.evaluar({ cantidad: lateJustified, minutos: personalLeaveMinutes }, limitesMensuales.tardanzasJustificadas, distinctMonthsInRange),
+        },
         overtimeAuthorized: rowIsOvertimeAuthorized,
         // Pedido real: empleado inactivo (baja no cargada) que igual fichó
         // en el período -- señal real a revisar, visible en el listado
@@ -4959,16 +5031,27 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
     // existia en el sistema viejo (el limite que decia "salida particular"
     // en dashboard.html en realidad solo cubria llegadas tarde justificadas,
     // ver personalLeaveMonthlyLimitMinutes). 0 = sin tope configurado.
-    let particularExitLimitMinutes = 0;
+    //
+    // 2026-10-15: también por CANTIDAD de salidas (opcional), y el límite se
+    // multiplica por los meses del rango. Antes, mirando octubre y noviembre
+    // juntos, se comparaba contra el tope de UN mes. Se configura en "Llegadas
+    // tarde y salidas" (limitesAsistencia.js), con las mismas claves de antes.
+    let limiteSalidas = { cantidad: 0, minutos: 0 };
     if (category === 'PARTICULAR') {
-      const limitValue = await getAppSetting('particularExitMonthlyLimitMinutes', tenantId, db);
-      particularExitLimitMinutes = limitValue ? Number(limitValue) : 0;
+      limiteSalidas = (await limitesAsistencia.leerLimites(db, tenantId)).salidasParticulares;
     }
-    const summary = Array.from(summaryMap.values()).map(s => ({
-      ...s,
-      limitMinutes: particularExitLimitMinutes,
-      overLimit: particularExitLimitMinutes > 0 && s.totalMinutes > particularExitLimitMinutes
-    }));
+    const mesesDelRango = limitesAsistencia.mesesDelRango(from, to);
+    const summary = Array.from(summaryMap.values()).map(s => {
+      const ev = limitesAsistencia.evaluar({ cantidad: s.count, minutos: s.totalMinutes }, limiteSalidas, mesesDelRango);
+      return {
+        ...s,
+        limitMinutes: ev.maxMinutos,
+        limitCount: ev.maxCantidad,
+        overLimitMinutes: ev.excedidoMinutos,
+        overLimitCount: ev.excedidoCantidad,
+        overLimit: ev.excedido,
+      };
+    });
 
     res.json({ from, to, category, groupBy, rows, summary });
   } catch (err) {

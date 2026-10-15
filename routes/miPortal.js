@@ -42,6 +42,14 @@ function diaParaElEmpleado(d) {
     salidaParticular: !!d.hasParticularExit,
     enCampana: !!d.inCampaign,
     motivo: d.eventTypeDescripcion || null,
+    // Justificado por la empresa (2026-10-15): el empleado ve QUE está
+    // justificado y el motivo, pero no quién lo cargó (email de RRHH) ni la
+    // nota interna. Decisión del dueño.
+    justificacion: d.justificacion ? {
+      motivo: d.justificacion.motivo, diaCompleto: d.justificacion.diaCompleto,
+      desde: d.justificacion.desde, hasta: d.justificacion.hasta,
+    } : null,
+    licencia: d.licencia ? { motivo: d.licencia.motivo, desde: d.licencia.desde, hasta: d.licencia.hasta } : null,
     regimen: d.regimen ? {
       clase: d.regimen.clase, recargo: d.regimen.recargo ?? null,
       computables: Math.round(d.regimen.computables || 0), excedente: Math.round(d.regimen.excedente || 0),
@@ -59,8 +67,12 @@ function resumenParaElEmpleado(r) {
     justificadas: r.excused,
     diasEnCampana: r.campaignDays || 0,
     horasExtraMinutos: Math.round(Number(r.overtimeHours || 0) * 60),
+    // Ojo con el nombre (histórico): estos dos son las LLEGADAS TARDE
+    // JUSTIFICADAS, no las salidas particulares. El portal los muestra con
+    // su nombre correcto desde 2026-10-15. Se dejan por compatibilidad.
     horasParticularesMinutos: Math.round(Number(r.personalLeaveHours || 0) * 60),
     limiteParticularesMinutos: Math.round(Number(r.personalLeaveLimitHours || 0) * 60),
+    limites: r.limites || null,
     regimen: g ? {
       reales: Math.round(g.reales), computables: Math.round(g.computables), excedente: Math.round(g.excedente),
       pendiente: Math.round(g.pendiente), dedicacion: Math.round(g.registradas), cargadas: Math.round(g.manuales || 0),

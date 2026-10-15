@@ -75,6 +75,7 @@ const ACCIONES = [
   ['DELETE', /^\/clear\/checkins$/, 'Borró fichajes en bloque (limpieza)'],
   // En la base las justificaciones se llaman "user-exclusions" (nombre
   // histórico); para quien lee el registro son justificaciones.
+  ['PUT', /^\/config\/limites-asistencia$/, 'Cambió los límites de llegadas tarde y salidas'],
   ['POST', /^\/config\/user-exclusions\/range$/, 'Cargó justificaciones (rango de días)'],
   ['POST', /^\/config\/user-exclusions$/, 'Cargó una justificación'],
   ['PUT', /^\/config\/user-exclusions\/\d+$/, 'Modificó una justificación'],
@@ -119,7 +120,11 @@ const QUE_ES = [
   [/\/api\/import|\/import\//, 'una importación'],
   [/\/api\/manual-checkins|\/(add|update|delete)\/manual/, 'un fichaje o carga manual'],
   [/\/marker-corrections/, 'una corrección de marcador'],
+  // "user-exclusions" son las JUSTIFICACIONES (nombre histórico en la base);
+  // "toggle-user-exclusion" sí es sacar a alguien del reporte.
+  [/\/config\/user-exclusions/, 'una justificación'],
   [/\/config\/user-exclusion|\/config\/toggle-user-exclusion/, 'la exclusión de un empleado del reporte'],
+  [/\/config\/(limites-asistencia|personal-leave-limit|particular-exit-limit)/, 'los límites de llegadas tarde y salidas'],
   [/\/config\/special-users/, 'un usuario especial'],
   [/\/campana/, 'la campaña'],
   [/\/api\/regimen-horas-extra\/autorizaciones/, 'una autorización de horas extra'],
