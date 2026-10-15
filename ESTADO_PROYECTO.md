@@ -1,6 +1,6 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-14 — último: registro seguro en rama `registro-seguro`, ver bitácora)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-15 — último: orden de horas extra Etapa 1 + D1 en rama `orden-horas-extra`, sin publicar; ver bitácora)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
@@ -218,6 +218,32 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-15 — Orden de horas extra, Etapa 1 + D1 (RAMA `orden-horas-extra`,
+>   los dos repos, SIN publicar).** Sale de la auditoría `AUDITORIA_HORAS_EXTRA.md`.
+>   - **D1 (cambia el cálculo, decidido por el dueño):** la "Tolerancia de
+>     entrada" de la plantilla ahora se usa en el cálculo de siempre (antes solo
+>     en el motor nuevo). Entrada 7:00 y 10 min: 7:10 a tiempo, 7:11 tarde con
+>     11 min (se cuenta desde la entrada). 0 = estricto; vacío = como siempre
+>     (10 Fijo / 60 Flexible). Cada día usa el valor que regía ese día
+>     (historial de la plantilla). Igual en `/attendance-range` y en la vista
+>     diaria. Impacto en AVP: **ninguno** (la única plantilla con valor tiene 10
+>     = lo de siempre; historial vacío). El test viejo del modo sombra que
+>     afirmaba "el oficial ignora la tolerancia" se actualizó a propósito.
+>   - **Etapa 1 (nombres y campos sin efecto):** "Tope HE por día" de la
+>     plantilla → "Aviso: horas extra por día" (solo avisa); "Topes y
+>     excedente" → "Máximos de horas extra"; "Reglas" → "Recargos de horas
+>     extra por tipo de día". Lo que el cálculo de siempre no usa (disparador,
+>     "requiere autorización", regla por plantilla, tolerancia de salida,
+>     llegada anticipada, salida posterior) solo lo ve el superadmin; los
+>     valores guardados se conservan. Cada recargo dice en rojo si NO se
+>     aplica y por qué (`seAplica`/`motivoNoSeAplica` en GET `/day-type-rules`):
+>     hoy el de AVP (CCT 572/09, laborable 50 %) no se aplica porque no hay
+>     máximos cargados. No se pueden cargar dos reglas activas del mismo tipo
+>     de día y alcance (409).
+>   - Probado: suite 1102/1102, `test/orden-horas-extra.test.js` (7), Chrome
+>     como administrador (sin errores). **Falta:** publicar (cuando el dueño
+>     lo diga) y las decisiones D2/D3 (recargos sin máximos; horas extra no
+>     autorizadas y avisos).
 > - **2026-10-15 — PUBLICADA la E2** (backend `a8339e2`, frontend desplegado,
 >   suite 1094/1094). El dueño corrió la migración `20261020` (confirmar en el
 >   próximo backup). E3 decidida: la bolsa de trámites es POR CONVENIO y su

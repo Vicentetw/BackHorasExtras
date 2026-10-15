@@ -14,11 +14,18 @@ async function findForTemplates(templateIds, db) {
   const safeIds = (templateIds || []).filter((id) => id !== undefined && id !== null);
   if (safeIds.length === 0) return [];
 
-  const [rows] = await db.query(
-    `SELECT * FROM work_schedule_template_config_history WHERE template_id IN (?)`,
-    [safeIds]
-  );
-  return rows;
+  // D1 (2026-10-15): ahora también lo usa el cálculo de siempre (tolerancia
+  // de entrada). Tolerante: sin la tabla, lista vacía = plantilla en vivo.
+  try {
+    const [rows] = await db.query(
+      `SELECT * FROM work_schedule_template_config_history WHERE template_id IN (?)`,
+      [safeIds]
+    );
+    return rows;
+  } catch (err) {
+    if (err.code === 'ER_NO_SUCH_TABLE') return [];
+    throw err;
+  }
 }
 
 // Si alguna de las 4 columnas de tolerancia cambio, archiva el estado

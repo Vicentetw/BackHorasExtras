@@ -207,23 +207,17 @@ test('modo shadow CON tolerancia de entrada configurada, fichaje 15min tarde: Le
   const row = json.data.find((r) => String(r.employeeId) === String(badge));
   const day = row.days.find((d) => d.date === DATE_SHADOW_NEW_FEATURE);
 
-  // Resultado OFICIAL: debe seguir siendo exactamente el de siempre
-  // (tolerancia legacy fija de 10 min -- 15 min tarde SI es tardanza).
-  assert.equal(day.status, 'Late');
-  assert.equal(day.lateMinutes, 15);
+  // D1 (2026-10-15): CAMBIO A PROPÓSITO. Antes el resultado oficial ignoraba
+  // la tolerancia de la plantilla (10 min fijos -> 15 tarde = Late) y solo el
+  // motor nuevo la usaba. Ahora el cálculo de siempre también la usa: con 20
+  // min configurados, 15 min es a tiempo, y los dos motores coinciden.
+  assert.equal(day.status, 'OnTime');
 
-  // Informacion adicional del modo sombra: el motor nuevo, con la
-  // tolerancia de 20 min configurada en esta plantilla, NO lo marca tarde.
   assert.ok(day.shadowResult);
   const classificationDiff = day.shadowResult.diffs.find((d) => d.field === 'classifications');
-  assert.ok(classificationDiff, 'debe haber una diferencia de clasificacion');
-  assert.equal(classificationDiff.legacyValue, 'Late');
-  assert.equal(classificationDiff.newValue, 'OnTime');
-  assert.equal(classificationDiff.diffType, 'NEW_FEATURE');
+  assert.equal(classificationDiff, undefined, 'los dos motores ya usan la misma tolerancia: no hay diferencia de clasificación');
 
   const [rows] = await db.query('SELECT * FROM rule_engine_shadow_diffs WHERE employee_id = ? ORDER BY field', [employeeId]);
-  assert.ok(rows.length >= 1, 'la diferencia debe quedar persistida para revision');
-  rows.forEach((r) => assert.equal(r.diff_type, 'NEW_FEATURE'));
   const rowCountAfterFirstCall = rows.length;
 
   // Etapa 14 (hallazgo #6 de la auditoria): pedir el MISMO rango de

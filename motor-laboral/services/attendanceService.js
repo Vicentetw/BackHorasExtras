@@ -9,6 +9,7 @@ const {
   stripOvernightCarryover
 } = require('./attendanceCalculations');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./holidayScope');
+const { resolveHistoricalToleranceFields } = require('./templateConfigHistoryResolver');
 const { evaluarFueraDeHorario } = require('./fueraDeHorario');
 
 function isDefaultWorkday(dateString) {
@@ -69,7 +70,11 @@ function buildMotorSchedule({ date, tenantSchedule }) {
     blockCount: tenantSchedule.blockCount || 0,
     // Solo para mostrarlo ("usa el horario por defecto: Administración"); no
     // interviene en ningún cálculo.
-    templateName: (tenantSchedule.template && tenantSchedule.template.name) || null
+    templateName: (tenantSchedule.template && tenantSchedule.template.name) || null,
+    // D1: la fila de la plantilla, para su tolerancia de entrada (sin esto,
+    // quien usa el horario por defecto de la empresa tendría otra tolerancia
+    // en la vista diaria que en el reporte mensual).
+    template: tenantSchedule.template || null
   };
 }
 
@@ -142,7 +147,12 @@ function buildAttendance(usersMap, checkins, exclusions, schedule, assignedSched
       && !(tenantScheduleMap && u.tenantId != null && tenantScheduleMap[u.tenantId]);
     const entranceRef = getEntranceReference(userSchedule);
     const entranceMinutes = Number(entranceRef.split(':')[0]) * 60 + Number(entranceRef.split(':')[1]);
-    const toleranceMin = resolveToleranceMinutes(userSchedule);
+    // D1: la tolerancia de entrada de su plantilla, con el valor de ESE día
+    // (igual que /attendance-range: una sola verdad).
+    const toleranceMin = resolveToleranceMinutes(userSchedule,
+      userSchedule.template && opciones.historialTolerancias
+        ? resolveHistoricalToleranceFields(opciones.historialTolerancias, userSchedule.templateId, opciones.fecha, userSchedule.template)
+        : null);
     // Turno partido / visitas multiples (profesor, medico que va varias
     // veces por dia): solo cuando la plantilla tiene MAS de un bloque WORK
     // para este dia -- el caso de un solo bloque sigue exactamente igual que
@@ -529,7 +539,15 @@ async function calculateDailyAttendance({ date, tenantId, templateId, repositori
     ? await repositories.salidas.entradasDelDia(normalizedDate, tenantId)
     : null;
 
-  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana, { umbralFueraDeHorario, vistaDePlantilla: templateId !== undefined && templateId !== null && templateId !== '', entradasParticulares });
+  // D1: historial de configuración de plantillas (tolerancia vigente ese día). Opcional.
+  // Por las plantillas en uso ese día (igual que /attendance-range).
+  const plantillasEnUso = [...new Set([schedule, ...Object.values(assignedScheduleMap || {}), ...Object.values(tenantScheduleMap || {})]
+    .map((s) => s && s.templateId).filter((id) => id != null))];
+  const historialTolerancias = repositories.templateHistory
+    ? await repositories.templateHistory.findForTemplates(plantillasEnUso)
+    : null;
+
+  const attendance = buildAttendance(usersMap, checkins, exclusions, schedule, assignedScheduleMap, tenantScheduleMap, holidayRows, leaveEvents, assignedScheduleMapYesterday, tenantScheduleMapYesterday, campana, { umbralFueraDeHorario, vistaDePlantilla: templateId !== undefined && templateId !== null && templateId !== '', entradasParticulares, historialTolerancias, fecha: normalizedDate });
   const summary = buildSummary(attendance);
   const anyMotorSchedule = attendance.some(a => a.schedule.source === 'motor');
   const usedMotorSchedule = schedule.source === 'motor' || anyMotorSchedule;

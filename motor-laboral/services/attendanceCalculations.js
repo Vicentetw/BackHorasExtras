@@ -113,7 +113,29 @@ function getEntranceReference(schedule) {
   return schedule.timeEntrance;
 }
 
-function resolveToleranceMinutes(schedule) {
+// Minutos de tolerancia para llegar sin que cuente como tarde.
+//
+// 2026-10-15 (D1, pedido del dueño): si la plantilla tiene cargada su
+// "Tolerancia de entrada", se usa ESA. Antes el cálculo de siempre la
+// ignoraba (solo la leía el motor nuevo, que no usa nadie) y el
+// administrador la cargaba creyendo que tenía efecto. Vacía: lo de siempre,
+// 10 min (Fijo) o 60 (Flexible).
+//
+// `campos` = la configuración de la plantilla que regía ESE día (ver
+// templateConfigHistoryResolver: si alguien cambia la tolerancia hoy, los
+// meses pasados se siguen calculando con la de entonces). Sin `campos`, la
+// plantilla en vivo.
+//
+// La tolerancia solo decide SI llegó tarde. Los minutos de tardanza se
+// cuentan siempre desde la hora de entrada (ver resolveLateJustification):
+// con entrada 7:00 y 10 min, llegar 7:10 es a tiempo y 7:11 son 11 min tarde.
+// Quien quiera contar desde el primer minuto pone tolerancia 0.
+function resolveToleranceMinutes(schedule, campos = null) {
+  const cfg = campos || (schedule && schedule.template) || null;
+  const propia = cfg ? cfg.tolerancia_entrada_minutos : null;
+  if (schedule && schedule.source === 'motor' && propia !== null && propia !== undefined && propia !== '' && Number.isFinite(Number(propia))) {
+    return Math.max(0, Number(propia));
+  }
   return schedule.source === 'motor' && schedule.template_type === 'FLEXIBLE' ? 60 : 10;
 }
 

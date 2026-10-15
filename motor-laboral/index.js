@@ -36,6 +36,10 @@ function createLaborEngineRoutes(db) {
     campana: {
       empleadosEnCampanaElDia: (date, tenantId) => campanaService.empleadosEnCampanaElDia(db, tenantId, date)
     },
+    // D1: historial de configuración de plantillas (tolerancia vigente cada día).
+    templateHistory: {
+      findForTemplates: (templateIds) => require('./repositories/templateConfigHistoryRepository').findForTemplates(templateIds, db)
+    },
     // Autorización de salidas (E1): entradas con permiso del día y su decisión.
     salidas: {
       entradasDelDia: (date, tenantId) => require('./services/autorizacionSalidas').entradasDelDia(db, tenantId, date)

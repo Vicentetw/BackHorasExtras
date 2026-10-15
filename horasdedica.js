@@ -3430,6 +3430,12 @@ async function attendanceRangeHandler(req, res) {
     const templateConfigHistoryForEngine = engineModeActive
       ? await templateConfigHistoryRepository.findForTemplates([...engineModeTemplateIds], db)
       : [];
+    // D1 (2026-10-15): la "Tolerancia de entrada" de la plantilla vale también
+    // en el cálculo de siempre, con el valor que regía cada día (historial de
+    // configuración de plantillas; casi siempre vacío = plantilla en vivo).
+    // Por las plantillas en uso (no por empresa): así vale igual para el
+    // superadmin mirando todas las empresas.
+    const historialTolerancias = await templateConfigHistoryRepository.findForTemplates(involvedTemplateIds, db);
     // Diferencias encontradas por TODO el request (todos los empleados,
     // todos los dias) -- se insertan en un solo lote al final, best-effort
     // (un error aca no debe romper la respuesta oficial de /attendance-range).
@@ -4276,7 +4282,8 @@ async function attendanceRangeHandler(req, res) {
           const lastMin = timeToMinutes(extractTime(last));
           const entranceRef = attendanceCalc.getEntranceReference(schedule);
           const entranceMin = timeToMinutes(entranceRef);
-          const tolerance = attendanceCalc.resolveToleranceMinutes(schedule);
+          const tolerance = attendanceCalc.resolveToleranceMinutes(schedule,
+            schedule.template ? resolveHistoricalToleranceFields(historialTolerancias, schedule.templateId, date, schedule.template) : null);
           // Turno partido / visitas multiples (profesor, medico que va varias
           // veces por dia): solo cuando la plantilla tiene MAS de un bloque
           // WORK para este dia -- un solo bloque sigue exactamente igual que

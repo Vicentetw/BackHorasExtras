@@ -1436,12 +1436,71 @@ function createMotorLaboralAdminRoutes(db) {
          ORDER BY r.day_type ASC`,
         [effectiveTenantId, effectiveTenantId, effectiveTenantId]
       );
-      res.json(rows);
+      // Etapa 1 (2026-10-15): ¿esta regla se aplica de verdad? Antes se
+      // podían cargar reglas que el cálculo no usaba, sin ningún aviso.
+      const vigencia = await efectoDeReglas(effectiveTenantId);
+      res.json(rows.map((r) => ({ ...r, ...vigencia(r) })));
     } catch (err) {
       console.error('Motor Laboral admin day-type-rules error:', err);
       res.status(500).json({ error: 'Error al leer reglas de horas extra' });
     }
   });
+
+  // ¿Se aplica una regla por tipo de día? (AUDITORIA_HORAS_EXTRA.md, fila 11)
+  // En el cálculo de siempre, las reglas (tasa, "qué pasa con ese tiempo")
+  // las usa el cálculo de horas extra por régimen, que SOLO corre para quien
+  // está cubierto por los máximos de horas extra (overtime_regime_policies): de la
+  // empresa, de su convenio o de su régimen. Una regla de una PLANTILLA solo
+  // la usa el motor nuevo. Devuelve una función regla -> {seAplica, motivoNoSeAplica}.
+  async function efectoDeReglas(tenantId) {
+    let politicas = [];
+    try {
+      [politicas] = await db.query('SELECT DISTINCT convention_id, regime_id FROM overtime_regime_policies WHERE tenant_id = ?', [tenantId]);
+    } catch (err) {
+      if (err.code !== 'ER_NO_SUCH_TABLE' && err.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    }
+    const deEmpresa = politicas.some((p) => p.convention_id == null);
+    const deConvenio = new Set(politicas.filter((p) => p.convention_id != null && p.regime_id == null).map((p) => p.convention_id));
+    const deRegimen = new Set(politicas.filter((p) => p.regime_id != null).map((p) => p.regime_id));
+    const [[motorNuevo]] = await db.query(
+      `SELECT COUNT(*) n FROM work_schedule_templates WHERE tenant_id = ? AND rules_engine_mode IN ('shadow', 'active')`, [tenantId])
+      .catch(() => [[{ n: 0 }]]);
+    return (r) => {
+      if (!Number(r.active)) return { seAplica: false, motivoNoSeAplica: 'Está desactivada.' };
+      if (r.template_id != null) {
+        return Number(motorNuevo.n) > 0
+          ? { seAplica: true, motivoNoSeAplica: null }
+          : { seAplica: false, motivoNoSeAplica: 'Las reglas de una plantilla solo las usa el motor de reglas nuevo, que esta empresa no tiene activado. Cargala para el convenio o para toda la empresa.' };
+      }
+      const cubierto = deEmpresa
+        || (r.convention_id != null && deConvenio.has(r.convention_id))
+        || (r.regime_id != null && deRegimen.has(r.regime_id));
+      if (cubierto) return { seAplica: true, motivoNoSeAplica: null };
+      if (r.convention_id == null && (deConvenio.size || deRegimen.size)) {
+        return { seAplica: true, motivoNoSeAplica: 'Solo se aplica a quienes están en un convenio con máximos de horas extra cargados. Para que valga para todos, cargá los máximos de la empresa.' };
+      }
+      return { seAplica: false, motivoNoSeAplica: 'No se aplica: faltan los máximos de horas extra (de este convenio o de la empresa). Sin máximos, las horas extra se calculan como siempre y esta regla no cambia nada.' };
+    };
+  }
+
+  // Etapa 1: no puede haber dos reglas activas para el mismo tipo de día en el
+  // mismo alcance (el cálculo de horas extra por régimen toma la primera que
+  // encuentra y la otra quedaría de adorno). Devuelve un mensaje o null.
+  // Excepción: en una regla de PLANTILLA (solo motor nuevo) el disparador sí
+  // distingue (antes del horario / después), así que ahí cuenta también.
+  async function reglaDuplicada({ id = null, tenantId, conventionId, regimeId, templateId, dayType, triggerType, active }) {
+    if (active === false || active === 0) return null;
+    const porDisparador = templateId != null && triggerType;
+    const [[otra]] = await db.query(
+      `SELECT id FROM day_type_overtime_rules
+        WHERE active = 1 AND day_type = ? AND id <> ?
+          AND tenant_id <=> ? AND convention_id <=> ? AND template_id <=> ? AND COALESCE(regime_id, 0) = COALESCE(?, 0)
+          ${porDisparador ? 'AND trigger_type = ?' : ''}
+        LIMIT 1`,
+      [dayType, id || 0, tenantId ?? null, conventionId ?? null, templateId ?? null, regimeId ?? null, ...(porDisparador ? [triggerType] : [])])
+      .catch((err) => (err.code === 'ER_BAD_FIELD_ERROR' ? [[null]] : Promise.reject(err)));
+    return otra ? 'Ya hay una regla activa para ese tipo de día con el mismo alcance: editá esa en lugar de crear otra.' : null;
+  }
 
   // Valida que (si vienen) template_id/convention_id pertenezcan al
   // tenant efectivo -- para un superadmin (effectiveTenantId null) no
@@ -1481,6 +1540,8 @@ function createMotorLaboralAdminRoutes(db) {
       }
       const scopeError = await validateDayTypeRuleScope({ effectiveTenantId, tenantId: tenant_id, templateId: template_id, conventionId: convention_id }, db);
       if (scopeError) return res.status(400).json({ error: scopeError });
+      const duplicada = await reglaDuplicada({ tenantId: tenant_id, conventionId: convention_id, regimeId: regime_id, templateId: template_id, dayType: day_type, triggerType: trigger_type, active: active === undefined ? true : active });
+      if (duplicada) return res.status(409).json({ error: duplicada });
 
       const [result] = await db.query(
         // Sin regimen no se nombra la columna (migracion 20261007 pendiente).
@@ -1518,6 +1579,8 @@ function createMotorLaboralAdminRoutes(db) {
       if (!DAY_TYPES.includes(day_type) || !['BEFORE_SCHEDULE', 'AFTER_SCHEDULE', 'ALL_DAY'].includes(trigger_type)) {
         return res.status(400).json({ error: 'day_type/trigger_type invalidos' });
       }
+      const duplicada = await reglaDuplicada({ id: existing.id, tenantId: existing.tenant_id, conventionId: existing.convention_id, regimeId: existing.regime_id, templateId: existing.template_id, dayType: day_type, triggerType: trigger_type, active: active === undefined ? true : active });
+      if (duplicada) return res.status(409).json({ error: duplicada });
       await db.query(
         `UPDATE day_type_overtime_rules
          SET day_type = ?, trigger_type = ?, classification_type = ?, rate = ?, requires_authorization = ?, active = ?

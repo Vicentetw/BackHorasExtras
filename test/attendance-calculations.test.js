@@ -132,6 +132,22 @@ test('resolveToleranceMinutes: 60 solo si la plantilla motor es FLEXIBLE, si no 
   assert.equal(resolveToleranceMinutes({ source: 'legacy' }), 10);
 });
 
+// D1 (2026-10-15): la tolerancia de entrada de la plantilla ahora se usa.
+test('resolveToleranceMinutes: usa la tolerancia de entrada de la plantilla si está cargada', () => {
+  const plantilla = (tol, type = 'FIXED') => ({ source: 'motor', template_type: type, template: { tolerancia_entrada_minutos: tol } });
+  assert.equal(resolveToleranceMinutes(plantilla(0)), 0, '0 = estricto');
+  assert.equal(resolveToleranceMinutes(plantilla(15)), 15);
+  assert.equal(resolveToleranceMinutes(plantilla(5, 'FLEXIBLE')), 5, 'la propia gana también en FLEXIBLE');
+  assert.equal(resolveToleranceMinutes(plantilla(null)), 10, 'vacío = el margen de siempre');
+  assert.equal(resolveToleranceMinutes(plantilla('', 'FLEXIBLE')), 60);
+  assert.equal(resolveToleranceMinutes(plantilla(-3)), 0, 'nunca negativa');
+  // Los campos del historial (valor vigente ese día) ganan sobre los actuales.
+  assert.equal(resolveToleranceMinutes(plantilla(0), { tolerancia_entrada_minutos: null }), 10);
+  assert.equal(resolveToleranceMinutes(plantilla(null), { tolerancia_entrada_minutos: 20 }), 20);
+  // Horario legacy (sin plantilla del motor): siempre 10.
+  assert.equal(resolveToleranceMinutes({ source: 'legacy', template: { tolerancia_entrada_minutos: 0 } }), 10);
+});
+
 test('resolveLateJustification: a tiempo (dentro de tolerancia)', () => {
   const r = resolveLateJustification({ firstMinutes: 425, entranceMinutes: 420, toleranceMinutes: 10, exclusion: null });
   assert.deepEqual(r, { isLate: false, lateMinutes: 0, justified: false });
