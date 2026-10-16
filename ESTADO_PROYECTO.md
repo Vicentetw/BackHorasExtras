@@ -82,6 +82,7 @@
 > | *(Verificado en el backup del 14/10 14:50: la migración `20261018` ya está en producción.)* | |
 > | *(El dueño dice que corrió la `20261019` el 15/10: confirmarlo en el próximo backup.)* | |
 > | *(El dueño dice que corrió la `20261020` el 15/10: confirmarlo en el próximo backup.)* | |
+> | **Correr la migración `20261021_archivar_plantillas.sql`** (agrega 2 columnas, idempotente) | Archivar plantillas (publicado el 16/10) |
 >
 > **Pendiente de desarrollo (2026-10-16): horarios y plantillas (A–F).**
 > Analizado, sin implementar; esperando el sí del dueño (A cambia una pantalla publicada).
@@ -231,6 +232,16 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-16 — PUBLICADO:** E + F de plantillas (backend `3555fba`),
+>   filtro por convenio, y arreglos de Horarios de Empleados (frontend
+>   `f252f33`: búsqueda exacta por legajo, "N no se ven con esta búsqueda" +
+>   Limpiar selección, el panel se actualiza solo tras asignar en bloque,
+>   celdas de más en el historial). Suite 1117/1117 y Chrome sobre `main`
+>   combinado. **Falta que el dueño corra la migración 20261021** (sin ella,
+>   "Archivar" avisa que falta; todo lo demás funciona). El dueño aclaró que
+>   todavía no se paga con el sistema: las diferencias de julio y las
+>   reasignaciones a "horas extras" (APARICIO desde 2023, etc.) son
+>   correcciones esperadas.
 > - **2026-10-16 — E + F de plantillas (RAMAS `plantillas-uso-y-borrado` en los
 >   dos repos, SIN publicar).**
 >   - **Auditoría** (backup del 15/10 23:14, solo lectura):
