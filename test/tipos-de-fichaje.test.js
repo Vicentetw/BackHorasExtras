@@ -97,3 +97,37 @@ test('sin marcadores, solo entrada, intermedios y salida', () => {
   assert.deepEqual(f.map((x) => [x.hora, x.base]), [['06:56', 'Entrada'], ['10:00', 'Intermedio'], ['13:38', 'Salida']]);
   assert.equal(PROPIOS.length, 7);
 });
+
+// GALDAMEZ, 2026-10-15: entró a la mañana, a las 13:43 apretó el 9 y fichó
+// dos veces seguidas (13:43:15 y 13:43:18). Más de 3 h sin fichar + el 9 =
+// "llegada" para el motor (resguardo de horas extra), así que la 2da lectura
+// cerraba la hora extra a los 3 segundos y la pantalla decía "Repetido · Fin
+// de horas extra". El cálculo cuenta esa hora extra como 0 min y toma hasta
+// el último fichaje del día: la pantalla tiene que decir lo mismo.
+test('fichaje repetido después del 9: no se muestra como "Fin de horas extra"', () => {
+  const dia = [
+    fichaje('07:00:00'),
+    marcador('13:43:12', 9), fichaje('13:43:15'), fichaje('13:43:18'),
+  ];
+  const r = clasificar(dia);
+  assert.deepEqual(r.map((f) => [f.hora + ':' + f.en.slice(17), f.base, f.tipos.map((x) => x.texto)]), [
+    ['07:00:00', 'Entrada', []],
+    ['13:43:15', 'Intermedio', ['Inicio de horas extra (termina con el último fichaje del día o con el marcador de fin)']],
+    ['13:43:18', 'Repetido', []],
+  ]);
+
+  // Y el cálculo, con ese mismo evento, no usa los 3 segundos: cae al
+  // cálculo por fichajes (hasta el último del día).
+  const { resolveDailyOvertime } = require('../motor-laboral/services/overtimeCalculations');
+  const ev = detectMovements(dia, soloDe('HE'), { maxMarkerGapMs: 6000, todosLosMarcadores: MARCADORES })
+    .closedEvents.find((e) => e.category === 'HE');
+  const conSalida = [...dia.filter((c) => c.employeeId).map((c) => c.checktime), t('17:00:00')];
+  const res = resolveDailyOvertime(ev ? { timeOut: ev.timeOut, timeIn: ev.timeIn } : null, conSalida, { cutoffMinutes: 13 * 60 + 40 });
+  assert.notEqual(res && res.source, 'marker', 'los 3 segundos no son la hora extra');
+});
+
+test('una hora extra de verdad (9 ... 10 más tarde) se sigue mostrando con su fin', () => {
+  const dia = [fichaje('07:00:00'), marcador('13:43:12', 9), fichaje('13:43:15'), marcador('16:59:58', 10), fichaje('17:00:00')];
+  const r = clasificar(dia);
+  assert.deepEqual(r.map((f) => f.tipos.map((x) => x.texto)), [[], ['Inicio de horas extra'], ['Fin de horas extra']]);
+});

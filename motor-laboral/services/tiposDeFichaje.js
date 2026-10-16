@@ -58,7 +58,11 @@ function clasificarFichajesDelDia({ fichajes, marcas, reboteSegundos = 20 }) {
       .filter((m) => m.en === en)
       .map((m) => {
         let texto = etiqueta(m.categoria, m.rol);
-        if (m.sinPar) texto += m.rol === 'salida' ? ' (sin regreso)' : ' (sin salida registrada)';
+        if (m.sinPar && m.categoria === 'HE' && m.rol === 'salida') {
+          // Sin el marcador de fin, el cálculo de horas extra toma hasta el
+          // último fichaje del día (overtimeCalculations.resolveDailyOvertime).
+          texto += ' (termina con el último fichaje del día o con el marcador de fin)';
+        } else if (m.sinPar) texto += m.rol === 'salida' ? ' (sin regreso)' : ' (sin salida registrada)';
         return {
           categoria: m.categoria,
           rol: m.rol,
@@ -85,6 +89,16 @@ function marcasDeEventos(categoria, r, legajo, fmt, marcadorDe, descarte = () =>
   for (const ev of r.closedEvents || []) {
     if (ev.employeeId !== legajo || ev.category !== categoria) continue;
     const d = descarte(ev);
+    // Horas extra "cerradas" a los segundos (fichó dos veces seguidas: la 2da
+    // lectura es repetida). El cálculo las cuenta como 0 minutos y usa el
+    // último fichaje del día (resolveDailyOvertime: minutos redondeados <= 0
+    // -> cae al cálculo por fichajes). Mostrar "Fin de horas extra" en la
+    // lectura repetida decía algo que el cálculo no hace (GALDAMEZ,
+    // 2026-10-15). Se muestra solo el inicio, como una hora extra abierta.
+    if (categoria === 'HE' && ev.timeOut && ev.timeIn && Math.round((ev.timeIn - ev.timeOut) / 60000) <= 0) {
+      marcas.push({ categoria, rol: 'salida', en: fmt(ev.timeOut), marcador: marcadorDe(ev, 'salida'), sinPar: true, descartado: d });
+      continue;
+    }
     if (ev.timeOut) marcas.push({ categoria, rol: 'salida', en: fmt(ev.timeOut), marcador: marcadorDe(ev, 'salida'), descartado: d });
     if (ev.timeIn) marcas.push({ categoria, rol: 'regreso', en: fmt(ev.timeIn), marcador: marcadorDe(ev, 'regreso'), descartado: d });
   }
