@@ -1,8 +1,50 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-15 — último: PUBLICADA orden de horas extra Etapa 1 + D1; siguiente: desglose de HE por tipo de día; ver bitácora)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-16 noche — ver "Dónde quedamos" justo abajo)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
+>
+> ### Dónde quedamos (2026-10-16, fin del día)
+>
+> **Sin publicar (esperan el "publicá" del dueño):**
+> - Ramas `dias-a-revisar` (backend `0d05cd8` y frontend `39e78a6`):
+>   - lista "Días a revisar" en Horas Extra por Régimen;
+>   - incluye los regresos oficiales, particulares o de campaña contados como
+>     horas extra, y las estimadas de más de 30 min;
+>   - no cambia números;
+>   - septiembre de AVP: 69 días, 33 personas, 228 h en juego;
+>   - probado: tests, la copia del backup y Chrome.
+>
+> **Siguiente (en este orden, aprobado por el dueño):**
+> 1. Etapa 3 de días a revisar: resolver con un clic (aceptar la propuesta,
+>    corregir u omitir), reutilizando "HE manual"/"Omitir", que ya guardan
+>    quién y cuándo.
+> 2. Regla "fin de HE (10) sin inicio (9)", configurable por empresa. En AVP
+>    son 294 días por mes (61 personas). Cambia números: antes, comparar el
+>    antes y después sobre el backup.
+> 3. Regla "un regreso oficial no cuenta como hora extra". Mínimo de horas
+>    extra (R4). Plan R1–R5 de fichajes repetidos
+>    (`AUDITORIA_FICHAJES_REPETIDOS.md`, solo local).
+> 4. Plantillas: A–D pendientes (ver "Pendiente de desarrollo" más abajo) y
+>    G = editar una plantilla con fecha de vigencia.
+>
+> **Decisiones que esperan al dueño:**
+> - Julio está cerrado y hoy da +146 h. Él dijo que todavía no se paga con el
+>   sistema: son correcciones esperadas.
+> - Comisiones sin fichaje a la mañana (9347, 1496 y 3128 el 08/09): ¿cuentan
+>   horas extra después de las 15:00?
+> - Dedicación exclusiva: falta que la defina (5 preguntas en el chat del
+>   16/10).
+>
+> **Bug anotado, sin arreglar:** en Presentismo, el turno de HOY que todavía
+> no empezó figura "Ausente". Caso: sereno 3056, noche que empieza a las 23:00.
+> Debería decir "todavía no empezó".
+>
+> **AGUILAR 3056** tiene bien su plantilla rotativa ("2M 2T 2N 4F", día 1 =
+> 11/09/2026); coincide con sus fichajes de octubre.
+>
+> **Migración pendiente en producción:** `20261021_archivar_plantillas.sql`.
+>
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
 > y manda acá. Si vas a tocar Presentismo, Salidas, horas extra o el portal:
 > leé también `MARCADORES_Y_SALIDAS.md`.)
@@ -227,11 +269,24 @@
 > | Guía de puesta en marcha (Inicio): qué detecta cada paso | `routes/puestaEnMarcha.js` (comentarios) |
 > | **Aislamiento por empresa: qué es global, qué debería ser propio, plan A–J** | `AISLAMIENTO_POR_EMPRESA.md` |
 > | **Superadmin trabajando en una empresa (soporte), Registro de actividad, feriado en varias empresas** | `SOPORTE_Y_REGISTRO.md` |
+> | **Seguir trabajando desde otra PC (qué viaja por GitHub, qué llevar a mano, memoria y chats de Claude Code)** | `COMO_SEGUIR_EN_OTRA_PC.md` |
 > | **Marcadores: salidas particulares y horas extra. Reglas que no se pueden romper y cómo verificarlas** | `MARCADORES_Y_SALIDAS.md` |
 > | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-16 (tarde) — PUBLICADO (solo frontend):**
+>   - **Empleados:** ciudad y sucursal opcionales para inactivos; el motivo
+>     por el que no se guarda aparece junto a los botones.
+>   - **Selector de mes** con listas y flechas (`shared/selector-mes`) en
+>     Presentismo, Salidas, Liquidación y el portal.
+>   - **Horas Extra por Régimen:** "Ver por" (su régimen, mes, quincena o
+>     semana) con selector de período; el filtro de régimen pasó a "Cobran";
+>     el total dice "N con horas extra (de M listadas)".
+>   - **Comprobado:** el total de septiembre (2572 h 35 m) está bien.
+>   - **Comparación de las 12 personas de horas extras con la lista del dueño:**
+>     coinciden 9. Las diferencias de 2747 y 3128 son "fin sin inicio"; la de
+>     1496 es un regreso oficial.
 > - **2026-10-16 — PUBLICADO** (backend `9d39d2b`, frontend `86a162a`):
 >   - **Plantillas:** "Ver y corregir" asignaciones a plantillas que ya no
 >     existen. El administrador las quita solo; el cálculo ya las ignoraba.
