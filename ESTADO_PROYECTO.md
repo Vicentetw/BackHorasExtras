@@ -232,6 +232,19 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-16 — PUBLICADO** (backend `9d39d2b`, frontend `86a162a`):
+>   - **Plantillas:** "Ver y corregir" asignaciones a plantillas que ya no
+>     existen. El administrador las quita solo; el cálculo ya las ignoraba.
+>     En producción hay 10: CALDERON 2519 ×2, HARO 2329 ×6, PERROTTA 2525 ×2,
+>     restos de las empresas de prueba de julio.
+>   - **Horarios de Empleados:** columna y filtro "Horario" con la plantilla
+>     que rige hoy (GET `calendar-assignments/vigentes`, misma regla que el
+>     cálculo). Ventana "Asignar horario" con:
+>     - el horario de hoy y el resumen de la plantilla elegida;
+>     - aviso si la fecha es pasada; "hasta" no puede ser antes que "desde";
+>     - ayudas y errores visibles; arreglo para celular.
+>   - Suite 1120/1120 y Chrome (computadora y celular).
+>   - **Sigue pendiente la migración 20261021.**
 > - **2026-10-16 — PUBLICADO:** E + F de plantillas (backend `3555fba`),
 >   filtro por convenio, y arreglos de Horarios de Empleados (frontend
 >   `f252f33`: búsqueda exacta por legajo, "N no se ven con esta búsqueda" +
