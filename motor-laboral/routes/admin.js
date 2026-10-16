@@ -1797,6 +1797,33 @@ function createMotorLaboralAdminRoutes(db) {
 
   // Convenio vigente HOY de cada empleado de la empresa: la columna
   // "Convenio" de Horarios de empleados (sin pedir uno por uno).
+  // Horario que rige HOY para cada empleado (columna y filtro "Horario" de
+  // Horarios de Empleados, pedido 2026-10-16). MISMA regla que el cálculo
+  // (scheduleRepository.findAssignedScheduleMapForDate): asignación vigente a
+  // una plantilla activa de su empresa; si hay dos, gana la que empezó más
+  // tarde. Quien no aparece se mide con la plantilla por defecto.
+  router.get('/calendar-assignments/vigentes', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const tenantId = resolveTenantId(req);
+      if (tenantId == null) return res.json([]);
+      const hoy = todayLocalDate();
+      const [rows] = await db.query(
+        `SELECT c.employee_id, c.template_id, LEFT(c.valid_from, 10) AS valid_from, LEFT(c.valid_to, 10) AS valid_to
+           FROM employee_work_calendars c
+           JOIN employees e ON e.id = c.employee_id AND e.tenant_id = ?
+           JOIN work_schedule_templates t ON t.id = c.template_id AND t.active = 1
+                AND (t.tenant_id = e.tenant_id OR t.tenant_id = 0 OR t.tenant_id IS NULL)
+          WHERE c.valid_from <= ? AND (c.valid_to IS NULL OR c.valid_to >= ?)
+          ORDER BY c.employee_id, c.valid_from DESC`, [tenantId, hoy, hoy]);
+      const porEmpleado = new Map();
+      for (const r of rows) if (!porEmpleado.has(r.employee_id)) porEmpleado.set(r.employee_id, r);
+      res.json([...porEmpleado.values()]);
+    } catch (err) {
+      console.error('Motor Laboral admin horarios vigentes error:', err);
+      res.status(500).json({ error: 'Error al leer los horarios vigentes' });
+    }
+  });
+
   router.get('/convention-assignments/vigentes', requirePermission('schedules', 'read'), async (req, res) => {
     try {
       const tenantId = resolveTenantId(req);

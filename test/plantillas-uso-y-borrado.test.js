@@ -278,3 +278,28 @@ test('asignaciones rotas: un usuario de otra empresa no las ve ni las puede quit
     await deleteTestUser('test-plantillas-uso-otra');
   }
 });
+
+// Columna "Horario" de Horarios de Empleados: la plantilla que rige HOY, con
+// la misma regla que el cálculo (si hay dos superpuestas, la que empezó más tarde).
+test('horario vigente: el mismo que usa el cálculo, también con asignaciones superpuestas', async () => {
+  const hoy = new Date();
+  const fecha = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const ayer = new Date(hoy); ayer.setDate(hoy.getDate() - 1);
+  // emp.hoy tiene "vigente" desde enero; se le superpone "pasada" desde ayer, sin cerrar la otra.
+  const [r] = await db.query('INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from) VALUES (?, ?, ?, ?)',
+    [emp.hoy.id, T, tpl.pasada, fecha(ayer)]);
+  try {
+    const lista = await (await pedir('GET', `${ADMIN}/calendar-assignments/vigentes`)).json();
+    const de = (id) => lista.find((x) => x.employee_id === id);
+    assert.equal(de(emp.hoy.id).template_id, tpl.pasada, 'gana la que empezó más tarde');
+    assert.equal(de(emp.agosto.id), undefined, 'la de agosto ya terminó: hoy usa la por defecto');
+    assert.equal(de(emp.sinHorario.id), undefined);
+    assert.equal(de(emp.ajeno.id), undefined, 'no muestra personas de otra empresa');
+    // El cálculo de hoy usa esa misma plantilla.
+    const repo = require('../motor-laboral/repositories/scheduleRepository');
+    const mapa = await repo.findAssignedScheduleMapForDate(fecha(hoy), [emp.hoy.legajo], db, T);
+    assert.equal(mapa[emp.hoy.legajo].templateId, tpl.pasada);
+  } finally {
+    await db.query('DELETE FROM employee_work_calendars WHERE id = ?', [r.insertId]);
+  }
+});
