@@ -6,14 +6,7 @@
 >
 > ### Dónde quedamos (2026-10-16, fin del día)
 >
-> **Sin publicar (esperan el "publicá" del dueño):**
-> - Ramas `dias-a-revisar` (backend `0d05cd8` y frontend `39e78a6`):
->   - lista "Días a revisar" en Horas Extra por Régimen;
->   - incluye los regresos oficiales, particulares o de campaña contados como
->     horas extra, y las estimadas de más de 30 min;
->   - no cambia números;
->   - septiembre de AVP: 69 días, 33 personas, 228 h en juego;
->   - probado: tests, la copia del backup y Chrome.
+> **Sin publicar:** nada (al 16/10 noche, todo lo terminado está publicado).
 >
 > **Siguiente (en este orden, aprobado por el dueño):**
 > 1. Etapa 3 de días a revisar: resolver con un clic (aceptar la propuesta,
@@ -275,6 +268,16 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-16 (noche) — PUBLICADO "Días a revisar"** (backend `e792580`,
+>   frontend `39e78a6`). Horas Extra por Régimen → botón "Días a revisar":
+>   - entran los regresos oficiales, particulares o de campaña contados como
+>     horas extra, y las estimadas de más de 30 min;
+>   - aviso "⚠ N" por persona;
+>   - "Ver el día" abre el detalle resaltado, para corregir con HE manual u
+>     Omitir;
+>   - no cambia números;
+>   - septiembre de AVP: 69 días, 33 personas;
+>   - suite 1124/1124.
 > - **2026-10-16 (tarde) — PUBLICADO (solo frontend):**
 >   - **Empleados:** ciudad y sucursal opcionales para inactivos; el motivo
 >     por el que no se guarda aparece junto a los botones.
