@@ -21,6 +21,9 @@ const { cruzaMedianoche } = require('../services/cicloDeTurnos');
 const { aplicarReemplazo } = require('../services/vigenciasHorario');
 const asistente = require('../services/asistenteHorario');
 const { revisarEliminacion, eliminarEmpresaPrueba, ErrorDeEliminacion } = require('../services/eliminarEmpresaPrueba');
+const { usoDePlantillas, decisiones } = require('../services/usoDePlantillas');
+
+const ARCHIVADA_NO_SE_ASIGNA = 'Esa plantilla está archivada: no se puede asignar. Desarchivala en Plantillas de Horario si la necesitás.';
 
 // Mismo motivo que ya documenta /attendance-range en horasdedica.js:
 // toISOString() usa UTC, y en un servidor con huso horario negativo
@@ -313,6 +316,64 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
+  // E (2026-10-16): a cuántas personas está aplicada cada plantilla (hoy, antes,
+  // desde una fecha futura), a cuántas mide la por defecto, y qué se puede
+  // hacer con cada una sin cambiar el pasado (F). Ver usoDePlantillas.js.
+  router.get('/templates/uso', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const tenantId = resolveTenantId(req);
+      if (tenantId === null) return res.status(400).json({ error: 'Elegí una empresa' });
+      const u = await usoDePlantillas(db, tenantId, todayLocalDate());
+      const plantillas = u.filas.map((t) => {
+        const uso = u.plantillas.get(t.id);
+        const esPorDefecto = t.id === u.porDefectoId;
+        return {
+          id: t.id, ...uso, esPorDefecto,
+          personasPorDefecto: esPorDefecto ? u.personasPorDefecto : 0,
+          archivada: !!t.archived_at,
+          ...decisiones(uso, esPorDefecto, !!t.archived_at),
+        };
+      });
+      res.json({ plantillas, porDefectoId: u.porDefectoId, personasPorDefecto: u.personasPorDefecto, asignacionesRotas: u.asignacionesRotas });
+    } catch (err) {
+      console.error('Motor Laboral admin templates uso error:', err);
+      res.status(500).json({ error: 'Error al calcular el uso de las plantillas' });
+    }
+  });
+
+  // F: decisiones de UNA plantilla (para borrar, cambiar "Activa" o archivar).
+  async function decisionesDe(plantilla) {
+    const u = await usoDePlantillas(db, plantilla.tenant_id, todayLocalDate());
+    return decisiones(u.plantillas.get(plantilla.id), plantilla.id === u.porDefectoId, !!plantilla.archived_at);
+  }
+
+  // Archivar / desarchivar (migración 20261021). El cálculo no lee la marca:
+  // la plantilla sigue valiendo para las asignaciones que ya tiene.
+  for (const [accion, archivar] of [['archivar', true], ['desarchivar', false]]) {
+    router.post(`/templates/:id/${accion}`, requirePermission('schedules', 'update'), async (req, res) => {
+      try {
+        const [[t]] = await db.query('SELECT * FROM work_schedule_templates WHERE id = ?', [req.params.id]);
+        const effectiveTenantId = resolveTenantId(req);
+        if (!t || (effectiveTenantId !== null && t.tenant_id !== effectiveTenantId)) {
+          return res.status(404).json({ error: 'Plantilla no encontrada' });
+        }
+        if (!('archived_at' in t)) {
+          return res.status(503).json({ error: 'Falta correr la migración 20261021_archivar_plantillas.sql para poder archivar.' });
+        }
+        if (archivar) {
+          const d = await decisionesDe(t);
+          if (!d.puedeArchivarse) return res.status(409).json({ error: d.motivoNoArchivar || 'Ya está archivada.' });
+        }
+        await db.query('UPDATE work_schedule_templates SET archived_at = ?, archived_by = ? WHERE id = ?',
+          archivar ? [new Date(), req.appUser ? req.appUser.id : null, t.id] : [null, null, t.id]);
+        res.json({ ok: true });
+      } catch (err) {
+        console.error(`Motor Laboral admin ${accion} template error:`, err);
+        res.status(500).json({ error: 'Error al archivar la plantilla' });
+      }
+    });
+  }
+
   router.post('/templates', requirePermission('schedules', 'create'), async (req, res) => {
     try {
       const bodyTenantId = req.body.tenant_id ?? req.body.tenantId;
@@ -411,6 +472,17 @@ function createMotorLaboralAdminRoutes(db) {
       // silencio (mismo bug real que ya paso una vez con overtime_cutoff_time:
       // "la pongo y no se guarda" / aca seria peor, "la edito y se desactiva sola").
       const effectiveRulesEngineMode = rules_engine_mode || existing.rules_engine_mode;
+      // F (2026-10-16): cambiar "Activa" en una plantilla que alguien tuvo
+      // asignada (o en la por defecto) cambia el horario de esas personas
+      // también en días pasados. Se impide, con el motivo. Si "active" no
+      // viene, se conserva el valor que tenía (ver el UPDATE).
+      if (active !== undefined && Number(!!active) !== Number(existing.active)) {
+        const d = await decisionesDe(existing);
+        if (!d.puedeCambiarActiva) return res.status(409).json({ error: d.motivoNoCambiarActiva });
+      }
+      if (is_default && existing.archived_at) {
+        return res.status(409).json({ error: 'Está archivada: desarchivala antes de marcarla como "por defecto".' });
+      }
       // If marking this template as default, unset other defaults for the tenant
       if (is_default) {
         try {
@@ -452,7 +524,9 @@ function createMotorLaboralAdminRoutes(db) {
              rules_engine_mode = ?
          WHERE id = ?`,
         [
-          tenantId, name, description || null, type, active ? 1 : 0, is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null,
+          // Sin "active" en el pedido se conserva el que tenía (antes se
+          // guardaba 0: una edición incompleta la desactivaba en silencio).
+          tenantId, name, description || null, type, active === undefined ? Number(existing.active) : (active ? 1 : 0), is_default ? 1 : 0, overtime_cutoff_time || null, overtime_cap_minutes ?? null,
           tolerancia_entrada_minutos ?? null, tolerancia_salida_anticipada_minutos ?? null,
           politica_llegada_anticipada || null, politica_salida_posterior || null,
           effectiveRulesEngineMode,
@@ -470,12 +544,16 @@ function createMotorLaboralAdminRoutes(db) {
     try {
       const { id } = req.params;
       const effectiveTenantId = resolveTenantId(req);
-      if (effectiveTenantId !== null) {
-        const [[existing]] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [id]);
-        if (!existing || existing.tenant_id !== effectiveTenantId) {
-          return res.status(404).json({ error: 'Plantilla no encontrada' });
-        }
+      const [[existing]] = await db.query('SELECT * FROM work_schedule_templates WHERE id = ?', [id]);
+      if (!existing || (effectiveTenantId !== null && existing.tenant_id !== effectiveTenantId)) {
+        return res.status(404).json({ error: 'Plantilla no encontrada' });
       }
+      // F (2026-10-16): borrar una plantilla que alguien tuvo asignada le
+      // cambiaba el horario a esas personas también en días pasados (no hay
+      // FK; el cálculo ignora asignaciones a plantillas que no existen). Solo
+      // se borra la que nunca se usó y no tiene referencias.
+      const d = await decisionesDe(existing);
+      if (!d.puedeBorrarse) return res.status(409).json({ error: d.motivoNoBorrar });
       // Antes borraba solo la plantilla y dejaba shift_blocks huerfanos con
       // un template_id que ya no existe -- pese a que el dialogo de
       // confirmacion del cliente decia "se eliminaran tambien los bloques".
@@ -1042,10 +1120,11 @@ function createMotorLaboralAdminRoutes(db) {
       const diaUno = diaUnoDelBody(req.body);
       if (diaUno === undefined) return res.status(400).json({ error: 'El día 1 del ciclo tiene que ser una fecha (AAAA-MM-DD)' });
 
-      const [templateRows] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [template_id]);
+      const [templateRows] = await db.query('SELECT * FROM work_schedule_templates WHERE id = ?', [template_id]);
       if (templateRows.length === 0) {
         return res.status(404).json({ error: 'Plantilla no encontrada' });
       }
+      if (templateRows[0].archived_at) return res.status(409).json({ error: ARCHIVADA_NO_SE_ASIGNA });
       const templateTenantId = templateRows[0].tenant_id;
 
       const results = { assigned: [], skipped: [] };
@@ -1161,7 +1240,8 @@ function createMotorLaboralAdminRoutes(db) {
         return res.status(404).json({ error: 'Empleado no encontrado' });
       }
 
-      const [templateRows] = await db.query('SELECT tenant_id FROM work_schedule_templates WHERE id = ?', [template_id]);
+      const [templateRows] = await db.query('SELECT * FROM work_schedule_templates WHERE id = ?', [template_id]);
+      if (templateRows.length > 0 && templateRows[0].archived_at) return res.status(409).json({ error: ARCHIVADA_NO_SE_ASIGNA });
       const templateTenantId = templateRows.length > 0 ? templateRows[0].tenant_id : null;
       const empTenantId = tenant_id || emp[0].tenant_id || templateTenantId;
 

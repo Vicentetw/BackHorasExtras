@@ -231,6 +231,35 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-16 — E + F de plantillas (RAMAS `plantillas-uso-y-borrado` en los
+>   dos repos, SIN publicar).**
+>   - **Auditoría** (backup del 15/10 23:14, solo lectura):
+>     - 10 asignaciones de 3 personas de AVP (2519, 2329, 2525) apuntan a
+>       plantillas de las empresas de prueba 3 y 4, que ya no existen (se
+>       cargaron en julio). El cálculo las ignora. No se reparan.
+>     - 0 asignaciones a plantillas inactivas. 50 bloques huérfanos de
+>       plantillas borradas antes. 13 superposiciones de asignaciones en 3
+>       personas.
+>     - El motor ignora asignaciones a plantillas borradas O inactivas en
+>       TODAS las fechas: borrar o desactivar cambia el pasado (probado con un
+>       test de control).
+>     - Solo se versionan los 4 campos de tolerancia: editar bloques, corte o
+>       tope de una plantilla también cambia el pasado (fuera de E+F,
+>       pendiente).
+>     - **Julio (cerrado el 30/09): recalculado hoy da +146 h en 61 de 113
+>       personas** (por los cambios de reglas de octubre). Se pagaría como
+>       ajuste. Decisión del dueño.
+>   - **Cambios:**
+>     - GET `/templates/uso`.
+>     - DELETE solo si la plantilla nunca se usó y no tiene referencias (409
+>       con el motivo).
+>     - "Activa" no se puede cambiar si la plantilla tuvo asignaciones o es la
+>       por defecto.
+>     - PUT sin `active` conserva el valor (antes desactivaba).
+>     - Archivar/desarchivar (migración **20261021**: el dueño la corre al
+>       publicar). Una archivada no se asigna.
+>     - Pantalla: columna "Empleados", "Archivada", explicación al eliminar.
+>   - Probado: 14 tests nuevos + suite 1117/1117 + Chrome (empresa 6 local).
 > - **2026-10-16 — PUBLICADA la corrección de la etiqueta "Fin de horas extra"**
 >   en un fichaje repetido (backend `4d70447`, verificado en `/health`; solo
 >   2 archivos: `tiposDeFichaje.js` + su test; no cambia números).

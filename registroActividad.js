@@ -56,6 +56,8 @@ const ACCIONES = [
   ['DELETE', /\/api\/solicitudes-alta\/bloqueos\/\d+$/, 'Quitó un bloqueo de registro'],
   ['POST', /\/api\/registro\/solicitud$/, 'Envió su solicitud de alta (registro en el sistema)'],
   ['POST', /\/api\/labor-engine\/admin\/tenants\/\d+\/eliminar-prueba$/, 'Eliminó una empresa de prueba con todos sus datos'],
+  ['POST', /\/api\/labor-engine\/admin\/templates\/\d+\/archivar$/, 'Archivó una plantilla de horario (sigue valiendo para lo ya asignado)'],
+  ['POST', /\/api\/labor-engine\/admin\/templates\/\d+\/desarchivar$/, 'Desarchivó una plantilla de horario'],
   ['POST', /\/approve-cancellation$/, 'Aprobó la baja de una empresa'],
   ['POST', /\/request-cancellation$/, 'Pidió la baja del servicio'],
   ['POST', /\/api\/billing\/subscriptions\/\d+\/payments$/, 'Registró un pago'],
