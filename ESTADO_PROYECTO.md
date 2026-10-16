@@ -83,6 +83,19 @@
 > | *(El dueño dice que corrió la `20261019` el 15/10: confirmarlo en el próximo backup.)* | |
 > | *(El dueño dice que corrió la `20261020` el 15/10: confirmarlo en el próximo backup.)* | |
 >
+> **Pendiente de desarrollo (2026-10-16): horarios y plantillas (A–F).**
+> Analizado, sin implementar; esperando el sí del dueño (A cambia una pantalla publicada).
+>
+> - **A.** "Horario por defecto" de Configuración General **no hace nada**: se guarda en `companyschedule` con fecha falsa `2000-01-01` y el cálculo solo lee fechas reales. Reemplazarlo por "El horario por defecto es la plantilla X — cambiar".
+> - **B.** Sin plantilla marcada "por defecto", se usa **sin aviso la más nueva** (`findTenantTemplate`, ORDER BY is_default DESC, id DESC): crear una plantilla puede cambiar el horario de todos los que no tienen uno propio. Aviso en Inicio y en Plantillas, y al crear una plantilla.
+> - **C.** Inicio: "N personas se miden con el horario por defecto (X)", con enlace al filtro.
+> - **D.** Asignar en bloque: antes de confirmar, mostrar de qué plantilla a cuál pasa cada grupo. Caso real: el 17/09 se hicieron 156 asignaciones en 8 s y 11 de las 12 personas que hacen horas extra desde las 15:00 perdieron la plantilla "horas extras".
+> - **E. (pedido del dueño)** En Plantillas de Horario, por cada plantilla: **a cuántos empleados está aplicada hoy**, cuántos la tuvieron antes (historial), o "No está aplicada a ningún empleado". Si es la por defecto, también a cuántos mide. Así se sabe si se puede borrar.
+> - **F. Borrar una plantilla en uso rompe el pasado.** `employee_work_calendars` no tiene FK a `work_schedule_templates`. Al borrarla, las asignaciones quedan apuntando a una plantilla inexistente y los días PASADOS de esas personas se recalculan con el por defecto o "Sin horario". Con reglas o historial cargado, el borrado falla con un 500 genérico. Propuesta:
+>   - si la plantilla tiene o tuvo asignaciones, no se borra: se **archiva**, con un mensaje claro. Sigue valiendo para las asignaciones que ya tiene y no aparece para asignar de nuevo;
+>   - solo se borra la que nunca se usó (es la E).
+>   - **Ojo:** hoy "desactivar" (Activa = no) hace lo mismo que borrar. `scheduleRepository` filtra `t.active = 1`, así que quien la tenía asignada también pierde el horario de los días pasados. "Archivar" tiene que ser distinto de eso, o "desactivar" tiene que dejar de afectar a las asignaciones existentes. Antes de cambiarlo, medir en el backup cuántas asignaciones apuntan hoy a plantillas inactivas o inexistentes.
+>
 > **Pendiente de desarrollo (pedido 2026-10-15): borrar un motivo que nunca se usó.**
 > En Motivos de Ausencia, "Eliminar" solo DESACTIVA (a propósito: un motivo
 > usado es historial). Caso real: AVP tiene "Registro duplicado" (id 7), que
