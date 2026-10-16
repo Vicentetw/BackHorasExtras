@@ -231,6 +231,8 @@ app.use('/api/event-types', eventTypesRoutes(db));
 app.use('/api/regimen-horas-extra', require('./routes/regimenHorasExtra')(db));
 app.use('/api/liquidacion-horas-extra', reportesRateLimiter, require('./routes/liquidacionHorasExtra')(db, { calcularAsistencia }));
 app.use('/api/mi', reportesRateLimiter, require('./routes/miPortal')(db, { calcularAsistencia }));
+// "Días a revisar" de horas extra (2026-10-16): mismo cálculo que Presentismo.
+app.use('/api/horas-extra-revisar', reportesRateLimiter, require('./routes/horasExtraRevisar')(db, { calcularAsistencia, calcularFichajesDelDia: (tenantId, fecha) => calcularFichajesDelDia(tenantId, fecha) }));
 app.use('/api/portal-empleados', require('./routes/portalAdmin')(db));
 app.use('/api/solicitudes-alta', require('./routes/solicitudesAlta')(db));
 app.use('/api/employee-events', employeeEventsRoutes(db));
@@ -3269,6 +3271,11 @@ async function attendanceRangeHandler(req, res) {
     const limitesMensuales = await limitesAsistencia.leerLimites(db, tenantId);
 
     const detailEmployeeId = req.query.employeeId ? String(req.query.employeeId) : null;
+    // Días con horas extra ESTIMADAS (sin marcador), para la lista "Días a
+    // revisar" (routes/horasExtraRevisar.js). Solo si se piden: no cambia nada
+    // de lo que devuelve Presentismo.
+    const juntarDiasARevisar = req.query.diasARevisar === '1';
+    const diasARevisar = [];
     let employees = await userRepository.findAll({ tenantId }, db);
     if (detailEmployeeId) {
       employees = employees.filter(e => String(e.employeeId) === detailEmployeeId);
@@ -4465,6 +4472,14 @@ async function attendanceRangeHandler(req, res) {
           const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
           const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
           const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
+          if (juntarDiasARevisar && dayOvertimeSource === 'fallback' && computedOvertimeMinutes > 0) {
+            const hm = (d) => (d instanceof Date ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : null);
+            diasARevisar.push({
+              employeeId: String(employeeId), fecha: date, minutos: computedOvertimeMinutes,
+              aRevisar: dayOvertimeNeedsVerification, omitido: isManuallyOmitted, conCargaManual: manualEntriesThisDay.length > 0,
+              desde: hm(overtimeResult.start), hasta: hm(overtimeResult.end),
+            });
+          }
           // Solo si una politica cubre a esta persona ese dia (la de su regimen
           // o la de la empresa): configurar un regimen para algunos NO cambia
           // a los demas. Sin politica, el dia queda exactamente como hoy.
@@ -4945,7 +4960,8 @@ async function attendanceRangeHandler(req, res) {
       // (Xh Ym)" en el aviso de overtimeOverCap sin tener que pedir
       // /config/overtime-settings aparte.
       overtimeCapMinutes: overtimeSettings.capMinutes,
-      data: result
+      data: result,
+      ...(juntarDiasARevisar ? { diasARevisar } : {})
     });
 
   } catch (err) {
