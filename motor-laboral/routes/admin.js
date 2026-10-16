@@ -21,7 +21,7 @@ const { cruzaMedianoche } = require('../services/cicloDeTurnos');
 const { aplicarReemplazo } = require('../services/vigenciasHorario');
 const asistente = require('../services/asistenteHorario');
 const { revisarEliminacion, eliminarEmpresaPrueba, ErrorDeEliminacion } = require('../services/eliminarEmpresaPrueba');
-const { usoDePlantillas, decisiones } = require('../services/usoDePlantillas');
+const { usoDePlantillas, decisiones, listarAsignacionesRotas, quitarAsignacionesRotas } = require('../services/usoDePlantillas');
 
 const ARCHIVADA_NO_SE_ASIGNA = 'Esa plantilla está archivada: no se puede asignar. Desarchivala en Plantillas de Horario si la necesitás.';
 
@@ -338,6 +338,31 @@ function createMotorLaboralAdminRoutes(db) {
     } catch (err) {
       console.error('Motor Laboral admin templates uso error:', err);
       res.status(500).json({ error: 'Error al calcular el uso de las plantillas' });
+    }
+  });
+
+  // Asignaciones a plantillas que no existen o son de otra empresa: verlas y
+  // quitarlas (el cálculo ya las ignora: quitarlas no cambia ningún número).
+  router.get('/templates/asignaciones-rotas', requirePermission('schedules', 'read'), async (req, res) => {
+    try {
+      const tenantId = resolveTenantId(req);
+      if (tenantId === null) return res.status(400).json({ error: 'Elegí una empresa' });
+      res.json(await listarAsignacionesRotas(db, tenantId));
+    } catch (err) {
+      console.error('Motor Laboral admin asignaciones rotas error:', err);
+      res.status(500).json({ error: 'Error al leer las asignaciones' });
+    }
+  });
+
+  router.post('/templates/asignaciones-rotas/quitar', requirePermission('schedules', 'delete'), async (req, res) => {
+    try {
+      const tenantId = resolveTenantId(req);
+      if (tenantId === null) return res.status(400).json({ error: 'Elegí una empresa' });
+      const quitadas = await quitarAsignacionesRotas(db, tenantId, req.body && req.body.ids);
+      res.json({ ok: true, quitadas });
+    } catch (err) {
+      console.error('Motor Laboral admin quitar asignaciones rotas error:', err);
+      res.status(500).json({ error: 'Error al quitar las asignaciones' });
     }
   });
 

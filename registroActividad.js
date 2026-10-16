@@ -58,6 +58,7 @@ const ACCIONES = [
   ['POST', /\/api\/labor-engine\/admin\/tenants\/\d+\/eliminar-prueba$/, 'Eliminó una empresa de prueba con todos sus datos'],
   ['POST', /\/api\/labor-engine\/admin\/templates\/\d+\/archivar$/, 'Archivó una plantilla de horario (sigue valiendo para lo ya asignado)'],
   ['POST', /\/api\/labor-engine\/admin\/templates\/\d+\/desarchivar$/, 'Desarchivó una plantilla de horario'],
+  ['POST', /\/api\/labor-engine\/admin\/templates\/asignaciones-rotas\/quitar$/, 'Quitó asignaciones de horario a plantillas que ya no existen (el cálculo ya no las usaba)'],
   ['POST', /\/approve-cancellation$/, 'Aprobó la baja de una empresa'],
   ['POST', /\/request-cancellation$/, 'Pidió la baja del servicio'],
   ['POST', /\/api\/billing\/subscriptions\/\d+\/payments$/, 'Registró un pago'],

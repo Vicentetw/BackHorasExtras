@@ -236,3 +236,45 @@ test('E: asignaciones a plantillas que no existen se cuentan (no se reparan)', a
   assert.equal(a.n, 1, 'no se tocó');
   await db.query('DELETE FROM employee_work_calendars WHERE template_id = 99999999');
 });
+
+// Asignaciones rotas: el administrador las ve y las quita él mismo. El
+// cálculo ya las ignoraba, así que quitarlas no cambia ningún número.
+test('asignaciones rotas: se listan y se quitan sin cambiar el cálculo; nunca una válida ni de otra empresa', async () => {
+  // Rota: a una plantilla que no existe, encima del mes que ya tiene horario.
+  const [r] = await db.query('INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to) VALUES (?, ?, 99999998, ?, ?)',
+    [emp.agosto.id, T, '2026-08-01', '2026-08-31']);
+  const rota = r.insertId;
+  const antes = await estadoDelLunesPasado();
+
+  const lista = await (await pedir('GET', `${ADMIN}/templates/asignaciones-rotas`)).json();
+  assert.deepEqual(lista.map((x) => [x.id, x.legajo, x.motivo]), [[rota, emp.agosto.legajo, 'La plantilla ya no existe']]);
+
+  // Mandar también el id de una asignación VÁLIDA y el de una de OTRA empresa: no se tocan.
+  const [[valida]] = await db.query('SELECT id FROM employee_work_calendars WHERE employee_id = ? AND template_id = ?', [emp.agosto.id, tpl.pasada]);
+  const [[ajena]] = await db.query('SELECT id FROM employee_work_calendars WHERE employee_id = ?', [emp.ajeno.id]);
+  const res = await (await pedir('POST', `${ADMIN}/templates/asignaciones-rotas/quitar`, { ids: [rota, valida.id, ajena.id] })).json();
+  assert.equal(res.quitadas, 1);
+  const [[quedan]] = await db.query('SELECT COUNT(*) n FROM employee_work_calendars WHERE id IN (?)', [[valida.id, ajena.id]]);
+  assert.equal(quedan.n, 2, 'la válida y la ajena siguen');
+  assert.equal((await uso()).asignacionesRotas, 0);
+  assert.equal(await estadoDelLunesPasado(), antes, 'el cálculo no cambió');
+});
+
+test('asignaciones rotas: un usuario de otra empresa no las ve ni las puede quitar', async () => {
+  const [r] = await db.query('INSERT INTO employee_work_calendars (employee_id, tenant_id, template_id, valid_from, valid_to) VALUES (?, ?, 99999997, ?, ?)',
+    [emp.sinHorario.id, T, '2026-05-01', '2026-05-31']);
+  const hOtra = await getTestAuthHeaders('test-plantillas-uso-otra', { isSuperadmin: false, tenantId: OTRA, permissions: PERMISOS });
+  try {
+    const lista = await (await fetch(`${ADMIN}/templates/asignaciones-rotas`, { headers: hOtra })).json();
+    assert.equal(lista.length, 0);
+    const res = await (await fetch(`${ADMIN}/templates/asignaciones-rotas/quitar`, {
+      method: 'POST', headers: { ...hOtra, 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [r.insertId] }),
+    })).json();
+    assert.equal(res.quitadas, 0);
+    const [[sigue]] = await db.query('SELECT COUNT(*) n FROM employee_work_calendars WHERE id = ?', [r.insertId]);
+    assert.equal(sigue.n, 1);
+  } finally {
+    await db.query('DELETE FROM employee_work_calendars WHERE id = ?', [r.insertId]);
+    await deleteTestUser('test-plantillas-uso-otra');
+  }
+});

@@ -124,7 +124,7 @@ async function usoDePlantillas(db, tenantId, hoy) {
     SELECT COUNT(*) AS n FROM employee_work_calendars c
       JOIN employees e ON e.id = c.employee_id AND e.tenant_id = ?
       LEFT JOIN work_schedule_templates t ON t.id = c.template_id
-     WHERE t.id IS NULL OR (t.tenant_id <> e.tenant_id AND t.tenant_id <> 0)`, [tenantId]);
+     WHERE ${CONDICION_ROTA}`, [tenantId]);
 
   return {
     plantillas: uso,
@@ -133,6 +133,42 @@ async function usoDePlantillas(db, tenantId, hoy) {
     personasPorDefecto,
     asignacionesRotas: rotas ? Number(rotas.n) : 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Asignaciones "rotas": apuntan a una plantilla que ya no existe o que es de
+// otra empresa. El cálculo YA las ignora (scheduleRepository: JOIN con la
+// plantilla y misma empresa), así que quitarlas no cambia ningún número.
+// Caso real (backup 15/10): 10 asignaciones de 3 personas de AVP a
+// plantillas de las empresas de prueba 3 y 4, borradas con esas empresas.
+// El administrador las puede ver y quitar él mismo (pedido del dueño
+// 2026-10-16: "¿cómo lo soluciona sin llamarme?").
+// La condición es la contraria a la del cálculo: si una cambia, cambiar la otra.
+const CONDICION_ROTA = `(t.id IS NULL OR (t.tenant_id <> e.tenant_id AND t.tenant_id <> 0))`;
+
+async function listarAsignacionesRotas(db, tenantId) {
+  return q(db, `
+    SELECT c.id, e.employee_id AS legajo, e.nombre, c.template_id AS plantillaId,
+           LEFT(c.valid_from, 10) AS desde, LEFT(c.valid_to, 10) AS hasta,
+           CASE WHEN t.id IS NULL THEN 'La plantilla ya no existe' ELSE 'La plantilla es de otra empresa' END AS motivo
+      FROM employee_work_calendars c
+      JOIN employees e ON e.id = c.employee_id AND e.tenant_id = ?
+      LEFT JOIN work_schedule_templates t ON t.id = c.template_id
+     WHERE ${CONDICION_ROTA}
+     ORDER BY e.nombre, c.valid_from`, [tenantId]);
+}
+
+// Borra SOLO las que siguen rotas y son de personas de esta empresa (si
+// alguien pasa el id de una asignación válida o ajena, no se toca).
+async function quitarAsignacionesRotas(db, tenantId, ids) {
+  const limpios = (ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (!limpios.length) return 0;
+  const [r] = await db.query(`
+    DELETE c FROM employee_work_calendars c
+      JOIN employees e ON e.id = c.employee_id AND e.tenant_id = ?
+      LEFT JOIN work_schedule_templates t ON t.id = c.template_id
+     WHERE c.id IN (?) AND ${CONDICION_ROTA}`, [tenantId, limpios]);
+  return r.affectedRows;
 }
 
 const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
@@ -175,4 +211,4 @@ function decisiones(u, esPorDefecto, archivada = false) {
   };
 }
 
-module.exports = { usoDePlantillas, decisiones, plantillaPorDefectoQueRige };
+module.exports = { usoDePlantillas, decisiones, plantillaPorDefectoQueRige, listarAsignacionesRotas, quitarAsignacionesRotas };
