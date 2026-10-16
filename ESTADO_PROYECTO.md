@@ -218,6 +218,15 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-16 — PUBLICADA la corrección de la etiqueta "Fin de horas extra"**
+>   en un fichaje repetido (backend `4d70447`, verificado en `/health`; solo
+>   2 archivos: `tiposDeFichaje.js` + su test; no cambia números).
+>   **Auditoría de fichajes repetidos, mínimo de HE y navegación** en
+>   `AUDITORIA_FICHAJES_REPETIDOS.md` (solo local). Hallazgo central: hay 6
+>   criterios distintos de "repetido" y el cálculo ESTIMADO de horas extra no
+>   aplica ninguno (129 días / 41 personas de AVP cambian, en las dos
+>   direcciones). Plan R1–R5 esperando aprobación del dueño. Sin publicar:
+>   rama `filtro-convenio` (frontend).
 > - **2026-10-15 — PUBLICADA orden de horas extra, Etapa 1 + D1** (backend
 >   `0d5d865` verificado en `/health`, frontend `399887e` desplegado y
 >   verificado en el sitio). Sin migración. Pendiente: el dueño revisa 2 o 3
