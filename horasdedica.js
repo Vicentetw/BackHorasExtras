@@ -63,6 +63,7 @@ async function verificarCupoJustificacion({ tenantId, userId, eventTypeId, type,
 }
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
+const minimoHorasExtra = require('./motor-laboral/services/minimoHorasExtra');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
 const limitesAsistencia = require('./motor-laboral/services/limitesAsistencia');
 const autorizacionSalidas = require('./motor-laboral/services/autorizacionSalidas');
@@ -3170,6 +3171,11 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
 // pedido original (sus permisos y su empresa), para un rango y una empresa
 // dados. Devuelve el mismo cuerpo que veria Presentismo. Lo usa el informe de
 // liquidacion (B5): asi no existe una segunda formula que pueda dar distinto.
+// Para la vista previa del mínimo: ¿la hora extra de ese día es estimada?
+function dayOvertimeSourceBruto(overtimeResult, useEngineAsOfficial) {
+  return !useEngineAsOfficial && !!overtimeResult && overtimeResult.source === 'fallback';
+}
+
 function calcularAsistencia(req, from, to, tenantId, extra = {}) {
   return new Promise((resolve, reject) => {
     const pedido = Object.create(req);
@@ -3276,6 +3282,10 @@ async function attendanceRangeHandler(req, res) {
     // de lo que devuelve Presentismo.
     const juntarDiasARevisar = req.query.diasARevisar === '1';
     const diasARevisar = [];
+    // Vista previa del mínimo de horas extra: los días con pocas horas extra
+    // automáticas (antes de aplicar el mínimo). Solo si se piden.
+    const juntarMinutosHE = req.query.minutosHE === '1';
+    const minutosHECortos = [];
     let employees = await userRepository.findAll({ tenantId }, db);
     if (detailEmployeeId) {
       employees = employees.filter(e => String(e.employeeId) === detailEmployeeId);
@@ -3296,6 +3306,10 @@ async function attendanceRangeHandler(req, res) {
         .map(e => e.tenantId)
         .filter(tid => tid !== undefined && tid !== null)
     ));
+    // Mínimo de horas extra por día de cada empresa (minimoHorasExtra.js).
+    // Sin cargar = sin mínimo: todo queda como siempre.
+    const minimoHEPorTenant = new Map();
+    for (const tid of tenantIds) minimoHEPorTenant.set(tid, await minimoHorasExtra.leer(db, tid));
 
     // Fase 21: se suma el filtro por tenant_id (bug real -- esta consulta
     // nunca lo tuvo, una empresa veia el feriado de otra) y ciudad_id (para
@@ -4436,9 +4450,17 @@ async function attendanceRangeHandler(req, res) {
           // se cae a Legacy -- nunca se rompe el calculo oficial).
           const useEngineAsOfficial = schedule.rulesEngineMode === 'active' && engineResult != null;
 
-          const computedOvertimeMinutes = useEngineAsOfficial
+          const computedOvertimeMinutesBruto = useEngineAsOfficial
             ? (engineResult.overtimeMinutes || 0)
             : ((overtimeResult && isOvertimeAuthorized) ? overtimeResult.minutes : 0);
+          // Mínimo de horas extra de la empresa: menos que eso, el día no suma
+          // (se muestra igual en el detalle). Solo las automáticas.
+          const minimoHEDelDia = minimoHEPorTenant.get(u.tenantId) || null;
+          const conMinimoHE = minimoHorasExtra.aplicar(computedOvertimeMinutesBruto, minimoHEDelDia);
+          const computedOvertimeMinutes = conMinimoHE.minutos;
+          if (juntarMinutosHE && computedOvertimeMinutesBruto > 0 && computedOvertimeMinutesBruto <= minimoHorasExtra.MAXIMO_PERMITIDO) {
+            minutosHECortos.push({ employeeId: String(employeeId), fecha: date, minutos: computedOvertimeMinutesBruto, estimada: dayOvertimeSourceBruto(overtimeResult, useEngineAsOfficial) });
+          }
           const dayOvertimeNeedsVerification = useEngineAsOfficial
             ? false // el motor nuevo clasifica por regla, no por heuristico -- nada que "verificar"
             : !!(overtimeResult && isOvertimeAuthorized && overtimeResult.needsVerification);
@@ -4477,6 +4499,7 @@ async function attendanceRangeHandler(req, res) {
             diasARevisar.push({
               employeeId: String(employeeId), fecha: date, minutos: computedOvertimeMinutes,
               aRevisar: dayOvertimeNeedsVerification, omitido: isManuallyOmitted, conCargaManual: manualEntriesThisDay.length > 0,
+              userId: u.USERID ?? null, omitEntryId,
               desde: hm(overtimeResult.start), hasta: hm(overtimeResult.end),
             });
           }
@@ -4606,7 +4629,8 @@ async function attendanceRangeHandler(req, res) {
                 isLate,
                 lateMinutes,
                 isPartialAbsence,
-                overtimeMinutes: computedOvertimeMinutes,
+                // Sin el mínimo de la empresa: el motor nuevo no lo conoce.
+                overtimeMinutes: computedOvertimeMinutesBruto,
                 visits: multiVisit ? multiVisit.visits : null
               });
               const diffs = compareAttendanceResults({ legacy: legacyComparable, engine: engineResult, hasCustomConfig: engineHasCustomConfig });
@@ -4687,6 +4711,9 @@ async function attendanceRangeHandler(req, res) {
               overtimeMinutesBeforeCutoff: (!useEngineAsOfficial && dayOvertimeStartTime && overtimeResult && overtimeResult.minutosAntesDelCorte) || 0,
               overtimeNeedsVerification: dayOvertimeNeedsVerification,
               overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
+              // Horas extra que no sumaron por ser menos que el mínimo de la empresa (0 = ninguna).
+              overtimeBelowMinimumMinutes: conMinimoHE.bajoMinimo,
+              overtimeMinimumMinutes: minimoHEDelDia,
               // Pedido real: "el tope es una opcion solo para que salte un
               // aviso en el detalle, superó límite diario" -- overtimeMinutes
               // de arriba SIEMPRE es el valor real (ya no se trunca), esto es
@@ -4836,7 +4863,13 @@ async function attendanceRangeHandler(req, res) {
         const enc = (f) => regimenCfg.encuadreDe(internalId, f);
         const r = horasExtraRegimen.calcularPeriodo({
           dias: diasRegimen,
-          politicaDe: (f) => { const e = enc(f); return regimenCfg.politicaPara(e.conventionId, f, e.regimeId); },
+          // El mínimo de su convenio/régimen gana; si no tiene, el de la empresa.
+          politicaDe: (f) => {
+            const e = enc(f);
+            const p = regimenCfg.politicaPara(e.conventionId, f, e.regimeId);
+            const minEmpresa = minimoHEPorTenant.get(u.tenantId) || null;
+            return p && (p.minimo === null || p.minimo === undefined) && minEmpresa ? { ...p, minimo: minEmpresa } : p;
+          },
           reglasDe: (f) => { const e = enc(f); return regimenCfg.reglasDe(e.conventionId, e.regimeId); },
           autorizacionDe: (f) => regimenCfg.autorizacionPara(internalId, f),
           aprobadosDe: (periodo) => regimenCfg.aprobadosEn(internalId, periodo),
@@ -4961,7 +4994,8 @@ async function attendanceRangeHandler(req, res) {
       // /config/overtime-settings aparte.
       overtimeCapMinutes: overtimeSettings.capMinutes,
       data: result,
-      ...(juntarDiasARevisar ? { diasARevisar } : {})
+      ...(juntarDiasARevisar ? { diasARevisar } : {}),
+      ...(juntarMinutosHE ? { minutosHECortos } : {})
     });
 
   } catch (err) {
@@ -6112,6 +6146,61 @@ app.post('/config/marker-bounce-seconds', requirePermission('schedules', 'update
   } catch (err) {
     console.error('ERROR saving marker bounce:', err);
     res.status(500).json({ error: 'Error saving marker bounce' });
+  }
+});
+
+// GET/POST /config/minimo-horas-extra -- mínimo de horas extra por día de la
+// empresa (minimoHorasExtra.js). Vacío = sin mínimo (como siempre).
+app.get('/config/minimo-horas-extra', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
+  try {
+    res.json({ minutos: await minimoHorasExtra.leer(db, resolveTenantId(req)), maximo: minimoHorasExtra.MAXIMO_PERMITIDO });
+  } catch (err) {
+    console.error('ERROR leyendo minimo HE:', err);
+    res.status(500).json({ error: 'Error leyendo el mínimo de horas extra' });
+  }
+});
+
+app.post('/config/minimo-horas-extra', requirePermission('schedules', 'update'), async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId === null) return res.status(400).json({ error: 'Elegí la empresa: cada empresa tiene su propia configuración.' });
+    const crudo = req.body ? req.body.minutos : null;
+    const vacio = crudo === null || crudo === undefined || crudo === '' || Number(crudo) === 0;
+    const minutos = vacio ? null : minimoHorasExtra.normalizar(crudo);
+    if (!vacio && minutos === null) {
+      return res.status(400).json({ error: `El mínimo tiene que ser un número entero de minutos entre 1 y ${minimoHorasExtra.MAXIMO_PERMITIDO} (o vacío para no usar mínimo).` });
+    }
+    await minimoHorasExtra.guardar(db, tenantId, minutos);
+    res.json({ ok: true, minutos });
+  } catch (err) {
+    console.error('ERROR guardando minimo HE:', err);
+    res.status(500).json({ error: 'Error guardando el mínimo de horas extra' });
+  }
+});
+
+// Vista previa: con N minutos de mínimo, qué días/personas/horas dejarían de
+// contar en un período. Mismo cálculo que Presentismo (calcularAsistencia).
+app.get('/config/minimo-horas-extra/impacto', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId === null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const minutos = minimoHorasExtra.normalizar(req.query.minutos);
+    const { from, to } = req.query;
+    if (!minutos || !/^\d{4}-\d{2}-\d{2}$/.test(String(from || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(to || ''))) {
+      return res.status(400).json({ error: 'minutos (1 a 240), from y to son requeridos' });
+    }
+    const cuerpo = await calcularAsistencia(req, from, to, tenantId, { minutosHE: '1' });
+    const afectados = (cuerpo.minutosHECortos || []).filter((d) => d.minutos < minutos);
+    res.json({
+      from, to, minutos,
+      dias: afectados.length,
+      personas: new Set(afectados.map((d) => d.employeeId)).size,
+      minutosQueDejanDeContar: afectados.reduce((a, d) => a + d.minutos, 0),
+      estimadas: afectados.filter((d) => d.estimada).length,
+    });
+  } catch (err) {
+    console.error('ERROR impacto minimo HE:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Error calculando el impacto' });
   }
 });
 

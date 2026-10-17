@@ -16,6 +16,7 @@ const legajos = { estimada: 986001, corta: 986002, regreso: 986003, omitida: 986
 const MARC = { ofSalida: 986904, ofRegreso: 986903, heIni: 986909, heFin: 986910 };
 
 async function cleanup() {
+  await db.query('DELETE FROM horas_extra_revisiones WHERE tenant_id = ?', [T]).catch(() => {});
   await db.query('DELETE FROM ManualEntries WHERE tenant_id = ?', [T]);
   await db.query('DELETE FROM Checkins WHERE tenant_id = ?', [T]);
   await db.query('DELETE FROM specialusers WHERE tenant_id = ?', [T]);
@@ -31,7 +32,7 @@ const fichar = (userId, hora) => db.query('INSERT INTO Checkins (USERID, tenant_
 
 before(async () => {
   await db.query('INSERT INTO tenants (id, name, code) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name)', [T, 'Revisar HE (test)', 'revisar-he-test']);
-  h = await getTestAuthHeaders(UID, { isSuperadmin: false, tenantId: T, permissions: ['attendance:read'] });
+  h = await getTestAuthHeaders(UID, { isSuperadmin: false, tenantId: T, permissions: ['attendance:read', 'attendance:create', 'attendance:delete'] });
   await cleanup();
   // Lunes 7 a 14, horas extra desde las 15:00.
   const [t] = await db.query(`INSERT INTO work_schedule_templates (tenant_id, name, type, active, is_default, overtime_cutoff_time) VALUES (?, 'HE desde 15 (test)', 'FIXED', 1, 1, '15:00:00')`, [T]);
@@ -111,4 +112,45 @@ test('la lista no cambia lo que devuelve Presentismo', async () => {
 test('validaciones: fechas obligatorias y período máximo', async () => {
   assert.equal((await fetch(`${URL}/api/horas-extra-revisar?from=2026-09-01`, { headers: h })).status, 400);
   assert.equal((await fetch(`${URL}/api/horas-extra-revisar?from=2026-01-01&to=2026-06-30`, { headers: h })).status, 400);
+});
+
+const lista = async () => (await (await fetch(`${URL}/api/horas-extra-revisar?from=2026-09-01&to=2026-09-30`, { headers: h })).json());
+const enviar = (metodo, ruta, body) => fetch(URL + ruta, { method: metodo, headers: { ...h, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+
+test('"Está bien": queda revisado con quién y cuándo; si los minutos cambian, vuelve a pendiente; se puede deshacer', async () => {
+  const r = await enviar('POST', '/api/horas-extra-revisar/aceptar', { legajo: String(legajos.estimada), fecha: DIA, minutos: 160 });
+  assert.equal(r.status, 200, await r.clone().text());
+  let d = (await lista()).dias.find((x) => x.legajo === String(legajos.estimada));
+  assert.equal(d.revisado, true);
+  assert.equal(d.revision.decision, 'aceptado');
+  assert.match(d.revision.por, /@test\.local$/);
+  // Aceptado con otros minutos (como si hubieran llegado fichajes nuevos): pendiente otra vez.
+  await enviar('POST', '/api/horas-extra-revisar/aceptar', { legajo: String(legajos.estimada), fecha: DIA, minutos: 100 });
+  d = (await lista()).dias.find((x) => x.legajo === String(legajos.estimada));
+  assert.equal(d.revisado, false);
+  assert.equal(d.cambioDesdeRevision, 100);
+  // Deshacer.
+  await enviar('POST', '/api/horas-extra-revisar/aceptar', { legajo: String(legajos.estimada), fecha: DIA, minutos: 160 });
+  assert.equal((await enviar('DELETE', `/api/horas-extra-revisar/aceptar?legajo=${legajos.estimada}&fecha=${DIA}`)).status, 200);
+  d = (await lista()).dias.find((x) => x.legajo === String(legajos.estimada));
+  assert.equal(d.revisado, false);
+  assert.equal(d.cambioDesdeRevision, null);
+});
+
+test('"Está bien" no cambia las horas extra de Presentismo', async () => {
+  await enviar('POST', '/api/horas-extra-revisar/aceptar', { legajo: String(legajos.estimada), fecha: DIA, minutos: 160 });
+  const j = await (await fetch(`${URL}/attendance-range?from=2026-09-01&to=2026-09-30`, { headers: h })).json();
+  const fila = j.data.find((x) => String(x.employeeId) === String(legajos.estimada));
+  assert.equal(Number(fila.overtimeHours), Number((160 / 60).toFixed(2)));
+});
+
+test('la lista trae lo necesario para "No corresponde" (omitir) y deshacerlo', async () => {
+  const d = (await lista()).dias.find((x) => x.legajo === String(legajos.omitida));
+  assert.equal(d.revision.decision, 'omitido');
+  assert.ok(d.omitEntryId, 'id del omitir, para deshacer');
+  assert.equal(d.userId, legajos.omitida);
+});
+
+test('"Está bien" de un legajo de otra empresa: 404', async () => {
+  assert.equal((await enviar('POST', '/api/horas-extra-revisar/aceptar', { legajo: '1', fecha: DIA, minutos: 10 })).status, 404);
 });

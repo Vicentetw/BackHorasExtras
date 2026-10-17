@@ -19,8 +19,13 @@
 //      siempre "se fue un rato después del corte" (lo resolverá el mínimo de
 //      horas extra, R4), y llenarían la lista.
 //
-// No cambia ningún número: solo muestra. Un día ya revisado a mano (con una
-// carga de horas extra manual o "Omitir") figura como revisado.
+// No cambia ningún número: solo muestra. Un día queda "revisado" si:
+//   - se marcó "Está bien" (tabla horas_extra_revisiones, migración 20261022)
+//     y sus horas extra no cambiaron desde entonces;
+//   - se omitió ("No corresponde", ManualEntries 'omit');
+//   - tiene una carga de horas extra manual (se corrigió a mano).
+// Todo queda registrado con quién y cuándo (la revisión en su tabla, el
+// resto en ManualEntries y su auditoría, y todo en el registro de actividad).
 //
 // La información sale del MISMO cálculo que Presentismo (calcularAsistencia)
 // y de los MISMOS tipos de fichaje que muestra Presentismo
@@ -86,16 +91,36 @@ module.exports = function (db, { calcularAsistencia, calcularFichajesDelDia }) {
       const fechas = [...new Set(candidatos.map((c) => c.fecha))];
       const fichajesPorFecha = new Map();
       for (const f of fechas) fichajesPorFecha.set(f, await calcularFichajesDelDia(tenantId, f));
+      // "Está bien" ya marcados (sin la migración: ninguno).
+      const revisiones = new Map();
+      try {
+        const [filas] = await db.query(
+          `SELECT legajo, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, decision, minutos_al_revisar, revisado_por_email,
+                  DATE_FORMAT(revisado_en, '%Y-%m-%d %H:%i') AS revisado_en
+             FROM horas_extra_revisiones WHERE tenant_id = ? AND fecha BETWEEN ? AND ?`, [tenantId, from, to]);
+        for (const f of filas) revisiones.set(`${f.legajo}|${f.fecha}`, f);
+      } catch (err) {
+        if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
+      }
       const dias = [];
       for (const c of candidatos) {
         const fich = (fichajesPorFecha.get(c.fecha) || {})[c.employeeId] || [];
         const cl = clasificar(c, fich);
         if (!cl) continue;
+        const rev = revisiones.get(`${c.employeeId}|${c.fecha}`);
+        // Aceptado con otros minutos (llegaron fichajes nuevos): vuelve a revisarse.
+        const aceptadoVigente = rev && rev.decision === 'aceptado' && Number(rev.minutos_al_revisar) === c.minutos;
+        const revision = c.omitido ? { decision: 'omitido' }
+          : c.conCargaManual ? { decision: 'manual' }
+          : aceptadoVigente ? { decision: 'aceptado', por: rev.revisado_por_email, en: rev.revisado_en }
+          : null;
         dias.push({
           legajo: c.employeeId, nombre: nombres.get(c.employeeId) || '', fecha: c.fecha,
           minutos: c.minutos, tipo: cl.tipo, explicacion: cl.explicacion,
           fichajes: fich.filter((x) => x.base !== 'Repetido').map((x) => x.hora),
-          revisado: !!(c.omitido || c.conCargaManual),
+          revisado: !!revision, revision,
+          cambioDesdeRevision: rev && rev.decision === 'aceptado' && !aceptadoVigente ? Number(rev.minutos_al_revisar) : null,
+          userId: c.userId, omitEntryId: c.omitEntryId || null,
         });
       }
       // Lo que más horas pone en juego, primero.
@@ -110,6 +135,49 @@ module.exports = function (db, { calcularAsistencia, calcularFichajesDelDia }) {
     } catch (err) {
       console.error('ERROR dias a revisar:', err);
       res.status(err.status || 500).json({ error: err.status ? err.message : 'Error armando la lista de días a revisar' });
+    }
+  });
+
+  // "Está bien": deja constancia de que alguien revisó el día y las horas
+  // extra estimadas son correctas. No cambia ningún número.
+  router.post('/aceptar', requirePermission('attendance', 'create'), async (req, res) => {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const { legajo, fecha, minutos, nota } = req.body || {};
+    if (!legajo || !FECHA.test(String(fecha || '')) || !Number.isInteger(Number(minutos))) {
+      return res.status(400).json({ error: 'legajo, fecha y minutos son requeridos' });
+    }
+    try {
+      const [[emp]] = await db.query('SELECT id FROM employees WHERE tenant_id = ? AND employee_id = ?', [tenantId, legajo]);
+      if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+      await db.query(
+        `INSERT INTO horas_extra_revisiones (tenant_id, legajo, fecha, decision, minutos_al_revisar, nota, revisado_por, revisado_por_email)
+         VALUES (?, ?, ?, 'aceptado', ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE decision = 'aceptado', minutos_al_revisar = VALUES(minutos_al_revisar), nota = VALUES(nota),
+           revisado_por = VALUES(revisado_por), revisado_por_email = VALUES(revisado_por_email), revisado_en = CURRENT_TIMESTAMP`,
+        [tenantId, String(legajo), fecha, Number(minutos), nota ? String(nota).slice(0, 255) : null,
+          req.appUser ? req.appUser.id : null, req.appUser ? req.appUser.email : null]);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err.code === 'ER_NO_SUCH_TABLE') return res.status(503).json({ error: 'Falta correr la migración 20261022_revisiones_horas_extra.sql para poder marcar "Está bien".' });
+      console.error('ERROR aceptar dia a revisar:', err);
+      res.status(500).json({ error: 'No se pudo guardar la revisión' });
+    }
+  });
+
+  // Deshacer un "Está bien" (el día vuelve a la lista de pendientes).
+  router.delete('/aceptar', requirePermission('attendance', 'delete'), async (req, res) => {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const { legajo, fecha } = req.query;
+    if (!legajo || !FECHA.test(String(fecha || ''))) return res.status(400).json({ error: 'legajo y fecha son requeridos' });
+    try {
+      await db.query('DELETE FROM horas_extra_revisiones WHERE tenant_id = ? AND legajo = ? AND fecha = ?', [tenantId, String(legajo), fecha]);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err.code === 'ER_NO_SUCH_TABLE') return res.json({ ok: true });
+      console.error('ERROR deshacer revision:', err);
+      res.status(500).json({ error: 'No se pudo deshacer' });
     }
   });
 
