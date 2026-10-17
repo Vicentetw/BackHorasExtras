@@ -268,6 +268,11 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-16 (noche) — PUBLICADO: avisos del titular** (frontend `bae0973`).
+>   En Empresas, aviso "N empresas no tienen titular" + botón "Elegir titular"
+>   en la fila. En Usuarios y Roles, al invitar a alguien para una empresa sin
+>   titular, se ofrece nombrarlo. A propósito NO va en la campanita (la Demo
+>   nunca tendrá titular). Falta que el dueño elija a tupctw@gmail.com para AVP.
 > - **2026-10-16 (noche) — PUBLICADO "Días a revisar"** (backend `e792580`,
 >   frontend `39e78a6`). Horas Extra por Régimen → botón "Días a revisar":
 >   - entran los regresos oficiales, particulares o de campaña contados como
