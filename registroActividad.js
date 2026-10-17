@@ -79,6 +79,9 @@ const ACCIONES = [
   // En la base las justificaciones se llaman "user-exclusions" (nombre
   // histórico); para quien lee el registro son justificaciones.
   ['PUT', /^\/config\/limites-asistencia$/, 'Cambió los límites de llegadas tarde y salidas'],
+  ['POST', /^\/config\/minimo-horas-extra$/, 'Cambió el mínimo de horas extra por día de la empresa'],
+  ['POST', /\/api\/horas-extra-revisar\/aceptar$/, 'Revisó un día de horas extra y lo marcó "Está bien"'],
+  ['DELETE', /\/api\/horas-extra-revisar\/aceptar/, 'Deshizo la revisión de un día de horas extra'],
   ['POST', /^\/salidas\/autorizaciones$/, 'Autorizó / no autorizó salidas particulares'],
   ['POST', /^\/salidas\/justificaciones$/, 'Justificó salidas particulares con un motivo (o quitó la justificación)'],
   ['PUT', /^\/config\/salidas-autorizacion$/, 'Cambió si las salidas particulares requieren autorización'],
