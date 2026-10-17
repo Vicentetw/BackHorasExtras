@@ -6,7 +6,18 @@
 >
 > ### Dónde quedamos (2026-10-16, fin del día)
 >
-> **Sin publicar:** nada (al 16/10 noche, todo lo terminado está publicado).
+> **Sin publicar (esperan el "publicá" del dueño):** ramas `minimo-y-revisar`
+> (backend `e711b00`, frontend `acf6601`). Probado: suite 1135/1135 + Chrome.
+> - **Mínimo de horas extra por día:**
+>   - qué hace: por empresa (Convenios) y con vista previa; un convenio con
+>     máximos puede tener el suyo. Debajo del mínimo, el día no suma y lo
+>     muestra el detalle;
+>   - dónde vale lo mismo: Presentismo, Horas Extra, portal y liquidación;
+>   - por defecto: sin mínimo (como hoy).
+> - **"Días a revisar" con un clic:** "Está bien", "No corresponde" (Omitir),
+>   "Corregir…" y "Deshacer". Necesita la migración **20261022** (sin ella,
+>   "Está bien" avisa que falta).
+>
 >
 > **Siguiente (en este orden, aprobado por el dueño):**
 > 1. Etapa 3 de días a revisar: resolver con un clic (aceptar la propuesta,
