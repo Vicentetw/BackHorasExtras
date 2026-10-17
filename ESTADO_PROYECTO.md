@@ -1,13 +1,14 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-16 noche — ver "Dónde quedamos" justo abajo)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-17 — ver "Dónde quedamos" justo abajo)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 >
-> ### Dónde quedamos (2026-10-16, fin del día)
+> ### Dónde quedamos (2026-10-17)
 >
-> **Sin publicar (esperan el "publicá" del dueño):** ramas `minimo-y-revisar`
-> (backend `e711b00`, frontend `acf6601`). Probado: suite 1135/1135 + Chrome.
+> **PUBLICADO 2026-10-17:** rama `minimo-y-revisar` (backend merge `7e37d6d`
+> verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
+> Probado: suite 1135/1135 + Chrome. Nada sin publicar.
 > - **Mínimo de horas extra por día:**
 >   - qué hace: por empresa (Convenios) y con vista previa; un convenio con
 >     máximos puede tener el suyo. Debajo del mínimo, el día no suma y lo
@@ -19,15 +20,12 @@
 >   "Está bien" avisa que falta).
 >
 >
-> **Siguiente (en este orden, aprobado por el dueño):**
-> 1. Etapa 3 de días a revisar: resolver con un clic (aceptar la propuesta,
->    corregir u omitir), reutilizando "HE manual"/"Omitir", que ya guardan
->    quién y cuándo.
+> **Siguiente (en este orden, aprobado por el dueño; analizar primero que
+> sirva para todas las empresas):**
 > 2. Regla "fin de HE (10) sin inicio (9)", configurable por empresa. En AVP
 >    son 294 días por mes (61 personas). Cambia números: antes, comparar el
 >    antes y después sobre el backup.
-> 3. Regla "un regreso oficial no cuenta como hora extra". Mínimo de horas
->    extra (R4). Plan R1–R5 de fichajes repetidos
+> 3. Regla "un regreso oficial no cuenta como hora extra". Plan R1–R5 de fichajes repetidos
 >    (`AUDITORIA_FICHAJES_REPETIDOS.md`, solo local).
 > 4. Plantillas: A–D pendientes (ver "Pendiente de desarrollo" más abajo) y
 >    G = editar una plantilla con fecha de vigencia.
@@ -47,7 +45,9 @@
 > **AGUILAR 3056** tiene bien su plantilla rotativa ("2M 2T 2N 4F", día 1 =
 > 11/09/2026); coincide con sus fichajes de octubre.
 >
-> **Migración pendiente en producción:** `20261021_archivar_plantillas.sql`.
+> **Migraciones pendientes en producción:** `20261021_archivar_plantillas.sql`
+> y `20261022_revisiones_horas_extra.sql` (el dueño la intentó el 17/10 desde
+> `main` cuando todavía estaba solo en la rama; ya está en `main`).
 >
 > (`CLAUDE.md`, en la raíz de este repo, lo carga Claude Code solo al empezar
 > y manda acá. Si vas a tocar Presentismo, Salidas, horas extra o el portal:
@@ -279,6 +279,11 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-17 — PUBLICADO mínimo de horas extra + resolver "Días a
+>   revisar" con un clic** (backend merge `7e37d6d`, `/health` verificado y
+>   rutas nuevas responden 401 sin sesión; frontend `acf6601` desplegado,
+>   chunk verificado en el hosting). Falta que el dueño corra la migración
+>   20261022 (sin ella, solo "Está bien" avisa que falta).
 > - **2026-10-16 (noche) — PUBLICADO: avisos del titular** (frontend `bae0973`).
 >   En Empresas, aviso "N empresas no tienen titular" + botón "Elegir titular"
 >   en la fila. En Usuarios y Roles, al invitar a alguien para una empresa sin
