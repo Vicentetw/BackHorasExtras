@@ -4375,6 +4375,9 @@ async function attendanceRangeHandler(req, res) {
             cutoffMinutes: effectiveCutoffMinutes,
             capMinutes: effectiveCapMinutes,
             cutoffNextDay,
+            // El horario de esta persona hoy (para "trabajó su jornada"),
+            // en vez de un "7 a 14" fijo.
+            jornada: overtimeCalc.jornadaDe(schedule),
             // Solo el corte CARGADO en la plantilla recorta las HE por marcador
             // (ver resolveDailyOvertime).
             explicitCutoffMinutes: schedule && schedule.overtimeCutoffTime ? timeToMinutes(schedule.overtimeCutoffTime) : null
@@ -4606,7 +4609,7 @@ async function attendanceRangeHandler(req, res) {
               // Solo fichajes: con "lo que supera el horario" configurado, ese
               // cálculo; si no, el estimado de siempre.
               candidato = cfgHEDelDia.metodo === configHorasExtra.POR_DEFECTO
-                ? overtimeCalc.computeDailyOvertime(overtimeChecks, { cutoffMinutes: effectiveCutoffMinutes, capMinutes: effectiveCapMinutes, cutoffNextDay })
+                ? overtimeCalc.computeDailyOvertime(overtimeChecks, { cutoffMinutes: effectiveCutoffMinutes, capMinutes: effectiveCapMinutes, cutoffNextDay, jornada: overtimeCalc.jornadaDe(schedule) })
                 : excesoComoResultado(cfgHEDelDia.contarLlegadaAnticipada);
             }
             const inicio = candidato && (candidato.markerStart || candidato.start);

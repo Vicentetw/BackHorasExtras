@@ -120,8 +120,17 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   // vale el último par. Ej.: el 10 apretado dos veces cerraba la HE en el
   // primer par (16:04:12) y dejaba un regreso suelto; ahora cierra en el
   // último (16:04:22). Verificado evento por evento contra el código anterior.
-  assert.equal(sumOvertime.toFixed(2), '2576.77', 'suma total de horas extras del mes');
-  assert.equal(withOvertime, 113, 'cantidad de empleados con horas extras > 0');
+  // Actualizado 2026-10-17: 2576.77 -> 2801.06. Se quitó la regla escrita a
+  // mano "para estimar horas extra tiene que haber un fichaje entre las 7 y las
+  // 14" (pedido del dueño: que valga el horario de cada empresa). Ahora es "un
+  // fichaje dentro de SU horario (desde 1 h antes de la entrada)". Sube porque
+  // la regla vieja descartaba el día entero de quien entra unos minutos antes
+  // de las 7 y sale después de las 14 con solo dos fichajes (ej. 06:55 y
+  // 18:27, horario 7 a 14: 4 h 27 min que contaban 0). Son estimadas: quedan
+  // "a revisar". Verificado caso por caso en septiembre (61 personas).
+  assert.equal(sumOvertime.toFixed(2), '2801.06', 'suma total de horas extras del mes');
+  // 113 -> 118 el 2026-10-17, por lo mismo (regla 7 a 14 quitada).
+  assert.equal(withOvertime, 118, 'cantidad de empleados con horas extras > 0');
 });
 
 test('/attendance-range junio 2026: Perrotta (legajo 2525) da los valores conocidos', async (t) => {
