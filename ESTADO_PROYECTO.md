@@ -10,6 +10,12 @@
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
 > Probado: suite 1135/1135 + Chrome.
 >
+> **PUBLICADO 2026-10-18: TLS verificado de la base** (merge `f6fcffe`): con
+> `MYSQL_SSL=require` + `MYSQL_SSL_CA` (el "sello" de la autoridad de la base,
+> que muestra Seguridad → "Probar verificación del certificado"). En producción
+> todavía está `no-verify`: el dueño lo cambia en Render. Guía para mudar o
+> crear servidores: `MUDAR_O_CREAR_SERVIDORES.md`.
+>
 > **PUBLICADO 2026-10-18: Fase 1, segundo factor — ramas `segundo-factor`** (merge `343e1fc`; backend
 > `1522d27`, frontend `7b1195a`). Suite 1163/1163 + Chrome.
 > - El superadmin decide por empresa (apagado / opcional / obligatorio) y para
