@@ -1,4 +1,6 @@
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
 const { initFirebaseAdmin } = require('../../firebaseAuth');
 
 // Secuencia compartida "crear usuario de Firebase (o reusar si ya existe) +
@@ -14,17 +16,17 @@ async function createInvitedUser({ email, tenantId, isSuperadmin, roleId, permis
   // El alta manual (routes/appUsers.js) siempre llega aca DESPUES de
   // firebaseAuthMiddleware, que ya llama a esto. El alta autoservice
   // (routes/public.js) salta ESE middleware a proposito (es publica, sin
-  // Firebase token) -- sin este llamado, admin.auth() explotaria sin
+  // Firebase token) -- sin este llamado, getAuth() explotaria sin
   // inicializar en el primer pedido que le llegue al servidor.
   initFirebaseAdmin();
 
   let firebaseUser;
   try {
-    firebaseUser = await admin.auth().getUserByEmail(email);
+    firebaseUser = await getAuth().getUserByEmail(email);
   } catch (err) {
     if (err.code !== 'auth/user-not-found') throw err;
     const tempPassword = Math.random().toString(36).slice(-10) + 'A1!';
-    firebaseUser = await admin.auth().createUser({ email, password: tempPassword });
+    firebaseUser = await getAuth().createUser({ email, password: tempPassword });
   }
 
   const [existing] = await db.query('SELECT id FROM app_users WHERE firebase_uid = ?', [firebaseUser.uid]);
@@ -53,7 +55,7 @@ async function createInvitedUser({ email, tenantId, isSuperadmin, roleId, permis
   // generarlo, no se considera un error fatal del alta.
   let resetLink = null;
   try {
-    resetLink = await admin.auth().generatePasswordResetLink(email);
+    resetLink = await getAuth().generatePasswordResetLink(email);
   } catch (err) {
     console.warn('No se pudo generar el link de restablecimiento:', err.message);
   }

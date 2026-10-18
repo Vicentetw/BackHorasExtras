@@ -42,7 +42,11 @@
 // Las solicitudes de alta, la prueba de aceptación de los términos, el
 // registro de actividad y los avisos de MercadoPago se quedan, con la empresa
 // en blanco (tenant_id = NULL): son constancias, no datos de la empresa.
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const { initFirebaseAdmin } = require('../../firebaseAuth');
 
 class ErrorDeEliminacion extends Error {
@@ -117,7 +121,7 @@ async function revisarEliminacion(db, tenantId) {
 /**
  * Borra la empresa y todo lo suyo, en una transacción.
  * @param confirmacion  el nombre de la empresa, escrito a mano por el superadmin
- * @param deps.auth     admin.auth() (en los tests, uno falso)
+ * @param deps.auth     getAuth() (en los tests, uno falso)
  */
 async function eliminarEmpresaPrueba(db, tenantId, confirmacion, { auth } = {}) {
   const revision = await revisarEliminacion(db, tenantId);
@@ -207,7 +211,7 @@ async function eliminarEmpresaPrueba(db, tenantId, confirmacion, { auth } = {}) 
   let loginsBorrados = 0;
   if (uidsDeLogin.length) {
     try {
-      auth = auth || (initFirebaseAdmin(), admin.apps.length ? admin.auth() : null);
+      auth = auth || (initFirebaseAdmin(), getApps().length ? getAuth() : null);
       if (auth) loginsBorrados = (await auth.deleteUsers(uidsDeLogin)).successCount;
     } catch (err) {
       console.error('Eliminar empresa de prueba: no se pudieron borrar las cuentas de login:', err.message);

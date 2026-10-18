@@ -6,7 +6,11 @@ require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 const { borrarSolicitudesVencidas } = require('../motor-laboral/services/registroService');
@@ -20,20 +24,20 @@ const emailDe = (clave) => `${CUENTAS[clave]}@registro-test.example.com`;
 let hSuper; let documentos; const headers = {}; let tenantCreado = null;
 
 function initAdmin() {
-  if (admin.apps.length) return;
+  if (getApps().length) return;
   const json = process.env.FIREBASE_SERVICE_ACCOUNT;
-  admin.initializeApp({ credential: admin.credential.cert(json ? JSON.parse(json) : require(path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_PATH))) });
+  initializeApp({ credential: cert(json ? JSON.parse(json) : require(path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_PATH))) });
 }
 // Cuenta de login SIN usuario en el sistema (como alguien que recién se registró).
 async function cuentaSinAcceso(clave, emailVerified) {
   initAdmin();
   const uid = CUENTAS[clave];
-  await admin.auth().deleteUser(uid).catch(() => {});
-  await admin.auth().createUser({ uid, email: emailDe(clave), emailVerified, password: 'Prueba-2026!' });
+  await getAuth().deleteUser(uid).catch(() => {});
+  await getAuth().createUser({ uid, email: emailDe(clave), emailVerified, password: 'Prueba-2026!' });
   return tokenDe(uid);
 }
 async function tokenDe(uid) {
-  const custom = await admin.auth().createCustomToken(uid);
+  const custom = await getAuth().createCustomToken(uid);
   const r = await (await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${WEB_API_KEY}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: custom, returnSecureToken: true }),
   })).json();
@@ -56,7 +60,7 @@ before(async () => {
 
 after(async () => {
   initAdmin();
-  for (const uid of Object.values(CUENTAS)) await admin.auth().deleteUser(uid).catch(() => {});
+  for (const uid of Object.values(CUENTAS)) await getAuth().deleteUser(uid).catch(() => {});
   const uids = Object.values(CUENTAS);
   await db.query('DELETE FROM aceptaciones_legales WHERE firebase_uid IN (?)', [uids]);
   await db.query('DELETE FROM signup_leads WHERE firebase_uid IN (?)', [uids]);
@@ -145,7 +149,7 @@ test('spam: bloquear deshabilita la cuenta y no deja volver a pedir; borrar elim
   assert.equal(b.ok, true);
   assert.equal(b.loginDeshabilitado, true);
   initAdmin();
-  assert.equal((await admin.auth().getUser(CUENTAS.spam)).disabled, true);
+  assert.equal((await getAuth().getUser(CUENTAS.spam)).disabled, true);
   assert.equal((await leadDe('spam')).status, 'blocked');
   // Bloquear un dominio público no se permite.
   headers.spam2 = await cuentaSinAcceso('spam2', true);
@@ -156,7 +160,7 @@ test('spam: bloquear deshabilita la cuenta y no deja volver a pedir; borrar elim
   assert.equal(d.ok, true);
   assert.equal(d.loginBorrado, true);
   assert.equal(await leadDe('spam2'), undefined);
-  await assert.rejects(admin.auth().getUser(CUENTAS.spam2));
+  await assert.rejects(getAuth().getUser(CUENTAS.spam2));
   // El email bloqueado figura en la lista.
   const bl = (await (await pedir(hSuper, 'GET', '/api/solicitudes-alta/bloqueos/lista')).json()).bloqueos;
   assert.ok(bl.some((x) => x.valor === emailDe('spam')));
@@ -176,7 +180,7 @@ test('limpieza: una solicitud del sistema sin aprobar de más de 30 días se bor
   assert.ok(n >= 1);
   assert.equal(await leadDe('vieja'), undefined);
   initAdmin();
-  await assert.rejects(admin.auth().getUser(CUENTAS.vieja));
+  await assert.rejects(getAuth().getUser(CUENTAS.vieja));
 });
 
 test('una cuenta deshabilitada ve "deshabilitado", no el registro', async () => {

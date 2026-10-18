@@ -37,7 +37,11 @@
 // Recién entonces se crea la cuenta con Google ya vinculado; el navegador
 // después entra con ese mismo certificado (eso es un ingreso, no un alta, así
 // que Firebase lo permite con el alta cerrada).
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const { initFirebaseAdmin } = require('../../firebaseAuth');
 const { ErrorDeRegistro, estaBloqueado } = require('./registroService');
 
@@ -116,13 +120,13 @@ const YA_TIENE_CUENTA = 'Ese email ya tiene una cuenta: tocá "Ingresar" (o "¿O
 // Alta con email y contraseña
 // ---------------------------------------------------------------------------
 /**
- * @param deps.auth  admin.auth() (en los tests, uno falso)
+ * @param deps.auth  getAuth() (en los tests, uno falso)
  * @returns {{ uid: string, email: string }}
  */
 async function crearCuentaConEmail(db, datos, { auth } = {}) {
   const { email, password } = validarCuentaConEmail(datos);
   await controlarBloqueo(db, email);
-  auth = auth || (initFirebaseAdmin(), admin.auth());
+  auth = auth || (initFirebaseAdmin(), getAuth());
   let usuario;
   try {
     usuario = await auth.createUser({ email, password, emailVerified: false });
@@ -155,7 +159,7 @@ async function verificarTokenDeGoogle(idToken) {
 }
 
 /**
- * @param deps.auth             admin.auth() (en los tests, uno falso)
+ * @param deps.auth             getAuth() (en los tests, uno falso)
  * @param deps.verificarGoogle  verificarTokenDeGoogle (en los tests, uno falso)
  */
 async function crearCuentaConGoogle(db, datos, { auth, verificarGoogle = verificarTokenDeGoogle } = {}) {
@@ -169,7 +173,7 @@ async function crearCuentaConGoogle(db, datos, { auth, verificarGoogle = verific
   validarEmail(email);
   await controlarBloqueo(db, email);
 
-  auth = auth || (initFirebaseAdmin(), admin.auth());
+  auth = auth || (initFirebaseAdmin(), getAuth());
   // ¿Ya existe una cuenta con ese email o con esa cuenta de Google?
   for (const buscar of [() => auth.getUserByEmail(email), () => auth.getUserByProviderUid('google.com', g.sub)]) {
     try {
@@ -221,7 +225,7 @@ function esCuentaDeRegistroSinUso(u, ahora, dias = DIAS_PARA_BORRAR_SIN_USO) {
 }
 
 async function borrarCuentasSinUso(db, { auth, dias = DIAS_PARA_BORRAR_SIN_USO, ahora = Date.now() } = {}) {
-  auth = auth || (initFirebaseAdmin(), admin.apps.length ? admin.auth() : null);
+  auth = auth || (initFirebaseAdmin(), getApps().length ? getAuth() : null);
   if (!auth) return 0;
   const candidatas = [];
   let pagina;

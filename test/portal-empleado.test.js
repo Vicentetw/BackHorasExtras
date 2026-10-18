@@ -9,7 +9,11 @@
 require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers/firebaseTestAuth');
 
@@ -32,7 +36,7 @@ async function borrarCuentaInvitada() {
     await db.query('DELETE FROM user_permissions WHERE user_id IN (SELECT id FROM app_users WHERE email = ?)', [EMAIL_INVITADO]);
     await db.query('DELETE FROM app_users WHERE email = ?', [EMAIL_INVITADO]);
   }
-  try { const fu = await admin.auth().getUserByEmail(EMAIL_INVITADO); await admin.auth().deleteUser(fu.uid); } catch { /* no existia */ }
+  try { const fu = await getAuth().getUserByEmail(EMAIL_INVITADO); await getAuth().deleteUser(fu.uid); } catch { /* no existia */ }
 }
 
 async function cleanup() {

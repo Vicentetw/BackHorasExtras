@@ -1,0 +1,14 @@
+# Hallazgos de gitleaks REVISADOS uno por uno el 2026-10-18 (Fase 0 de
+# PLAN_LISTO_PARA_VENDER.md). Ninguno es un secreto:
+#  - gcp-api-key: la clave WEB de Firebase. Es publica por diseño (va dentro
+#    de la pagina que descarga cualquier navegador); la seguridad la dan las
+#    reglas de Firebase y la restriccion de la clave en Google Cloud.
+#  - generic-api-key en registro-seguro.test.js:188: un idToken FALSO, armado
+#    para probar que el servidor lo rechaza.
+# Cualquier hallazgo NUEVO hace fallar el control de secretos de GitHub
+# (.github/workflows/secretos.yml): hay que revisarlo antes de seguir.
+dee3a2dcbc499b53af3f1b5c83bff393d1cab5b6:test/registro-seguro.test.js:generic-api-key:188
+dee3a2dcbc499b53af3f1b5c83bff393d1cab5b6:test/registro-seguro.test.js:gcp-api-key:19
+04fa03108dadf17b4073dcedc7b9743d73107c15:test/registro-en-sistema.test.js:gcp-api-key:15
+51a24276f0e8d3c3d234cc208f94fa5129f08315:motor-laboral/services/firebaseEmail.js:gcp-api-key:21
+0894060e8366e8bb606ec8817135beca95e3b5b0:test-helpers/firebaseTestAuth.js:gcp-api-key:10

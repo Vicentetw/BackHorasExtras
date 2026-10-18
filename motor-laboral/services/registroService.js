@@ -18,7 +18,11 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const { initFirebaseAdmin } = require('../../firebaseAuth');
 
 const DIAS_PARA_BORRAR_SIN_APROBAR = 30;
@@ -183,7 +187,7 @@ async function cuentaDeLoginSinAcceso(db, uid) {
 
 async function borrarCuentaDeLogin(uid) {
   initFirebaseAdmin();
-  try { await admin.auth().deleteUser(uid); return true; } catch (err) {
+  try { await getAuth().deleteUser(uid); return true; } catch (err) {
     if (err && err.code === 'auth/user-not-found') return true;
     console.error('Registro: no se pudo borrar la cuenta de login', err.message);
     return false;
@@ -223,7 +227,7 @@ async function bloquearSolicitud(db, leadId, { porDominio = false, motivo = null
   let loginDeshabilitado = false;
   if (await cuentaDeLoginSinAcceso(db, lead.firebase_uid)) {
     initFirebaseAdmin();
-    try { await admin.auth().updateUser(lead.firebase_uid, { disabled: true }); loginDeshabilitado = true; } catch (err) {
+    try { await getAuth().updateUser(lead.firebase_uid, { disabled: true }); loginDeshabilitado = true; } catch (err) {
       if (err && err.code !== 'auth/user-not-found') console.error('Registro: no se pudo deshabilitar la cuenta', err.message);
     }
   }

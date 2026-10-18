@@ -14,6 +14,12 @@
 // logs pasen unos dias limpios con uso real, se cambia a la cabecera que
 // bloquea de verdad.
 //
+// 2026-10-18 (Fase 0 de PLAN_LISTO_PARA_VENDER.md): pasada a BLOQUEAR, despues
+// de recorrer con la politica bloqueando las 31 pantallas (administrador y
+// superadmin), el PDF, el Excel, el detalle, el login con Google y el registro
+// con captcha: cero bloqueos. Los reportes siguen llegando aca, ahora de lo
+// que el navegador bloqueo de verdad ("modo enforce").
+//
 // Publica (sin login) porque la manda el navegador por su cuenta. Para que
 // nadie pueda inundar el log: cuerpo chico, y cada violacion distinta se
 // anota una sola vez por hora (con cuantas veces se repitio).
