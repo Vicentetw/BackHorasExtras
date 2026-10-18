@@ -236,6 +236,7 @@ app.use('/api/regimen-horas-extra', require('./routes/regimenHorasExtra')(db));
 app.use('/api/liquidacion-horas-extra', reportesRateLimiter, require('./routes/liquidacionHorasExtra')(db, { calcularAsistencia }));
 app.use('/api/mi', reportesRateLimiter, require('./routes/miPortal')(db, { calcularAsistencia }));
 // "Días a revisar" de horas extra (2026-10-16): mismo cálculo que Presentismo.
+app.use('/api/segundo-factor', require('./routes/segundoFactor')(db));
 app.use('/api/config-horas-extra', reportesRateLimiter, require('./routes/configHorasExtra')(db, { calcularAsistencia }));
 app.use('/api/horas-extra-revisar', reportesRateLimiter, require('./routes/horasExtraRevisar')(db, { calcularAsistencia, calcularFichajesDelDia: (tenantId, fecha) => calcularFichajesDelDia(tenantId, fecha) }));
 app.use('/api/portal-empleados', require('./routes/portalAdmin')(db));

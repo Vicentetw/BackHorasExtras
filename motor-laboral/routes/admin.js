@@ -16,6 +16,9 @@ const { computeAttendanceResult } = require('../services/timeClassifier');
 const { DAY_TYPES } = require('../services/dayTypeRuleResolver');
 const templateConfigHistoryRepository = require('../repositories/templateConfigHistoryRepository');
 const { MODULOS, modulosDe, setModulo } = require('../services/modulos');
+const segundoFactor = require('../services/segundoFactor');
+const { initFirebaseAdmin } = require('../../firebaseAuth');
+const { getAuth } = require('firebase-admin/auth');
 const turnosRepository = require('../repositories/turnosRepository');
 const { cruzaMedianoche } = require('../services/cicloDeTurnos');
 const { aplicarReemplazo } = require('../services/vigenciasHorario');
@@ -197,6 +200,92 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
+  // --- Segundo factor (Fase 1, 2026-10-18; ver services/segundoFactor.js) ---
+  // Solo el superadmin decide, empresa por empresa y para la plataforma.
+  // Para prender 'opcional' u 'obligatorio' el método TOTP tiene que estar
+  // habilitado en el proyecto de Firebase: si no, nadie podría activarlo y un
+  // 'obligatorio' dejaría a todos afuera.
+  const authFirebase = () => { initFirebaseAdmin(); return getAuth(); };
+  const exigirFirebaseListo = async (nivel) => {
+    if (nivel === 'apagado') return null;
+    const { totpHabilitado } = await segundoFactor.estadoFirebase(authFirebase());
+    return totpHabilitado ? null : 'Primero habilitá el segundo factor en Firebase (pantalla Seguridad): sin eso nadie lo puede activar.';
+  };
+
+  router.get('/segundo-factor/firebase', requireSuperadmin, async (req, res) => {
+    try {
+      res.json({ ...(await segundoFactor.estadoFirebase(authFirebase())), plataforma: await segundoFactor.nivelDePlataforma(db) });
+    } catch (err) {
+      console.error('segundo factor firebase estado error:', err);
+      res.status(502).json({ error: 'No se pudo consultar Firebase: ' + err.message });
+    }
+  });
+
+  // Prende el método TOTP en el PROYECTO de Firebase. No obliga a nadie: solo
+  // permite activarlo. Queda en el registro de actividad.
+  router.post('/segundo-factor/firebase/habilitar', requireSuperadmin, async (req, res) => {
+    try {
+      res.json(await segundoFactor.habilitarEnFirebase(authFirebase()));
+    } catch (err) {
+      console.error('segundo factor habilitar firebase error:', err);
+      res.status(502).json({ error: 'Firebase no lo permitió: ' + err.message });
+    }
+  });
+
+  router.put('/segundo-factor/plataforma', requireSuperadmin, async (req, res) => {
+    const nivel = segundoFactor.nivelValido((req.body || {}).nivel);
+    if (!nivel) return res.status(400).json({ error: `nivel debe ser uno de: ${segundoFactor.NIVELES.join(', ')}` });
+    try {
+      const problema = await exigirFirebaseListo(nivel);
+      if (problema) return res.status(400).json({ error: problema });
+      await segundoFactor.guardarNivelDePlataforma(db, nivel);
+      res.json({ ok: true, nivel });
+    } catch (err) {
+      console.error('segundo factor plataforma error:', err);
+      res.status(500).json({ error: 'No se pudo guardar' });
+    }
+  });
+
+  router.get('/tenants/:id/segundo-factor', requireSuperadmin, async (req, res) => {
+    try {
+      res.json({ nivel: await segundoFactor.nivelDeEmpresa(db, Number(req.params.id)) });
+    } catch (err) {
+      console.error('segundo factor empresa error:', err);
+      res.status(500).json({ error: 'No se pudo leer' });
+    }
+  });
+
+  router.put('/tenants/:id/segundo-factor', requireSuperadmin, async (req, res) => {
+    const tenantId = Number(req.params.id);
+    const nivel = segundoFactor.nivelValido((req.body || {}).nivel);
+    if (!nivel) return res.status(400).json({ error: `nivel debe ser uno de: ${segundoFactor.NIVELES.join(', ')}` });
+    try {
+      const [[t]] = await db.query('SELECT id FROM tenants WHERE id = ?', [tenantId]);
+      if (!t) return res.status(404).json({ error: 'Empresa no encontrada' });
+      const problema = await exigirFirebaseListo(nivel);
+      if (problema) return res.status(400).json({ error: problema });
+      await segundoFactor.guardarNivelDeEmpresa(db, tenantId, nivel);
+      res.json({ ok: true, nivel });
+    } catch (err) {
+      console.error('segundo factor empresa guardar error:', err);
+      res.status(500).json({ error: 'No se pudo guardar' });
+    }
+  });
+
+  // Quien perdió el celular: se le sacan los segundos factores y se cierran
+  // sus sesiones. Solo el superadmin; queda en el registro de actividad.
+  router.post('/usuarios/:id/segundo-factor/resetear', requireSuperadmin, async (req, res) => {
+    try {
+      const [[u]] = await db.query('SELECT id, firebase_uid, email FROM app_users WHERE id = ?', [Number(req.params.id)]);
+      if (!u || !u.firebase_uid) return res.status(404).json({ error: 'Usuario no encontrado' });
+      await segundoFactor.resetear(authFirebase(), u.firebase_uid);
+      res.json({ ok: true, email: u.email });
+    } catch (err) {
+      console.error('segundo factor resetear error:', err);
+      res.status(502).json({ error: 'No se pudo resetear: ' + err.message });
+    }
+  });
+
   // --- Titular de la empresa (migracion 20261011) ---
   // Quien paga y el UNICO de la empresa que puede pedir la baja. Lo designa
   // SOLO el superadmin (no el formulario publico, que no es confiable),
@@ -207,11 +296,20 @@ function createMotorLaboralAdminRoutes(db) {
   router.get('/tenants/:id/usuarios', requireSuperadmin, async (req, res) => {
     try {
       const [rows] = await db.query(
-        `SELECT u.id, u.email, u.is_active, r.name AS rol
+        `SELECT u.id, u.email, u.is_active, u.firebase_uid, r.name AS rol
          FROM app_users u LEFT JOIN roles r ON r.id = u.role_id
          WHERE u.tenant_id = ? AND u.is_superadmin = 0
          ORDER BY u.email`, [req.params.id]);
-      res.json({ usuarios: rows.map((u) => ({ id: u.id, email: u.email, activo: !!u.is_active, rol: u.rol })) });
+      // Quién tiene el segundo factor activado (para el superadmin). Si
+      // Firebase no responde, la lista sale igual, sin ese dato.
+      let conSegundoFactor = null;
+      try { conSegundoFactor = await segundoFactor.inscriptos(authFirebase(), rows.map((u) => u.firebase_uid)); } catch (err) {
+        console.warn('segundo factor: no se pudo consultar Firebase:', err.message);
+      }
+      res.json({ usuarios: rows.map((u) => ({
+        id: u.id, email: u.email, activo: !!u.is_active, rol: u.rol,
+        segundoFactor: conSegundoFactor ? (conSegundoFactor.get(u.firebase_uid) || 0) > 0 : null,
+      })) });
     } catch (err) {
       console.error('Motor Laboral admin tenant users error:', err);
       res.status(500).json({ error: 'Error al leer los usuarios de la empresa' });
@@ -1964,6 +2062,34 @@ function createMotorLaboralAdminRoutes(db) {
   // interna de mysql2 (con "_" adelante, no documentada oficialmente) --
   // envuelto en try/catch para que un cambio de version de la libreria
   // nunca tumbe esta ruta, en el peor caso devuelve null en poolStats.
+  // ¿Funcionaría MYSQL_SSL=require (cifrado + verificar el certificado de la
+  // base)? Abre UNA conexión de prueba aparte con verificación estricta y la
+  // cierra; la conexión real del sistema no se toca. Así el superadmin decide
+  // pasar de 'no-verify' a 'require' sin arriesgar una caída (2026-10-18).
+  router.post('/system/probar-tls-estricto', requireSuperadmin, async (req, res) => {
+    const mysql = require('mysql2/promise');
+    let conexion;
+    try {
+      conexion = await mysql.createConnection({
+        host: process.env.MYSQL_ADDON_HOST,
+        user: process.env.MYSQL_ADDON_USER,
+        password: process.env.MYSQL_ADDON_PASSWORD,
+        database: process.env.MYSQL_ADDON_DB,
+        port: process.env.MYSQL_ADDON_PORT || 3306,
+        connectTimeout: 10000,
+        ssl: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
+      });
+      const [[v]] = await conexion.query("SHOW SESSION STATUS LIKE 'Ssl_version'");
+      res.json({ funciona: true, version: v ? v.Value : null,
+        mensaje: 'El certificado de la base se verificó bien: podés poner MYSQL_SSL=require en Render.' });
+    } catch (err) {
+      res.json({ funciona: false, motivo: String(err.code || err.message).slice(0, 200),
+        mensaje: 'Con verificación estricta NO conecta (el certificado de la base no es de una autoridad reconocida, o no coincide el nombre). Dejá MYSQL_SSL=no-verify: igual va cifrado.' });
+    } finally {
+      if (conexion) await conexion.end().catch(() => {});
+    }
+  });
+
   router.get('/system/status', requireSuperadmin, async (req, res) => {
     let poolStats = null;
     try {
