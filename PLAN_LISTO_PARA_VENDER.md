@@ -151,6 +151,31 @@ suscripción.
 
 ---
 
+## Al final — Ordenar las cuentas de Google/Firebase (pedido del dueño, 2026-10-18)
+
+Hoy hay dos cuentas de Google, por error de origen: una es dueña del proyecto
+de **login** (`asistenciatw`) y otra del de **la página** (`horasdedicacionavp`).
+Ver `MAPA_FIREBASE_Y_CUENTAS.md`.
+
+**Lo mejor, y no lo más fácil:** no mover proyectos de cuenta. Se agrega la
+cuenta definitiva como **Propietario** en los dos proyectos (Firebase →
+Configuración del proyecto → Usuarios y permisos). Después se prueba todo con
+ella (publicar, consola de login, Google Cloud) y recién entonces se quita la
+otra.
+- Los proyectos y las cuentas de los usuarios **no se tocan**: cero riesgo
+  para el login.
+- La cuenta definitiva conviene que sea **de la empresa** (no personal), con
+  segundo factor activado y su recuperación anotada en el gestor de
+  contraseñas.
+- La facturación de Google Cloud (si hay plan Blaze) también pasa a esa
+  cuenta.
+
+**Criterio de aceptación:** con una sola cuenta se publica la página, se ve
+la consola de login y se administra Google Cloud de los dos proyectos; la otra
+ya no figura en ninguno.
+
+---
+
 ## Orden y por qué
 
 0 → 1 → 2 primero, porque son los riesgos que no tienen vuelta atrás (una
