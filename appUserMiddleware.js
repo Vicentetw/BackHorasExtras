@@ -1,6 +1,7 @@
 const db = require('./db');
 const appUserRepository = require('./motor-laboral/repositories/appUserRepository');
 const billingRepository = require('./motor-laboral/repositories/billingRepository');
+const segundoFactor = require('./motor-laboral/services/segundoFactor');
 const { resolveEffectiveStatus, isWriteBlocked, isFullyBlocked, DEFAULT_GRACE_DAYS } = require('./motor-laboral/services/billingCalculations');
 
 // Modulos y acciones disponibles (documentacion, no una lista cerrada en
@@ -78,6 +79,30 @@ async function appUserMiddleware(req, res, next) {
         }
       } catch (billingErr) {
         console.error('appUserMiddleware billing check error:', billingErr);
+      }
+    }
+
+    // ---- SEGUNDO FACTOR (Fase 1, 2026-10-18; ver segundoFactor.js) ----
+    // Si la empresa (o la plataforma, para un superadmin) lo exige y esta
+    // sesión no entró con el código del celular, solo se puede cargar el
+    // perfil y activar el segundo factor. Se mira el usuario REAL (antes del
+    // modo soporte): un superadmin trabajando en una empresa sigue siendo él.
+    // Si falla la consulta, no se corta a nadie por un error nuestro (igual
+    // que la suscripción), pero queda en el log.
+    if (!segundoFactor.rutaLibre(req.path) && !segundoFactor.sesionConSegundoFactor(req.user)) {
+      try {
+        const exigido = segundoFactor.exigidoPara(appUser, {
+          nivelEmpresa: appUser.isSuperadmin ? 'apagado' : await segundoFactor.nivelDeEmpresa(db, appUser.tenantId),
+          nivelPlataforma: appUser.isSuperadmin ? await segundoFactor.nivelDePlataforma(db) : 'apagado',
+        });
+        if (exigido) {
+          return res.status(403).json({
+            error: 'Para usar el sistema tenés que activar el segundo factor (un código del celular). Te llevamos a activarlo.',
+            codigo: segundoFactor.CODIGO,
+          });
+        }
+      } catch (err) {
+        console.error('appUserMiddleware segundo factor error:', err);
       }
     }
 

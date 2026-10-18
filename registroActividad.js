@@ -80,6 +80,11 @@ const ACCIONES = [
   // histórico); para quien lee el registro son justificaciones.
   ['PUT', /^\/config\/limites-asistencia$/, 'Cambió los límites de llegadas tarde y salidas'],
   ['POST', /^\/config\/minimo-horas-extra$/, 'Cambió el mínimo de horas extra por día de la empresa'],
+  ['PUT', /\/api\/labor-engine\/admin\/tenants\/\d+\/segundo-factor$/, 'Cambió el segundo factor de una empresa (apagado / opcional / obligatorio)'],
+  ['PUT', /\/api\/labor-engine\/admin\/segundo-factor\/plataforma$/, 'Cambió el segundo factor de los superadmins'],
+  ['POST', /\/api\/labor-engine\/admin\/system\/probar-tls-estricto$/, 'Probó la verificación del certificado de la base (conexión de prueba)'],
+  ['POST', /\/api\/labor-engine\/admin\/segundo-factor\/firebase\/habilitar$/, 'Habilitó el segundo factor (TOTP) en Firebase'],
+  ['POST', /\/api\/labor-engine\/admin\/usuarios\/\d+\/segundo-factor\/resetear$/, 'Reseteó el segundo factor de un usuario (perdió el celular)'],
   ['POST', /^\/api\/config-horas-extra\/empresa$/, 'Cambió cómo se cuentan las horas extra de la empresa'],
   ['PUT', /^\/api\/config-horas-extra\/plantillas\/\d+$/, 'Cambió cómo se cuentan las horas extra de una plantilla'],
   ['POST', /\/api\/horas-extra-revisar\/aceptar$/, 'Revisó un día de horas extra y lo marcó "Está bien"'],
