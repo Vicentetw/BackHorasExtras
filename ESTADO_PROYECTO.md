@@ -10,10 +10,10 @@
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
 > Probado: suite 1135/1135 + Chrome.
 >
-> **SIN PUBLICAR (espera el "publicá" del dueño): rama `una-sola-verdad-he`**
-> (backend `d5e11bc`, frontend `26cc845`). Probado: suite 1157/1157, la copia
+> **PUBLICADO 2026-10-18: rama `una-sola-verdad-he`** (backend merge `565f8bc`
+> verificado en `/health`, frontend `26cc845` desplegado y chunk verificado). Probado: suite 1157/1157, la copia
 > de producción y Chrome. Análisis completo en `UNA_SOLA_VERDAD_HORAS_EXTRA.md`
-> (en la rama).
+> (en main).
 > - Pedido del dueño: ningún informe puede dar distinto de otro.
 > - Corrige 9 diferencias: calendario ≠ total con régimen, punto F, recorte de
 >   la plantilla solo con régimen, topes según el rango, tope anual según el
