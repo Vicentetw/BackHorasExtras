@@ -10,6 +10,21 @@
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
 > Probado: suite 1135/1135 + Chrome.
 >
+> **SIN PUBLICAR (espera el "publicá"): Fase 0 de seguridad, ramas `fase0-seguridad`**
+> (backend `c1ae2dd`, frontend `7d2fb6d`, landing `d7392ad`). Suite 1157/1157.
+> - Escaneo de secretos (gitleaks) de los 3 repos: sin secretos reales; control
+>   automático en GitHub (`secretos.yml`) con los hallazgos revisados.
+> - Backend y frontend con **0 vulnerabilidades** (`npm audit`). `firebase-admin`
+>   pasa a la v14 con la API modular: la v14 eliminó `admin.auth()`, y sin
+>   migrar el código **nadie podía iniciar sesión** (lo detectó el servidor
+>   reiniciado). Node 22 fijado (`.node-version`): Render lo toma al publicar.
+> - CSP en modo **bloquear**: 31 pantallas, PDF, Excel, login con Google y
+>   registro con captcha recorridos con la política bloqueando, cero bloqueos.
+> - Pantalla Seguridad (superadmin): "Conexión con la base: cifrada/sin cifrar",
+>   preguntado a la base. Falta poner `MYSQL_SSL=require` en Render (el dueño).
+> - Repo privado: el dueño lo resuelve antes de vender (Render tiene que estar
+>   conectado por la cuenta de GitHub, no por URL pública).
+>
 > **PLAN ACORDADO 2026-10-18: `PLAN_LISTO_PARA_VENDER.md`** (fases 0 a 6, cada
 > una con criterio de aceptación). Siguiente: Fase 0 (repo privado — lo hace
 > el dueño —, escaneo de secretos, librerías con fallas, MYSQL_SSL, CSP a
