@@ -10,6 +10,12 @@
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
 > Probado: suite 1135/1135 + Chrome.
 >
+> **PLAN ACORDADO 2026-10-18: `PLAN_LISTO_PARA_VENDER.md`** (fases 0 a 6, cada
+> una con criterio de aceptación). Siguiente: Fase 0 (repo privado — lo hace
+> el dueño —, escaneo de secretos, librerías con fallas, MYSQL_SSL, CSP a
+> bloquear). Migración 20261023 corrida por el dueño el 18/10 (verificar en el
+> backup de esa noche).
+>
 > **PUBLICADO 2026-10-18: rama `una-sola-verdad-he`** (backend merge `565f8bc`
 > verificado en `/health`, frontend `26cc845` desplegado y chunk verificado). Probado: suite 1157/1157, la copia
 > de producción y Chrome. Análisis completo en `UNA_SOLA_VERDAD_HORAS_EXTRA.md`
