@@ -1,5 +1,9 @@
 const path = require('path');
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 
 let initialized = false;
 // true cuando SI hay credenciales configuradas pero no se pudieron cargar
@@ -20,8 +24,8 @@ function initFirebaseAdmin() {
       ? JSON.parse(serviceAccountJson)
       : require(path.resolve(serviceAccountPath));
 
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
+    initializeApp({
+      credential: cert(serviceAccount)
     });
     initialized = true;
     fallóLaCarga = false;
@@ -84,7 +88,7 @@ async function firebaseAuthMiddleware(req, res, next) {
   }
 
   try {
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const decodedToken = await getAuth().verifyIdToken(idToken);
     req.user = decodedToken;
     return next();
   } catch (err) {

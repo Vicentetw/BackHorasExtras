@@ -84,7 +84,7 @@ after(async () => {
   if (nuevo) {
     await db.query('DELETE FROM user_permissions WHERE user_id = ?', [nuevo.id]);
     await db.query('DELETE FROM app_users WHERE id = ?', [nuevo.id]);
-    await require('firebase-admin').auth().deleteUser(nuevo.firebase_uid).catch(() => {});
+    await require('firebase-admin/auth').getAuth().deleteUser(nuevo.firebase_uid).catch(() => {});
   }
   await db.query(`DELETE FROM tenants WHERE id IN (?, ?)`, [TENANT_C, OTHER_TENANT]);
   await closeDb();

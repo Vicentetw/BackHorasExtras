@@ -10,7 +10,11 @@ require('dotenv').config();
 const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const db = require('../db');
 const cuentas = require('../motor-laboral/services/cuentasDeRegistro');
 const { ErrorDeRegistro } = require('../motor-laboral/services/registroService');
@@ -23,9 +27,9 @@ const UN_DIA = 24 * 60 * 60 * 1000;
 const creadasDeVerdad = [];
 
 function initAdmin() {
-  if (admin.apps.length) return;
+  if (getApps().length) return;
   const json = process.env.FIREBASE_SERVICE_ACCOUNT;
-  admin.initializeApp({ credential: admin.credential.cert(json ? JSON.parse(json) : require(path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_PATH))) });
+  initializeApp({ credential: cert(json ? JSON.parse(json) : require(path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_PATH))) });
 }
 
 // Firebase falso: guarda lo que se le pide.
@@ -149,7 +153,7 @@ test('Firebase rechaza un alta hecha desde afuera (el alta está cerrada)', asyn
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: `intruso-${SUFIJO}@registro-test.example.com`, password: 'Clave-segura-1', returnSecureToken: true }),
   })).json();
-  if (r.localId) { initAdmin(); await admin.auth().deleteUser(r.localId).catch(() => {}); }
+  if (r.localId) { initAdmin(); await getAuth().deleteUser(r.localId).catch(() => {}); }
   assert.ok(r.error, 'Firebase NO debería haber creado la cuenta');
   assert.match(r.error.message, /ADMIN_ONLY_OPERATION/);
 });
@@ -159,7 +163,7 @@ test('POST /api/public/registro/cuenta crea la cuenta, y con ella se puede entra
   const res = await pedir('/api/public/registro/cuenta', { email, password: 'Clave-segura-1', turnstileToken: TOKEN_CAPTCHA });
   assert.equal(res.status, 201, await res.clone().text());
   initAdmin();
-  const u = await admin.auth().getUserByEmail(email);
+  const u = await getAuth().getUserByEmail(email);
   creadasDeVerdad.push(u.uid);
   assert.equal(u.emailVerified, false);
   assert.deepEqual(u.customClaims, { registro: true });
@@ -181,7 +185,7 @@ test('sin captcha, con datos malos o con email descartable no se crea nada', asy
   assert.equal((await pedir('/api/public/registro/cuenta', { email, password: 'corta', turnstileToken: TOKEN_CAPTCHA })).status, 400);
   assert.equal((await pedir('/api/public/registro/cuenta', { email: `x-${SUFIJO}@yopmail.com`, password: 'Clave-segura-1', turnstileToken: TOKEN_CAPTCHA })).status, 400);
   initAdmin();
-  await assert.rejects(admin.auth().getUserByEmail(email), (e) => e.code === 'auth/user-not-found');
+  await assert.rejects(getAuth().getUserByEmail(email), (e) => e.code === 'auth/user-not-found');
 });
 
 test('con Google: un certificado falso o vencido se rechaza', async () => {
@@ -192,6 +196,6 @@ test('con Google: un certificado falso o vencido se rechaza', async () => {
 
 after(async () => {
   initAdmin();
-  for (const uid of creadasDeVerdad) await admin.auth().deleteUser(uid).catch(() => {});
+  for (const uid of creadasDeVerdad) await getAuth().deleteUser(uid).catch(() => {});
   await db.end().catch(() => {});
 });

@@ -200,20 +200,22 @@ function esCuentaDePrueba(u, ahora = Date.now()) {
 
 async function limpiarCuentasDeLogin(aplicar) {
   const path = require('path');
-  const admin = require('firebase-admin');
+  // API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+  const { initializeApp, getApps, cert } = require('firebase-admin/app');
+  const { getAuth } = require('firebase-admin/auth');
   const json = process.env.FIREBASE_SERVICE_ACCOUNT;
   const ruta = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
   if (!json && !ruta) {
     console.log('Cuentas de login: sin credenciales de Firebase, no se revisan.');
     return;
   }
-  if (!admin.apps.length) {
-    admin.initializeApp({ credential: admin.credential.cert(json ? JSON.parse(json) : require(path.resolve(ruta))) });
+  if (!getApps().length) {
+    initializeApp({ credential: cert(json ? JSON.parse(json) : require(path.resolve(ruta))) });
   }
   const huerfanas = [];
   let pagina;
   do {
-    const r = await admin.auth().listUsers(1000, pagina);
+    const r = await getAuth().listUsers(1000, pagina);
     huerfanas.push(...r.users.filter((u) => esCuentaDePrueba(u)));
     pagina = r.pageToken;
   } while (pagina);
@@ -224,7 +226,7 @@ async function limpiarCuentasDeLogin(aplicar) {
   console.log(`Cuentas de login de prueba que quedaron: ${huerfanas.length}`);
   huerfanas.forEach((u) => console.log(`   ${u.uid}`));
   if (!aplicar) return;
-  const r = await admin.auth().deleteUsers(huerfanas.map((u) => u.uid));
+  const r = await getAuth().deleteUsers(huerfanas.map((u) => u.uid));
   console.log(`Cuentas de login de prueba borradas: ${r.successCount} de ${huerfanas.length}`);
   if (r.failureCount) {
     r.errors.forEach((e) => console.error(`   ${huerfanas[e.index].uid}: ${e.error.message}`));

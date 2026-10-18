@@ -1,5 +1,9 @@
 const express = require('express');
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const { initFirebaseAdmin } = require('../firebaseAuth');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
@@ -383,7 +387,7 @@ module.exports = function (db) {
       let firebaseBorrado = false;
       try {
         initFirebaseAdmin();
-        await admin.auth().deleteUser(user.firebase_uid);
+        await getAuth().deleteUser(user.firebase_uid);
         firebaseBorrado = true;
       } catch (err) {
         if (err.code === 'auth/user-not-found') {

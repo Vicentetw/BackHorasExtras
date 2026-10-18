@@ -6,7 +6,11 @@ require('dotenv').config();
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const db = require('../db');
 const { getTestAuthHeaders, deleteTestUser } = require('../test-helpers/firebaseTestAuth');
 
@@ -21,9 +25,9 @@ const NOMBRE = 'Empresa para borrar (test)';
 let hSuper; let leadId;
 
 function initAdmin() {
-  if (admin.apps.length) return;
+  if (getApps().length) return;
   const json = process.env.FIREBASE_SERVICE_ACCOUNT;
-  admin.initializeApp({ credential: admin.credential.cert(json ? JSON.parse(json) : require(path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_PATH))) });
+  initializeApp({ credential: cert(json ? JSON.parse(json) : require(path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_PATH))) });
 }
 const pedir = (m, url, body) => fetch(BASE_URL + url, { method: m, headers: { ...hSuper, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
 const cuenta = async (tabla, col, valor) => Number((await db.query(`SELECT COUNT(*) n FROM \`${tabla}\` WHERE \`${col}\` = ?`, [valor]))[0][0].n);
@@ -119,7 +123,7 @@ test('con el nombre correcto borra TODO, conserva la solicitud sin empresa y bor
   assert.equal(lead.tenant_id, null);
   // Y la cuenta de login de su usuario ya no existe.
   initAdmin();
-  await assert.rejects(admin.auth().getUser(UID_ADMIN), (e) => e.code === 'auth/user-not-found');
+  await assert.rejects(getAuth().getUser(UID_ADMIN), (e) => e.code === 'auth/user-not-found');
   assert.ok(d.loginsBorrados >= 1);
   // La otra empresa, intacta.
   assert.equal(await cuenta('tenants', 'id', REAL), 1);

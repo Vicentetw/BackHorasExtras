@@ -1979,9 +1979,22 @@ function createMotorLaboralAdminRoutes(db) {
       console.warn('No se pudieron leer las estadisticas del pool (API interna de mysql2 cambio):', err.message);
     }
 
+    // ¿La conexión con la base va CIFRADA? (Fase 0 de PLAN_LISTO_PARA_VENDER.md,
+    // 2026-10-18). Se le pregunta a la propia base, en una conexión real del
+    // pool: el cifrado que negoció (vacío = sin cifrar). Así se ve la verdad de
+    // producción sin entrar a Render, y si alguien saca MYSQL_SSL se nota acá.
+    let baseDeDatos = { cifrada: null, cifrado: null, version: null, modo: (process.env.MYSQL_SSL || '').trim().toLowerCase() || 'sin definir' };
+    try {
+      const [rows] = await db.query("SHOW SESSION STATUS WHERE Variable_name IN ('Ssl_cipher', 'Ssl_version')");
+      const v = Object.fromEntries(rows.map((r) => [r.Variable_name, r.Value]));
+      baseDeDatos = { ...baseDeDatos, cifrada: !!v.Ssl_cipher, cifrado: v.Ssl_cipher || null, version: v.Ssl_version || null };
+    } catch (err) {
+      console.warn('No se pudo leer el estado de TLS de la base:', err.message);
+    }
     const mem = process.memoryUsage();
     res.json({
       poolStats,
+      baseDeDatos,
       memory: {
         rssMb: Math.round(mem.rss / 1024 / 1024),
         heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024)

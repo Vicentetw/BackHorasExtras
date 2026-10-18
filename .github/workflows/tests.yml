@@ -44,7 +44,7 @@ jobs:
       #    migraciones de este repo (ver run-migration.yml).
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # 3. Instala las dependencias. `npm ci` (en vez de `npm install`)
       #    instala exactamente lo que dice package-lock.json, sin

@@ -4,19 +4,23 @@
 // Firebase valido ya no alcanza por si solo desde el paso 2 del plan
 // multi-tenant). Borra todo al terminar (Firebase + app_users).
 const path = require('path');
-const admin = require('firebase-admin');
+// API modular de firebase-admin (la 'getAuth()' vieja no existe desde la v14).
+
+const { initializeApp, getApps, cert } = require('firebase-admin/app');
+
+const { getAuth } = require('firebase-admin/auth');
 const db = require('../db');
 
 const WEB_API_KEY = 'AIzaSyAJ3oBdp9YIjJvMDOOgcybRwAbc3eGcJwI'; // publica (config de Firebase web), no es secreta
 
 function initAdmin() {
-  if (admin.apps.length) return;
+  if (getApps().length) return;
   const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
   const serviceAccount = serviceAccountJson
     ? JSON.parse(serviceAccountJson)
     : require(path.resolve(serviceAccountPath));
-  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+  initializeApp({ credential: cert(serviceAccount) });
 }
 
 // Todos los modulo:accion que existen hoy -- se otorgan por default a un
@@ -35,7 +39,7 @@ const ALL_PERMISSIONS = ['employees', 'attendance', 'schedules', 'leaves', 'excl
 // que se pase `permissions` explicito.
 async function getTestAuthHeaders(uid, { isSuperadmin = true, tenantId = null, permissions = null } = {}) {
   initAdmin();
-  const customToken = await admin.auth().createCustomToken(uid);
+  const customToken = await getAuth().createCustomToken(uid);
   const res = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${WEB_API_KEY}`,
     {
@@ -92,7 +96,7 @@ async function getTestAuthHeaders(uid, { isSuperadmin = true, tenantId = null, p
 // tapado por el .catch() de abajo y recien se notaba una linea despues.)
 async function deleteTestUser(uid) {
   initAdmin();
-  await admin.auth().deleteUser(uid).catch(() => {});
+  await getAuth().deleteUser(uid).catch(() => {});
 
   const [[appUser]] = await db.query('SELECT id FROM app_users WHERE firebase_uid = ?', [uid]);
   if (appUser) {
