@@ -10,7 +10,18 @@
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
 > Probado: suite 1135/1135 + Chrome.
 >
-> **SIN PUBLICAR (espera el "publicá"): Fase 0 de seguridad, ramas `fase0-seguridad`**
+> **SIN PUBLICAR: Fase 1, segundo factor — ramas `segundo-factor`** (backend
+> `1522d27`, frontend `7b1195a`). Suite 1163/1163 + Chrome.
+> - El superadmin decide por empresa (apagado / opcional / obligatorio) y para
+>   los superadmins. Se exige en el SERVIDOR. Portal del empleado: nunca.
+> - Falta habilitar TOTP en Firebase (botón en Seguridad). El proyecto de
+>   Firebase es el MISMO de producción: no se prende sin el sí del dueño.
+>   Con eso habilitado: probar de punta a punta activar + ingresar con código
+>   (cuenta QA, generando el código desde la clave) ANTES de publicar.
+> - Botón "Probar verificación del certificado" de la base: dice si se puede
+>   pasar MYSQL_SSL de no-verify (lo que puso el dueño el 18/10) a require.
+>
+> **PUBLICADO 2026-10-18: Fase 0 de seguridad, ramas `fase0-seguridad`**
 > (backend `c1ae2dd`, frontend `7d2fb6d`, landing `d7392ad`). Suite 1157/1157.
 > - Escaneo de secretos (gitleaks) de los 3 repos: sin secretos reales; control
 >   automático en GitHub (`secretos.yml`) con los hallazgos revisados.
