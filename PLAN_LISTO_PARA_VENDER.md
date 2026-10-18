@@ -24,6 +24,8 @@ y al final lo que hace al producto más fácil de vender.
 | 0.4 Base de datos con conexión **cifrada**: confirmar `MYSQL_SSL=require` en Render y que el servidor arranque sin el aviso "MySQL sin TLS". | Dueño + Claude | Sin cifrado, los datos de los empleados viajan legibles entre Render y la base. |
 | 0.5 CSP (protección contra código inyectado) de "solo reportar" a **bloquear**, después de revisar los reportes de estas semanas. | Claude | Hoy avisa pero no protege. |
 
+| 0.6 **La llave del servidor ante Firebase** (pregunta del dueño, 2026-10-18). Es necesaria: con ella el servidor verifica cada ingreso, crea cuentas y resetea el segundo factor. La de hoy es la que crea Firebase por defecto y puede casi todo. Hay que: (a) crear una cuenta de servicio nueva **solo con el permiso de administrar el login** y reemplazarla en Render; (b) borrar la vieja; (c) usar **otra llave aparte** en la PC de desarrollo (hoy es la misma); (d) cambiarla cada 6 meses y cuando alguien con acceso deje de trabajar; (e) **segundo factor en la cuenta de Render y en la de Google dueña de `asistenciatw`**: quien entre ahí ve la llave. | Dueño + Claude | Si se filtra, que sirva para lo mínimo y se pueda anular sin tocar producción. |
+
 **Criterio de aceptación:** escaneo de secretos limpio y guardado como
 evidencia; `npm audit` de producción sin críticas ni altas; el servidor
 conecta con TLS; securityheaders.com da A o A+; la CSP bloquea sin romper
