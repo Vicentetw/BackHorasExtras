@@ -8,7 +8,20 @@
 >
 > **PUBLICADO 2026-10-17:** rama `minimo-y-revisar` (backend merge `7e37d6d`
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
-> Probado: suite 1135/1135 + Chrome. Nada sin publicar.
+> Probado: suite 1135/1135 + Chrome.
+>
+> **SIN PUBLICAR (espera el "publicá" del dueño):** rama `horas-extra-centralizado`
+> (backend `aa16fda`, frontend `145210d`). Probado: suite 1144/1144 + Chrome.
+> Diseño y resultados: `DISENO_HORAS_EXTRA_CENTRALIZADO.md` (en la rama).
+> - Pedido del dueño: que sirva para cualquier empresa y reloj (de rostro, sin
+>   teclas), configurado por el administrador y **en un solo lugar**.
+> - Pantalla "Horas extra" en 3 pasos: cómo se cuentan (con marcas del reloj,
+>   o lo que supere el horario, con excepción por plantilla y mínimo), quién
+>   puede hacerlas y convenios. Por defecto todo como antes (AVP no cambia).
+> - El motor de reglas viejo fallaba 5 de 12 casos: cálculo nuevo
+>   `excesoSobreHorario.js`.
+> - Migración nueva **20261023** (excepciones por plantilla; sin ella, la
+>   pantalla avisa y el resto funciona).
 > - **Mínimo de horas extra por día:**
 >   - qué hace: por empresa (Convenios) y con vista previa; un convenio con
 >     máximos puede tener el suyo. Debajo del mínimo, el día no suma y lo
