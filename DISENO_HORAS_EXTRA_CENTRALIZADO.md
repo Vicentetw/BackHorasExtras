@@ -182,7 +182,7 @@ horarios asignados no coinciden con los turnos reales. **No se le cambia
 nada**: sigue con su opción de siempre.
 
 ### Pendiente
-- **E.** "Fichó entre 7 y 14", escrito en el código del estimado (solo afecta
+- ~~**E.**~~ HECHO 2026-10-18 (rama jornada-sin-7a14): "fichó entre 7 y 14" reemplazado por el horario de cada persona. (Solo afectaba
   al método de siempre).
 - **F.** Que la `fuente` del régimen valga también en Presentismo. Cambia algo
   publicado.

@@ -10,8 +10,19 @@
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
 > Probado: suite 1135/1135 + Chrome.
 >
-> **SIN PUBLICAR (espera el "publicá" del dueño):** rama `horas-extra-centralizado`
-> (backend `aa16fda`, frontend `145210d`). Probado: suite 1144/1144 + Chrome.
+> **PUBLICADO 2026-10-17/18:**
+> - Rama `horas-extra-centralizado`: backend merge `3f5aa26`, frontend
+>   `145210d` (chunk verificado). **Falta la migración 20261023.**
+> - Rama `jornada-sin-7a14` (backend `e22bcf8`, `/health` verificado): la
+>   regla escrita a mano "fichó entre 7 y 14" se reemplazó por "fichó dentro
+>   de su horario" (su plantilla o el predeterminado, desde 1 h antes de la
+>   entrada). Lo pidió el dueño.
+>   - Septiembre de AVP en la copia local: +373 h, 61 personas; junio:
+>     2576.77 → 2801.06.
+>   - Son días que antes se descartaban enteros (ej. 06:55 y 18:27 con
+>     horario de 7 a 14). Son estimadas: quedan a revisar.
+>
+> Detalle de la primera rama:
 > Diseño y resultados: `DISENO_HORAS_EXTRA_CENTRALIZADO.md` (en la rama).
 > - Pedido del dueño: que sirva para cualquier empresa y reloj (de rostro, sin
 >   teclas), configurado por el administrador y **en un solo lugar**.
