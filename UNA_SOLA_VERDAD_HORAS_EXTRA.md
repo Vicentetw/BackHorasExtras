@@ -34,7 +34,7 @@ guardada. Si alguien rompe la regla, el test falla.
 | 3 | El recorte de la plantilla (nada dentro de la jornada ni del descanso) se hacía **solo** con régimen. | Copia de producción, septiembre: −73 h en 60 personas. Ejemplo: marcador 9 a las 05:10 y salida a las 13:52 con horario de 7 a 14 contaba 8 h 42 min de horas extra **dentro** de su jornada. | Regla universal para todos (`recortarDelDia`). El detalle dice qué se descontó ("se descontaron 22 min dentro de la jornada"). Si la plantilla está mal (dice 14:00 y salen 13:38), se corrige la plantilla. |
 | 4 | Los topes del mes dependían del rango pedido: la 2da quincena sola no llegaba a un tope que sí se alcanzaba dentro del mes. | Por código y en el test. | Si el rango no es de meses enteros, el régimen se calcula sobre el mes completo y se toma la parte del rango (`recortarAlRango`). |
 | 5 | El tope anual acumulaba lo calculado en vivo de los meses anteriores **del rango**: septiembre solo y septiembre dentro de agosto-septiembre podían dar distinto. | Por código. | Lo ya computado en el año = lo **liquidado** (meses cerrados), siempre. Es el criterio contable: el tope anual se controla contra lo pagado. |
-| 6 | Meses cerrados: Liquidación muestra la foto del cierre y las demás pantallas el cálculo de hoy, sin avisar. | Por código. En producción todavía no hay cierres (falta la migración 20261008). | Aviso de "mes cerrado" en Presentismo, en Horas Extra por Régimen y en los detalles. La diferencia no se pierde: se paga o descuenta como ajuste en el mes siguiente. El portal ya mostraba "lo liquidado". |
+| 6 | Meses cerrados: Liquidación muestra la foto del cierre y las demás pantallas el cálculo de hoy, sin avisar. | Por código. Las tablas de cierre ya están en producción (backup del 17/10). | Aviso de "mes cerrado" en Presentismo, en Horas Extra por Régimen y en los detalles. La diferencia no se pierde: se paga o descuenta como ajuste en el mes siguiente. El portal ya mostraba "lo liquidado". |
 | 7 | Los totales de pantallas, PDF y Excel sumaban **horas ya redondeadas** a 2 decimales. | Por código. | El servidor manda también `overtimeMinutes` (minutos enteros). Los totales, Liquidación y el portal suman minutos. |
 | 8 | Una hora extra cargada a mano en un día no laborable, feriado o sin horario sumaba al total pero el calendario no la mostraba en ese día. | Por código. | Esos días también traen `overtimeMinutes`. |
 | 9 | "Ver qué cambiaría" reimplementaba parte del cálculo y no veía el régimen. | Por código. | Corre el cálculo completo dos veces y compara día por día (`compararHorasExtra.js`). El test comprueba que lo que promete es lo que pasa al guardar. Solo se acepta desde adentro del servidor: desde afuera nadie puede pedir un cálculo "simulado". |
@@ -52,5 +52,5 @@ septiembre) y Liquidación en vivo = Presentismo.
 ## Pendiente o a decidir
 - Plantillas que no coinciden con el horario real (ej. dicen 14:00 y la gente
   sale 13:38): ahora se ve en el detalle. Hay que corregir la plantilla.
-- Las migraciones de Liquidación (20261008, 20261009) no están en producción.
-  Sin ellas no hay cierres, y el tope anual solo puede contar meses cerrados.
+- El tope anual cuenta lo liquidado: conviene cerrar los meses en orden en
+  Liquidación (las tablas ya están en producción).
