@@ -2068,25 +2068,65 @@ function createMotorLaboralAdminRoutes(db) {
   // pasar de 'no-verify' a 'require' sin arriesgar una caída (2026-10-18).
   router.post('/system/probar-tls-estricto', requireSuperadmin, async (req, res) => {
     const mysql = require('mysql2/promise');
-    let conexion;
+    const { opcionesSsl, cadenaDe } = require('../../dbTls');
+    const datos = {
+      host: process.env.MYSQL_ADDON_HOST,
+      user: process.env.MYSQL_ADDON_USER,
+      password: process.env.MYSQL_ADDON_PASSWORD,
+      database: process.env.MYSQL_ADDON_DB,
+      port: process.env.MYSQL_ADDON_PORT || 3306,
+      connectTimeout: 10000,
+    };
+    // Abre una conexión de prueba con esas opciones de TLS y la cierra.
+    const probar = async (ssl) => {
+      let c;
+      try {
+        c = await mysql.createConnection({ ...datos, ssl });
+        const [[v]] = await c.query("SHOW SESSION STATUS LIKE 'Ssl_version'");
+        return { ok: true, version: v ? v.Value : null, cadena: cadenaDe(c.connection.stream) };
+      } catch (err) {
+        return { ok: false, motivo: String(err.code || err.message).slice(0, 200) };
+      } finally {
+        if (c) await c.end().catch(() => {});
+      }
+    };
     try {
-      conexion = await mysql.createConnection({
-        host: process.env.MYSQL_ADDON_HOST,
-        user: process.env.MYSQL_ADDON_USER,
-        password: process.env.MYSQL_ADDON_PASSWORD,
-        database: process.env.MYSQL_ADDON_DB,
-        port: process.env.MYSQL_ADDON_PORT || 3306,
-        connectTimeout: 10000,
-        ssl: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
+      // 1. Con lo que hay hoy en Render (si ya se fijó la autoridad, se prueba ESA).
+      if (process.env.MYSQL_SSL_CA) {
+        const conCa = await probar(opcionesSsl({ MYSQL_SSL: 'require', MYSQL_SSL_CA: process.env.MYSQL_SSL_CA }));
+        if (conCa.ok) {
+          return res.json({ funciona: true, version: conCa.version, conAutoridadFijada: true,
+            mensaje: (process.env.MYSQL_SSL || '').trim().toLowerCase() === 'require'
+              ? 'Verificado: la conexión está cifrada y verificada contra la autoridad fijada (MYSQL_SSL_CA).'
+              : 'La autoridad fijada (MYSQL_SSL_CA) funciona: ya podés poner MYSQL_SSL=require en Render.' });
+        }
+      }
+      // 2. Contra las autoridades reconocidas.
+      const estricta = await probar(opcionesSsl({ MYSQL_SSL: 'require' }));
+      if (estricta.ok) {
+        return res.json({ funciona: true, version: estricta.version, mensaje: 'El certificado de la base se verificó bien: podés poner MYSQL_SSL=require en Render.' });
+      }
+      // 3. No es de una autoridad reconocida: se lee la autoridad de la base y
+      // se prueba fijándola. Si anda, se muestra para copiarla en Render.
+      const leida = await probar(opcionesSsl({ MYSQL_SSL: 'no-verify' }));
+      if (!leida.ok || !leida.cadena.raizPem) {
+        return res.json({ funciona: false, motivo: estricta.motivo, mensaje: 'Con verificación estricta no conecta y no se pudo leer el certificado de la base. Dejá MYSQL_SSL=no-verify: igual va cifrado.' });
+      }
+      const fijada = await probar(opcionesSsl({ MYSQL_SSL: 'require', MYSQL_SSL_CA: leida.cadena.raizPem }));
+      res.json({
+        funciona: false,
+        motivo: estricta.motivo,
+        cadena: leida.cadena.cadena,
+        autoridadPem: fijada.ok ? leida.cadena.raizPem : null,
+        autoridadHuella: leida.cadena.raizHuella,
+        fijandoLaAutoridadFunciona: fijada.ok,
+        mensaje: fijada.ok
+          ? 'El certificado de la base lo firma su propia autoridad (no una reconocida). Fijándola SÍ verifica: en Render, creá la variable MYSQL_SSL_CA con el texto de abajo (completo) y después cambiá MYSQL_SSL a require.'
+          : 'Con verificación estricta no conecta, ni fijando la autoridad. Dejá MYSQL_SSL=no-verify: igual va cifrado.',
       });
-      const [[v]] = await conexion.query("SHOW SESSION STATUS LIKE 'Ssl_version'");
-      res.json({ funciona: true, version: v ? v.Value : null,
-        mensaje: 'El certificado de la base se verificó bien: podés poner MYSQL_SSL=require en Render.' });
     } catch (err) {
-      res.json({ funciona: false, motivo: String(err.code || err.message).slice(0, 200),
-        mensaje: 'Con verificación estricta NO conecta (el certificado de la base no es de una autoridad reconocida, o no coincide el nombre). Dejá MYSQL_SSL=no-verify: igual va cifrado.' });
-    } finally {
-      if (conexion) await conexion.end().catch(() => {});
+      console.error('probar TLS estricto error:', err);
+      res.status(500).json({ error: 'No se pudo hacer la prueba' });
     }
   });
 

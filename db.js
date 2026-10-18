@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise');
+const { opcionesSsl } = require('./dbTls');
 
 // Bug real en produccion: el plan de Clever Cloud para este usuario de
 // MySQL tiene un tope de 'max_user_connections' de 5 (visible en el
@@ -34,21 +35,16 @@ const mysql = require('mysql2/promise');
 //
 //   (sin definir)          -> como hasta ahora, sin TLS
 //   MYSQL_SSL=require      -> TLS validando el certificado del servidor
+//                             (+ MYSQL_SSL_CA: la autoridad de la base, fijada)
 //   MYSQL_SSL=no-verify    -> TLS SIN validar el certificado
 //
 // Sobre 'no-verify': cifra el trafico (sirve contra alguien que escucha la
 // red) pero no verifica con quien esta hablando, asi que no protege contra un
-// man-in-the-middle activo. Es un escalon intermedio para proveedores que
-// presentan un certificado autofirmado, no el destino final. Si funciona
-// 'require', usar 'require'.
-function resolverSsl() {
-  const modo = (process.env.MYSQL_SSL || '').trim().toLowerCase();
-  if (modo === 'require') return { minVersion: 'TLSv1.2', rejectUnauthorized: true };
-  if (modo === 'no-verify') return { minVersion: 'TLSv1.2', rejectUnauthorized: false };
-  return undefined;
-}
-
-const ssl = resolverSsl();
+// man-in-the-middle activo. Es un escalon intermedio, no el destino final.
+// Clever Cloud presenta un certificado de una autoridad generada por MySQL:
+// 'require' solo no conecta, 'require' + MYSQL_SSL_CA si (2026-10-18). Las
+// reglas estan en dbTls.js; la pantalla Seguridad muestra que poner.
+const ssl = opcionesSsl();
 if (!ssl) {
   console.warn('⚠️  MySQL sin TLS: el trafico con la base viaja sin cifrar. Ver MYSQL_SSL en db.js.');
 }
