@@ -114,12 +114,42 @@ function computeNightOvertime(sorted, cutoffMinutes, capMinutes) {
   return { needsVerification, start, end: lastCheckin, minutes, cappedMinutes: Math.min(minutes, capMinutes), overCap: minutes > capMinutes };
 }
 
+// Para estimar horas extra, la persona tiene que haber trabajado su jornada
+// normal ese día (si no, fichar solo a la tarde sería "todo hora extra", y
+// casi siempre es una comisión o un cambio de turno). Hasta el 2026-10-17 eso
+// era "algún fichaje entre las 7 y las 14", escrito en el código: servía para
+// el horario de AVP y para nadie más (pedido del dueño: "que cada empresa
+// configure su horario"). Ahora es el horario de esa persona ese día: algún
+// fichaje desde 1 hora antes de su entrada hasta su salida. Sin horario
+// resuelto (no debería pasar: siempre está al menos el predeterminado de la
+// empresa), se usa la ventana vieja como respaldo.
+const MARGEN_ANTES_DE_LA_ENTRADA = 60;
+// La jornada de un schedule (scheduleRepository.buildScheduleFromBlocks):
+// de su entrada a su salida, en minutos. null si no se pudo resolver.
+function jornadaDe(schedule) {
+  if (!schedule || !schedule.timeEntrance || !schedule.timeExit) return null;
+  return { desde: timeToMinutes(String(schedule.timeEntrance).slice(0, 5)), hasta: timeToMinutes(String(schedule.timeExit).slice(0, 5)) };
+}
+const VENTANA_SIN_HORARIO = { desde: 7 * 60, hasta: 14 * 60 };
+function huboActividadEnLaJornada(sorted, jornada) {
+  const conHorario = jornada && Number.isFinite(jornada.desde) && Number.isFinite(jornada.hasta) && jornada.hasta > jornada.desde;
+  const desde = conHorario ? Math.max(0, jornada.desde - MARGEN_ANTES_DE_LA_ENTRADA) : VENTANA_SIN_HORARIO.desde;
+  const hasta = conHorario ? jornada.hasta : VENTANA_SIN_HORARIO.hasta;
+  return sorted.some((d) => {
+    const m = minutesSinceMidnight(d);
+    return m >= desde && m <= hasta;
+  });
+}
+
 // checkins: Date[] -- todos los fichajes de UN empleado en UN dia (no hace
 // falta que vengan ordenados). Devuelve null si ese dia no genera hora extra
 // (sin actividad normal, o duracion resultante <= 0), o:
 //   { needsVerification, start, end, minutes, cappedMinutes, overCap }
 // options.cutoffNextDay: el corte es del dia siguiente (turno de noche, ver
 // corteAlDiaSiguiente).
+// options.jornada: { desde, hasta } en minutos -- el horario de ESA persona ese
+// dia (su plantilla, o el horario predeterminado de la empresa). Ver
+// huboActividadEnLaJornada.
 function computeDailyOvertime(checkins, options = {}) {
   const cutoffMinutes = options.cutoffMinutes ?? DEFAULT_CUTOFF_MINUTES;
   const capMinutes = options.capMinutes ?? DEFAULT_CAP_MINUTES;
@@ -128,11 +158,7 @@ function computeDailyOvertime(checkins, options = {}) {
   const sorted = checkins.slice().sort((a, b) => a - b);
   if (options.cutoffNextDay) return computeNightOvertime(sorted, cutoffMinutes, capMinutes);
 
-  const huboActividadNormal = sorted.some(d => {
-    const m = minutesSinceMidnight(d);
-    return m >= 7 * 60 && m <= 14 * 60;
-  });
-  if (!huboActividadNormal) return null;
+  if (!huboActividadEnLaJornada(sorted, options.jornada)) return null;
 
   // "posterior a" el corte, estricto -- una marca justo EN el corte todavia
   // es el fichaje normal del corte, no el reingreso a hora extra (pedido
@@ -272,5 +298,7 @@ module.exports = {
   resolveDailyOvertime,
   resolveOvertimeCutoffMinutes,
   resolveOvertimeCapMinutes,
-  corteAlDiaSiguiente
+  corteAlDiaSiguiente,
+  huboActividadEnLaJornada,
+  jornadaDe
 };

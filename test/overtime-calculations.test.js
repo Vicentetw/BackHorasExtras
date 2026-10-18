@@ -280,3 +280,25 @@ test('resolveDailyOvertime: el intervalo de marcador se respeta si NO coincide c
     assert.equal(r, null);
   });
 }
+
+// 2026-10-17: "trabajó su jornada" ya no es "algún fichaje entre 7 y 14"
+// (escrito para un solo horario) sino el horario de esa persona ese día.
+test('jornada de la persona: entra unos minutos antes y sale tarde, con dos fichajes -> cuenta (antes se descartaba)', () => {
+  const { jornadaDe } = require('../motor-laboral/services/overtimeCalculations');
+  const jornada = jornadaDe({ timeEntrance: '07:00:00', timeExit: '14:00:00' });
+  const r = computeDailyOvertime([dt('06:55:00'), dt('18:27:00')], { cutoffMinutes: 14 * 60, jornada });
+  assert.equal(r.minutes, 267);
+  assert.equal(r.needsVerification, true);
+  assert.equal(computeDailyOvertime([dt('06:55:00'), dt('18:27:00')], { cutoffMinutes: 14 * 60 }), null, 'sin horario: la ventana vieja de respaldo');
+});
+
+test('jornada de la persona: turno tarde 14 a 22 -> cuenta lo de después de las 22 (con 7 a 14 nunca contaba)', () => {
+  const r = computeDailyOvertime([dt('14:00:00'), dt('23:30:00')], { cutoffMinutes: 22 * 60, jornada: { desde: 14 * 60, hasta: 22 * 60 } });
+  assert.equal(r.minutes, 90);
+});
+
+test('jornada de la persona: fichó solo fuera de su horario -> no se estima (probable comisión o cambio de turno)', () => {
+  assert.equal(computeDailyOvertime([dt('15:00:00'), dt('20:00:00')], { cutoffMinutes: 14 * 60, jornada: { desde: 7 * 60, hasta: 14 * 60 } }), null);
+  // Más de 1 hora antes de la entrada tampoco es "su jornada".
+  assert.equal(computeDailyOvertime([dt('05:30:00'), dt('05:50:00')], { cutoffMinutes: 14 * 60, jornada: { desde: 7 * 60, hasta: 14 * 60 } }), null);
+});
