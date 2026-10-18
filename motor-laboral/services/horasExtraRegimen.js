@@ -39,7 +39,11 @@
  * @returns {{minutos:number, tramos:{desde:number,hasta:number}[], recortes:{motivo:string, minutos:number}[]}}
  */
 function recortarPorPlantilla(intervalo, { bloques = [], cuentanDesde = null } = {}) {
-  let tramos = intervalo.fin > intervalo.inicio ? [{ desde: intervalo.inicio, hasta: intervalo.fin }] : [];
+  // `intervalo.tramos` (opcional): ya viene en partes (ej. "lo que supera el
+  // horario": antes de la entrada y después de la salida). Sin eso, un solo tramo.
+  let tramos = Array.isArray(intervalo.tramos)
+    ? intervalo.tramos.filter((t) => t.hasta > t.desde).map((t) => ({ desde: t.desde, hasta: t.hasta }))
+    : (intervalo.fin > intervalo.inicio ? [{ desde: intervalo.inicio, hasta: intervalo.fin }] : []);
   const recortes = [];
 
   const quitar = (desde, hasta, motivo) => {

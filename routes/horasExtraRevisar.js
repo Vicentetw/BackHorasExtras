@@ -62,6 +62,20 @@ function clasificar(dia, fichajes) {
   // sin inicio" (etapa 3, configurable por empresa). Fuera de esta lista.
   if (ultimo && ultimo.tipos.some((t) => t.categoria === 'HE' && t.rol === 'regreso')) return null;
   if (dia.aRevisar && dia.minutos > UMBRAL_MINUTOS_ESTIMADAS) {
+    // "Lo que supera el horario" con un fichaje de menos: no se sabe qué
+    // tramo es cuál, se midió hasta el último.
+    if (dia.fuente === 'schedule' && dia.fueraDeHorario) {
+      return {
+        tipo: 'fuera_de_horario',
+        explicacion: `Trabajó todo el día fuera de su horario (${dia.desde || '—'} a ${dia.hasta || '—'}) y se contó todo como horas extra (${horas(dia.minutos)}). ¿Tiene asignado el horario correcto?`,
+      };
+    }
+    if (dia.fuente === 'schedule') {
+      return {
+        tipo: 'estimada',
+        explicacion: `Le falta un fichaje: se contó desde ${dia.desde || 'el fin del horario'} hasta su último fichaje (${dia.hasta || '—'}, ${horas(dia.minutos)}).`,
+      };
+    }
     return {
       tipo: 'estimada',
       explicacion: `No marcó el inicio de horas extra: se tomaron desde ${dia.desde || 'el corte'} hasta ${dia.hasta || 'su último fichaje'} (${horas(dia.minutos)}).`,
