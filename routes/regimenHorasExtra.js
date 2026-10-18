@@ -90,10 +90,15 @@ module.exports = function (db) {
       const invalido = Object.entries(topes).find(([, v]) => v === undefined);
       if (invalido) return res.status(400).json({ error: `${invalido[0]}: tiene que ser un número entero de minutos, o vacío` });
       const politica = b.politicaExcedente || 'AVISAR';
-      const fuente = b.fuente || 'MARCADORES_O_ESTIMADO';
+      // `fuente` (2026-10-18, punto F): el cálculo ya no la usa. De dónde
+      // salen las horas extra se elige en un solo lugar (Horas extra → paso 1,
+      // por empresa o plantilla), así ninguna pantalla cuenta distinto. Se
+      // guarda siempre el valor neutro para que la base no diga algo que no
+      // se aplica; un valor viejo de un cliente se ignora sin error.
+      const fuente = 'MARCADORES_O_ESTIMADO';
       const modo = b.redondeoModo || 'ABAJO';
       if (!POLITICAS.includes(politica) || !FUENTES.includes(fuente) || !MODOS.includes(modo)) {
-        return res.status(400).json({ error: 'politicaExcedente, fuente o redondeoModo inválidos' });
+        return res.status(400).json({ error: 'politicaExcedente o redondeoModo inválidos' });
       }
       const [r] = await db.query(
         `INSERT INTO overtime_regime_policies

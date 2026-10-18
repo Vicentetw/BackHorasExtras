@@ -103,10 +103,15 @@ test('con corte 15:00 en la plantilla, la HE por marcador cuenta desde las 15:00
   assert.equal(d.overtimeMinutesBeforeCutoff, 18);
 });
 
-test('sin corte cargado, la misma plantilla sigue contando desde el marcador (sin cambios)', async () => {
+// 2026-10-18 (una sola verdad): sin corte cargado cuenta desde el marcador,
+// pero el DESCANSO de la plantilla (14 a 15) nunca es hora extra, para nadie.
+// Antes ese recorte lo hacía solo el cálculo por régimen, y la misma persona
+// daba 199 en el calendario y 181 en el informe por régimen. 14:42 a 18:01 =
+// 199, menos 14:42 a 15:00 del descanso (18) = 181.
+test('sin corte cargado: cuenta desde el marcador, sin el descanso de la plantilla', async () => {
   const d = await dia(SIN_CORTE.legajo);
   assert.equal(d.overtimeSource, 'marker');
-  assert.equal(d.overtimeMinutes, 199, '14:42 a 18:01');
+  assert.equal(d.overtimeMinutes, 181, '14:42 a 18:01 menos el descanso 14:42-15:00');
   assert.equal(d.overtimeMarkerStart, null);
   assert.equal(d.overtimeMinutesBeforeCutoff, 0);
 });

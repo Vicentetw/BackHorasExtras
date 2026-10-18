@@ -66,7 +66,7 @@ function resumenParaElEmpleado(r) {
     tardanzasJustificadas: r.lateJustified,
     justificadas: r.excused,
     diasEnCampana: r.campaignDays || 0,
-    horasExtraMinutos: Math.round(Number(r.overtimeHours || 0) * 60),
+    horasExtraMinutos: r.overtimeMinutes != null ? Number(r.overtimeMinutes) : Math.round(Number(r.overtimeHours || 0) * 60),
     // Ojo con el nombre (histórico): estos dos son las LLEGADAS TARDE
     // JUSTIFICADAS, no las salidas particulares. El portal los muestra con
     // su nombre correcto desde 2026-10-15. Se dejan por compatibilidad.

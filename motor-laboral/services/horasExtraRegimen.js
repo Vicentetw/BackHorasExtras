@@ -291,6 +291,9 @@ function calcularPeriodo({ dias, politicaDe, reglasDe, autorizacionDe, aprobados
     }
     const fila = {
       fecha: d.fecha, tipoDeDia: d.tipoDeDia, minutosFuera: recorte.minutos, minutos: ajuste.minutos,
+      // El mínimo que valió ese día y lo que quedó afuera por él (0 = nada).
+      minimo: politica.minimo ?? null,
+      bajoMinimo: politica.minimo != null && recorte.minutos > 0 && recorte.minutos < politica.minimo ? recorte.minutos : 0,
       clase: clase.clase, recargo: clase.recargo, recortes: recorte.recortes,
       motivos: [ajuste.motivo, clase.motivo].filter(Boolean),
     };
@@ -310,17 +313,19 @@ function calcularPeriodo({ dias, politicaDe, reglasDe, autorizacionDe, aprobados
   // despues se acumula mes a mes dentro del rango.
   const total = { reales: 0, computables: 0, excedente: 0, pendiente: 0, porRecargo: {} };
   const meses = [];
-  let yaComputadoEnElAnio = 0;
-  let anioActual = null;
   for (const mes of [...extrasPorMes.keys()].sort()) {
     const primerDia = `${mes}-01`;
-    if (mes.slice(0, 4) !== anioActual) { anioActual = mes.slice(0, 4); yaComputadoEnElAnio = Number(computadoAntesDe(mes)) || 0; }
+    // Tope anual (UNA SOLA VERDAD, 2026-10-18): lo ya computado en el año es
+    // lo de los meses CERRADOS anteriores (lo liquidado), siempre. Antes, si el
+    // rango pedido traía varios meses, también se acumulaba lo calculado en
+    // vivo de los meses anteriores del rango: septiembre pedido solo y
+    // septiembre dentro de agosto-septiembre podían dar distinto.
+    const yaComputadoEnElAnio = Number(computadoAntesDe(mes)) || 0;
     const politica = politicaDe(extrasPorMes.get(mes)[0].fecha) || politicaDe(primerDia) || {};
     const topes = resolverTopes(politica.topes, autorizacionDe(primerDia) || autorizacionDe(extrasPorMes.get(mes)[0].fecha));
     const r = aplicarTopesDelPeriodo(extrasPorMes.get(mes), topes, {
       politica: politica.politica || 'AVISAR', yaComputadoEnElAnio, aprobados: aprobadosDe(mes),
     });
-    yaComputadoEnElAnio += r.computables;
     meses.push({ mes, topes, ...r });
     for (const k of ['reales', 'computables', 'excedente', 'pendiente']) total[k] += r[k];
     for (const [k, v] of Object.entries(r.porRecargo)) total.porRecargo[k] = (total.porRecargo[k] || 0) + v;
@@ -333,8 +338,35 @@ function calcularPeriodo({ dias, politicaDe, reglasDe, autorizacionDe, aprobados
   return { ...total, registradas, noComputadas, aviso: total.excedente > 0, meses, dias: porDia };
 }
 
+/**
+ * Los días [desde, hasta] de un cálculo hecho sobre MESES ENTEROS (el de
+ * calcularPeriodo), con los mismos totales que daría calcularPeriodo. Para
+ * que una quincena o una semana sean exactamente su parte del mes: los topes
+ * mensuales se reparten sobre el mes entero, en orden, una sola vez.
+ */
+function recortarAlRango(completo, desde, hasta) {
+  const dias = (completo.dias || []).filter((d) => d.fecha >= desde && d.fecha <= hasta);
+  const total = { reales: 0, computables: 0, excedente: 0, pendiente: 0, porRecargo: {} };
+  let registradas = 0;
+  let noComputadas = 0;
+  for (const d of dias) {
+    if (!(d.minutos > 0)) continue;
+    if (d.clase === 'REGISTRAR') { registradas += d.minutos; continue; }
+    if (d.clase === 'NO_COMPUTAR') { noComputadas += d.minutos; continue; }
+    total.reales += d.minutos;
+    total.computables += d.computables || 0;
+    total.excedente += d.excedente || 0;
+    total.pendiente += d.pendiente || 0;
+    const clave = d.recargo == null ? 'sin recargo' : `${d.recargo}%`;
+    total.porRecargo[clave] = (total.porRecargo[clave] || 0) + (d.computables || 0);
+  }
+  const meses = (completo.meses || []).filter((m) => m.mes >= desde.slice(0, 7) && m.mes <= hasta.slice(0, 7));
+  return { ...total, registradas, noComputadas, aviso: total.excedente > 0, meses, dias };
+}
+
 module.exports = {
   calcularPeriodo,
+  recortarAlRango,
   recortarPorPlantilla,
   aplicarMinimoYRedondeo,
   clasificarPorTipoDeDia,

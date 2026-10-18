@@ -63,7 +63,7 @@ function ultimoDia(periodo) {
 // como horas extra (overtimeHours), asi coinciden al minuto.
 function filaDeLiquidacion(row, encuadre) {
   const r = row.regimenHorasExtra || null;
-  const aLiquidar = Math.round(Number(row.overtimeHours || 0) * 60);
+  const aLiquidar = row.overtimeMinutes != null ? Number(row.overtimeMinutes) : Math.round(Number(row.overtimeHours || 0) * 60);
   return {
     legajo: Number(row.employeeId),
     nombre: row.name,
