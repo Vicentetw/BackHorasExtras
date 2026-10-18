@@ -13,6 +13,9 @@
 //   - MARCAS_O_EXCESO: las marcas si las hay; si no, lo que supera el horario.
 //   - EXCESO: solo lo que supera el horario de la plantilla. Sirve para
 //     cualquier reloj, incluidos los de rostro (sin teclas).
+//   - MARCAS: solo las marcas del reloj; sin marca, no hay horas extra
+//     automáticas (lo que antes era la "fuente: solo marcadores" de un
+//     régimen, que ahora se elige acá: una sola verdad para todas las pantallas).
 // Además: si llegar antes de horario cuenta (por defecto no) y un mínimo de
 // minutos por plantilla.
 //
@@ -27,7 +30,7 @@
 // o régimen > empresa.
 const { getAppSetting, setAppSetting } = require('../repositories/appSettingsRepository');
 
-const METODOS = ['MARCAS_O_ESTIMADO', 'MARCAS_O_EXCESO', 'EXCESO'];
+const METODOS = ['MARCAS_O_ESTIMADO', 'MARCAS_O_EXCESO', 'EXCESO', 'MARCAS'];
 const POR_DEFECTO = 'MARCAS_O_ESTIMADO';
 const MAXIMO_MINIMO = 240;
 

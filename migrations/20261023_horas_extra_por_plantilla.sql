@@ -18,7 +18,7 @@
 CREATE TABLE IF NOT EXISTS plantilla_horas_extra (
   template_id            INT NOT NULL PRIMARY KEY,
   tenant_id              INT NOT NULL,
-  metodo                 VARCHAR(24) NULL,          -- MARCAS_O_ESTIMADO | MARCAS_O_EXCESO | EXCESO | NULL = el de la empresa
+  metodo                 VARCHAR(24) NULL,          -- MARCAS_O_ESTIMADO | MARCAS_O_EXCESO | EXCESO | MARCAS | NULL = el de la empresa
   contar_llegada         TINYINT NULL,              -- 1 = llegar antes cuenta, 0 = no, NULL = lo de la empresa
   minimo                 INT NULL,                  -- minutos; NULL = el del convenio o la empresa
   actualizado_por_email  VARCHAR(255) NULL,

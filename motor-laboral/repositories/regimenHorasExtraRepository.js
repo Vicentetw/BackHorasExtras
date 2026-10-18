@@ -57,7 +57,10 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
   ).catch(ignorarTablaFaltante) : [[]];
 
   // Meses CERRADOS (B5, migracion 20261008) de los años del rango, anteriores
-  // al primer mes del rango: su foto alimenta el tope anual. Solo cuenta el
+  // al ULTIMO mes del rango: su foto alimenta el tope anual de cada mes
+  // (computadoCerradoAntes filtra los anteriores a cada uno). Antes eran solo
+  // los anteriores al PRIMER mes, y los del medio del rango se acumulaban en
+  // vivo: el mismo mes daba distinto segun el rango pedido. Solo cuenta el
   // ultimo cierre de cada mes, y solo si el mes sigue cerrado (su ultima
   // accion es CERRAR, no REABRIR).
   const anios = [...new Set(periodos.map((p) => p.slice(0, 4)))];
@@ -68,7 +71,7 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
            WHERE tenant_id = ? AND LEFT(periodo, 4) IN (?) GROUP BY periodo) u ON u.ultimo = r.closing_id
      JOIN overtime_period_closings c ON c.id = u.ultimo AND c.accion = 'CERRAR'
      WHERE r.tenant_id = ? AND r.employee_id IN (?) AND r.periodo < ?`,
-    [tenantId, anios, tenantId, ids, desde.slice(0, 7)]
+    [tenantId, anios, tenantId, ids, hasta.slice(0, 7)]
   ).catch(ignorarTablaFaltante) : [[]];
   // Mas los ajustes de meses anteriores ya pagados (migracion 20261009):
   // cuentan para el año del mes de ORIGEN, que es cuando se trabajaron.
@@ -78,7 +81,7 @@ async function cargarConfiguracion(db, tenantId, { empleados, desde, hasta }) {
      JOIN (SELECT periodo, MAX(id) AS ultimo FROM overtime_period_closings WHERE tenant_id = ? GROUP BY periodo) u ON u.ultimo = a.closing_id
      JOIN overtime_period_closings c ON c.id = u.ultimo AND c.accion = 'CERRAR'
      WHERE a.tenant_id = ? AND a.employee_id IN (?) AND LEFT(a.periodo_origen, 4) IN (?) AND a.periodo_origen < ?`,
-    [tenantId, tenantId, ids, anios, desde.slice(0, 7)]
+    [tenantId, tenantId, ids, anios, hasta.slice(0, 7)]
   ).catch(ignorarTablaFaltante) : [[]];
   cerrados.push(...ajustesCerrados);
 

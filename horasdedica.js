@@ -66,6 +66,7 @@ const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/a
 const minimoHorasExtra = require('./motor-laboral/services/minimoHorasExtra');
 const configHorasExtra = require('./motor-laboral/services/configHorasExtra');
 const excesoSobreHorario = require('./motor-laboral/services/excesoSobreHorario');
+const { compararDias } = require('./motor-laboral/services/compararHorasExtra');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
 const limitesAsistencia = require('./motor-laboral/services/limitesAsistencia');
 const autorizacionSalidas = require('./motor-laboral/services/autorizacionSalidas');
@@ -3180,11 +3181,35 @@ function dayOvertimeSourceBruto(overtimeResult, useEngineAsOfficial) {
     && (overtimeResult.source === 'fallback' || (overtimeResult.source === 'schedule' && !!overtimeResult.needsVerification));
 }
 
+// Meses de [desde, hasta] cerrados en Liquidación (su última acción es
+// CERRAR), con cuándo y quién. Sin la migración 20261008: ninguno.
+async function mesesCerradosEn(tenantId, desde, hasta) {
+  if (tenantId == null) return [];
+  try {
+    const [filas] = await db.query(
+      `SELECT c.periodo, c.created_at AS en, u.email AS por
+         FROM overtime_period_closings c
+         JOIN (SELECT periodo, MAX(id) AS ultimo FROM overtime_period_closings
+                WHERE tenant_id = ? AND periodo BETWEEN ? AND ? GROUP BY periodo) x ON x.ultimo = c.id
+         LEFT JOIN app_users u ON u.id = c.created_by
+        WHERE c.accion = 'CERRAR'
+        ORDER BY c.periodo`,
+      [tenantId, String(desde).slice(0, 7), String(hasta).slice(0, 7)]);
+    return filas.map((f) => ({ periodo: f.periodo, en: f.en, por: f.por || null }));
+  } catch (err) {
+    if (err.code === 'ER_NO_SUCH_TABLE' || err.code === 'ER_BAD_FIELD_ERROR') return [];
+    throw err;
+  }
+}
+
 function calcularAsistencia(req, from, to, tenantId, extra = {}) {
   return new Promise((resolve, reject) => {
     const pedido = Object.create(req);
     // En Express 5 req.query es un getter: asignarlo se ignora sin avisar.
     Object.defineProperty(pedido, 'query', { value: { ...extra, from, to, ...(tenantId != null ? { tenantId: String(tenantId) } : {}) } });
+    // Marca de pedido interno: solo así se aceptan vistas previas y el cálculo
+    // del mes entero del régimen (ver attendanceRangeHandler).
+    Object.defineProperty(pedido, 'calculoInterno', { value: true });
     const respuesta = {
       statusCode: 200,
       status(codigo) { this.statusCode = codigo; return this; },
@@ -3286,10 +3311,18 @@ async function attendanceRangeHandler(req, res) {
     // de lo que devuelve Presentismo.
     const juntarDiasARevisar = req.query.diasARevisar === '1';
     const diasARevisar = [];
-    // Vista previa del mínimo de horas extra: los días con pocas horas extra
-    // automáticas (antes de aplicar el mínimo). Solo si se piden.
-    const juntarMinutosHE = req.query.minutosHE === '1';
-    const minutosHECortos = [];
+    // Pedidos que solo se aceptan desde adentro del servidor (calcularAsistencia):
+    // vistas previas y el mes entero del régimen. Desde afuera se ignoran, así
+    // nadie puede hacer que esta pantalla muestre un cálculo "simulado".
+    const interno = req.calculoInterno === true;
+    // Lo que cuenta de horas extra automáticas cada día, de cada persona: las
+    // vistas previas ("Ver qué cambiaría") corren el cálculo COMPLETO dos veces
+    // (como está y con la otra configuración) y comparan esto día por día.
+    const juntarHEDias = interno && req.query.heDias === '1';
+    const heDias = [];
+    // El régimen sobre meses enteros, para un rango parcial (ver regimenCanonico).
+    const juntarRegimenDias = interno && req.query.regimenDias === '1';
+    const regimenDiasPorEmpleado = {};
     let employees = await userRepository.findAll({ tenantId }, db);
     if (detailEmployeeId) {
       employees = employees.filter(e => String(e.employeeId) === detailEmployeeId);
@@ -3322,10 +3355,12 @@ async function attendanceRangeHandler(req, res) {
       configHEPorTenant.set(tid, await configHorasExtra.leerEmpresa(db, tid));
       excepcionesHEPorTenant.set(tid, (await configHorasExtra.leerPlantillas(db, tid)).mapa);
     }
-    // Vista previa de "Ver qué cambiaría" (/config/horas-extra/impacto): otra
-    // configuración, solo para comparar. No cambia nada de lo que se devuelve.
+    // Vista previa de "Ver qué cambiaría" (routes/configHorasExtra.js y el
+    // mínimo): TODO el cálculo corre con la otra configuración (solo pedidos
+    // internos). Así la vista previa da exactamente lo que daría guardarla,
+    // régimen incluido.
     let simulacionHE = null;
-    if (req.query.simularMetodoHE) {
+    if (interno && req.query.simularMetodoHE) {
       simulacionHE = {
         metodo: configHorasExtra.metodoValido(req.query.simularMetodoHE) || configHorasExtra.POR_DEFECTO,
         contarLlegadaAnticipada: req.query.simularLlegadaHE === '1',
@@ -3333,12 +3368,15 @@ async function attendanceRangeHandler(req, res) {
         plantillaId: req.query.simularPlantillaHE ? Number(req.query.simularPlantillaHE) : null,
       };
     }
-    const comparacionHE = [];
+    if (interno && req.query.simularMinimoEmpresaHE !== undefined) {
+      const m = minimoHorasExtra.normalizar(req.query.simularMinimoEmpresaHE);
+      for (const tid of tenantIds) minimoHEPorTenant.set(tid, m);
+    }
     // Lo que vale para una persona un día: excepción de su plantilla > empresa.
     const configHEDelDia = (tenantIdDelDia, templateId, simular) => {
       const empresa = configHEPorTenant.get(tenantIdDelDia);
       const excepcion = (excepcionesHEPorTenant.get(tenantIdDelDia) || new Map()).get(Number(templateId));
-      if (!simular) return configHorasExtra.resolver(empresa, excepcion);
+      if (!simular || !simulacionHE) return configHorasExtra.resolver(empresa, excepcion);
       const s = simulacionHE;
       if (s.plantillaId == null) return configHorasExtra.resolver({ metodo: s.metodo, contarLlegadaAnticipada: s.contarLlegadaAnticipada }, excepcion);
       if (Number(templateId) !== s.plantillaId) return configHorasExtra.resolver(empresa, excepcion);
@@ -4041,6 +4079,27 @@ async function attendanceRangeHandler(req, res) {
         })
       : null;
     const usaRegimen = !!(regimenCfg && regimenCfg.hayConfiguracion);
+    // UNA SOLA VERDAD con topes: si el rango no es de meses enteros (una
+    // quincena, una semana, un rango cualquiera), el régimen se calcula sobre
+    // los MESES ENTEROS que toca y de ahí se toman estos días. Los topes del
+    // mes se reparten en orden sobre el mes completo, así una quincena es
+    // exactamente su parte del mes. Cuesta un cálculo más, solo en ese caso.
+    // (Se compara con el `to` PEDIDO: el mes en curso pedido entero no hace
+    // falta recalcularlo aunque hoy sea día 18; los días que faltan no tienen
+    // fichajes.)
+    const hastaStr = String(to).slice(0, 10);
+    const primerDiaDelMes = `${from.slice(0, 7)}-01`;
+    const ultimoDiaDelMes = (() => { const [a, m] = hastaStr.slice(0, 7).split('-').map(Number); return `${hastaStr.slice(0, 7)}-${String(new Date(a, m, 0).getDate()).padStart(2, '0')}`; })();
+    let regimenCanonico = null;
+    if (usaRegimen && !juntarRegimenDias && (from !== primerDiaDelMes || hastaStr !== ultimoDiaDelMes)) {
+      const completo = await calcularAsistencia(req, primerDiaDelMes, ultimoDiaDelMes, tenantId, {
+        regimenDias: '1',
+        ...(detailEmployeeId ? { employeeId: detailEmployeeId } : {}),
+        ...(simulacionHE ? { simularMetodoHE: req.query.simularMetodoHE, simularLlegadaHE: req.query.simularLlegadaHE, simularMinimoHE: req.query.simularMinimoHE, simularPlantillaHE: req.query.simularPlantillaHE } : {}),
+        ...(req.query.simularMinimoEmpresaHE !== undefined && interno ? { simularMinimoEmpresaHE: req.query.simularMinimoEmpresaHE } : {}),
+      });
+      regimenCanonico = new Map(Object.entries(completo.regimenDias || {}));
+    }
     // Minutos del dia de un Date, relativo a `date` (si el fin cae al dia
     // siguiente, suma 1440). CON fraccion de segundos: el redondeo se hace
     // una sola vez al final del dia, igual que el calculo de siempre
@@ -4059,6 +4118,44 @@ async function attendanceRangeHandler(req, res) {
       }),
       cuentanDesde: schedule && schedule.overtimeCutoffTime ? timeToMinutes(String(schedule.overtimeCutoffTime).slice(0, 5)) : null,
     });
+    // UNA SOLA VERDAD (2026-10-18). El resultado automático de un día (marca,
+    // estimado o "lo que supera el horario") pasa por el MISMO recorte de la
+    // plantilla que usa el cálculo por régimen (horasExtraRegimen.
+    // recortarPorPlantilla): nada dentro de la jornada ni de un descanso, nada
+    // antes del corte, y solo dentro de la ventana de horas extra si la
+    // plantilla la define. Regla universal: nadie hace horas extra dentro de
+    // su propio horario. Antes, sin régimen no se recortaba: con un horario
+    // partido (8 a 12 y 16 a 20) y el corte a las 13:38, el estimado contaba
+    // las 16 a 20 como hora extra. Devuelve el mismo formato de siempre, con
+    // los minutos ya recortados, los tramos y qué se descontó (para mostrarlo).
+    const recortarDelDia = (r, date, schedule) => {
+      if (!r) return null;
+      const porHorario = r.source === 'schedule';
+      const intervalo = porHorario
+        ? { inicio: r.tramos[0].desde, fin: r.tramos[r.tramos.length - 1].hasta, tramos: r.tramos }
+        : { inicio: minutosDelDia(r.start, date), fin: minutosDelDia(r.end, date) };
+      const plantilla = plantillaParaRegimen(schedule);
+      // "Lo que supera el horario" ya aplicó el corte (y la llegada anticipada,
+      // si cuenta): no se vuelve a cortar por el corte.
+      const rec = horasExtraRegimen.recortarPorPlantilla(intervalo, porHorario ? { ...plantilla, cuentanDesde: null } : plantilla);
+      const redondear = (x) => Math.round(Number(x.toFixed(6)));
+      const minutes = redondear(rec.minutos);
+      if (minutes <= 0) return null;
+      const base = new Date(`${date}T00:00:00`);
+      const aFecha = (m) => new Date(base.getTime() + Math.round(m * 60000));
+      const recortes = rec.recortes.map((x) => ({ motivo: x.motivo, minutos: redondear(x.minutos) })).filter((x) => x.minutos > 0);
+      return {
+        ...r,
+        minutes,
+        // Si el recorte se llevó el comienzo, el inicio mostrado es el real.
+        start: recortes.length ? aFecha(rec.tramos[0].desde) : r.start,
+        end: recortes.length ? aFecha(rec.tramos[rec.tramos.length - 1].hasta) : r.end,
+        tramos: rec.tramos,
+        recortes,
+        // (el aviso de "superó el tope diario" se calcula sobre el total del
+        // día más abajo: dayOvertimeOverCap)
+      };
+    };
     const tipoDeDiaFinDeSemana = (date) => {
       const dow = scheduleRepository.getLocalDayOfWeek(date);
       return dow === 6 ? 'SATURDAY' : dow === 0 ? 'SUNDAY' : 'REST_DAY';
@@ -4145,6 +4242,8 @@ async function attendanceRangeHandler(req, res) {
       // cargas manuales quedan exactamente como hoy).
       const diasRegimen = usaRegimen ? [] : null;
       let autoLegacyMinutes = 0;
+      // fecha -> lo que cuenta de automático ese día (ver más abajo).
+      const heFinalDelEmpleado = new Map();
       // Dia no laborable o feriado con fichajes: con un regimen configurado
       // ese tiempo se clasifica por tipo de dia (sin regimen, como siempre,
       // no genera HE automatica). El intervalo es el marcado (9 -> 10) si lo
@@ -4220,6 +4319,8 @@ async function attendanceRangeHandler(req, res) {
               lastCheckin: checks.length > 0 ? extractTime(checks[checks.length - 1]) : undefined,
               totalCheckins: checks.length,
               checkins: checks.map(c => extractTime(c)),
+              // Lo que suma este día (solo cargas manuales): la suma de los días = el total.
+              overtimeMinutes: manualMinutesSin,
               overtimeManualMinutes: manualMinutesSin,
               hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
             });
@@ -4257,6 +4358,8 @@ async function attendanceRangeHandler(req, res) {
               date,
               status: 'NonWorkDay',
               fueraDeHorario: fueraNoLaborable,
+              // Lo que suma este día (solo cargas manuales): la suma de los días = el total.
+              overtimeMinutes: manualMinutesNonWork,
               overtimeManualMinutes: manualMinutesNonWork,
               eventTypeCode: leaveEventNonWork ? (leaveEventNonWork.eventTypeCode || null) : undefined,
               eventTypeDescripcion: leaveEventNonWork ? (leaveEventNonWork.eventTypeDescripcion || null) : undefined,
@@ -4289,6 +4392,8 @@ async function attendanceRangeHandler(req, res) {
               firstCheckin: checks.length > 0 ? extractTime(checks[0]) : undefined,
               lastCheckin: checks.length > 0 ? extractTime(checks[checks.length - 1]) : undefined,
               totalCheckins: checks.length,
+              // Lo que suma este día (solo cargas manuales): la suma de los días = el total.
+              overtimeMinutes: manualMinutesHoliday,
               overtimeManualMinutes: manualMinutesHoliday,
               hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
               inCampaign: enCampana || undefined,
@@ -4324,6 +4429,8 @@ async function attendanceRangeHandler(req, res) {
               lastCheckin: extractTime(checks[checks.length - 1]),
               totalCheckins: checks.length,
               checkins: checks.map(c => extractTime(c)),
+              // Lo que suma este día (solo cargas manuales): la suma de los días = el total.
+              overtimeMinutes: manualMinutesRegreso,
               overtimeManualMinutes: manualMinutesRegreso,
               hasParticularExit: particularExitByEmployeeDate.has(`${employeeId}|${date}`),
             });
@@ -4410,13 +4517,21 @@ async function attendanceRangeHandler(req, res) {
             } : null);
             return excesoDelDia.get(clave);
           };
+          const conMarca = overtimeResultMarcas && overtimeResultMarcas.source === 'marker' ? overtimeResultMarcas : null;
           const heSegunMetodo = (cfg) => {
             if (cfg.metodo === 'EXCESO') return excesoComoResultado(cfg.contarLlegadaAnticipada);
-            if (cfg.metodo === 'MARCAS_O_EXCESO') return overtimeResultMarcas && overtimeResultMarcas.source === 'marker' ? overtimeResultMarcas : excesoComoResultado(cfg.contarLlegadaAnticipada);
+            if (cfg.metodo === 'MARCAS_O_EXCESO') return conMarca || excesoComoResultado(cfg.contarLlegadaAnticipada);
+            if (cfg.metodo === 'MARCAS') return conMarca; // solo marcas: sin marca, no hay horas extra automáticas
             return overtimeResultMarcas;
           };
-          const cfgHEDelDia = configHEDelDia(u.tenantId, schedule && schedule.templateId, false);
-          const overtimeResult = heSegunMetodo(cfgHEDelDia);
+          const cfgHEDelDia = configHEDelDia(u.tenantId, schedule && schedule.templateId, !!simulacionHE);
+          // UNA SOLA VERDAD (2026-10-18): el intervalo de horas extra del día
+          // pasa SIEMPRE por el mismo recorte de la plantilla (nunca dentro de
+          // la jornada, nunca en un descanso, solo desde el corte y dentro de
+          // la ventana de horas extra si la hay). Antes este recorte lo hacía
+          // solo el cálculo por régimen: con régimen, el total del mes y el
+          // calendario del día podían dar distinto. Ver recortarDelDia.
+          const overtimeResult = recortarDelDia(heSegunMetodo(cfgHEDelDia), date, schedule);
           // "Autorizado a hacer horas extras" (employees.overtime_authorized):
           // existia la columna desde hacia tiempo pero ningun motor la
           // aplicaba (confirmado al investigar antes de este cambio) -- un
@@ -4531,23 +4646,6 @@ async function attendanceRangeHandler(req, res) {
           const minimoHEDelDia = cfgHEDelDia.minimoPlantilla || minimoHEPorTenant.get(u.tenantId) || null;
           const conMinimoHE = minimoHorasExtra.aplicar(computedOvertimeMinutesBruto, minimoHEDelDia);
           const computedOvertimeMinutes = conMinimoHE.minutos;
-          // "Ver qué cambiaría" de Horas extra: lo de hoy contra la otra configuración.
-          if (simulacionHE && !useEngineAsOfficial) {
-            const cfgSim = configHEDelDia(u.tenantId, schedule && schedule.templateId, true);
-            const resSim = heSegunMetodo(cfgSim);
-            const brutoSim = resSim && isOvertimeAuthorized ? resSim.minutes : 0;
-            const minSim = minimoHorasExtra.aplicar(brutoSim, cfgSim.minimoPlantilla || minimoHEPorTenant.get(u.tenantId) || null).minutos;
-            if (minSim !== computedOvertimeMinutes || !!(resSim && resSim.needsVerification) !== !!(overtimeResult && overtimeResult.needsVerification)) {
-              comparacionHE.push({
-                employeeId: String(employeeId), fecha: date, hoy: computedOvertimeMinutes, con: minSim,
-                aRevisarHoy: !!(overtimeResult && isOvertimeAuthorized && overtimeResult.needsVerification && computedOvertimeMinutes > 0),
-                aRevisarCon: !!(resSim && isOvertimeAuthorized && resSim.needsVerification && minSim > 0),
-              });
-            }
-          }
-          if (juntarMinutosHE && !cfgHEDelDia.minimoPlantilla && computedOvertimeMinutesBruto > 0 && computedOvertimeMinutesBruto <= minimoHorasExtra.MAXIMO_PERMITIDO) {
-            minutosHECortos.push({ employeeId: String(employeeId), fecha: date, minutos: computedOvertimeMinutesBruto, estimada: dayOvertimeSourceBruto(overtimeResult, useEngineAsOfficial) });
-          }
           const dayOvertimeNeedsVerification = useEngineAsOfficial
             ? false // el motor nuevo clasifica por regla, no por heuristico -- nada que "verificar"
             : !!(overtimeResult && isOvertimeAuthorized && overtimeResult.needsVerification);
@@ -4581,6 +4679,15 @@ async function attendanceRangeHandler(req, res) {
           const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
           const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
           const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
+          // Lo que cuenta de automático este día (lo reemplaza el régimen más
+          // abajo, si la persona tiene uno): para las vistas previas, que
+          // comparan dos cálculos completos día por día.
+          heFinalDelEmpleado.set(date, {
+            auto: isManuallyOmitted ? 0 : computedOvertimeMinutes,
+            bruto: isManuallyOmitted ? 0 : computedOvertimeMinutesBruto,
+            aRevisar: dayOvertimeNeedsVerification && computedOvertimeMinutes > 0 && !isManuallyOmitted,
+            estimada: dayOvertimeSourceBruto(overtimeResult, useEngineAsOfficial),
+          });
           // Estimadas: las de siempre sin marcador, y las de "lo que supera el
           // horario" cuando falta un fichaje.
           if (juntarDiasARevisar && (dayOvertimeSource === 'fallback' || (dayOvertimeSource === 'schedule' && dayOvertimeNeedsVerification)) && computedOvertimeMinutes > 0) {
@@ -4600,31 +4707,24 @@ async function attendanceRangeHandler(req, res) {
           const politicaDelDia = diasRegimen ? regimenCfg.politicaPara(encuadreDelDia.conventionId, date, encuadreDelDia.regimeId) : null;
           if (diasRegimen && politicaDelDia) {
             autoLegacyMinutes += isManuallyOmitted ? 0 : computedOvertimeMinutes;
-            // Fuente segun el regimen: solo marcadores, solo fichajes, o
-            // marcadores y si faltan el estimado (lo de siempre).
-            const fuente = politicaDelDia.fuente || 'MARCADORES_O_ESTIMADO';
-            let candidato = overtimeResult;
-            if (fuente === 'MARCADORES' && candidato && candidato.source !== 'marker') candidato = null;
-            if (fuente === 'FICHAJES') {
-              // Solo fichajes: con "lo que supera el horario" configurado, ese
-              // cálculo; si no, el estimado de siempre.
-              candidato = cfgHEDelDia.metodo === configHorasExtra.POR_DEFECTO
-                ? overtimeCalc.computeDailyOvertime(overtimeChecks, { cutoffMinutes: effectiveCutoffMinutes, capMinutes: effectiveCapMinutes, cutoffNextDay, jornada: overtimeCalc.jornadaDe(schedule) })
-                : excesoComoResultado(cfgHEDelDia.contarLlegadaAnticipada);
-            }
-            const inicio = candidato && (candidato.markerStart || candidato.start);
+            // UNA SOLA VERDAD (punto F, 2026-10-18): el régimen parte EXACTAMENTE
+            // del mismo resultado del día que ve Presentismo (método de la
+            // empresa o de la plantilla, ya recortado por la plantilla). Antes
+            // cada régimen tenía su propia "fuente" (solo marcas / solo
+            // fichajes) y el informe por régimen podía contar otra cosa que
+            // Presentismo para la misma persona y el mismo día. Lo que decía
+            // esa fuente ahora se elige en un solo lugar: Horas extra → paso 1
+            // (por empresa o por plantilla). La columna `fuente` queda en la
+            // base, sin uso.
             const dow = scheduleRepository.getLocalDayOfWeek(date);
-            const porHorario = !!(candidato && candidato.source === 'schedule');
-            const plantillaDelDia = plantillaParaRegimen(schedule);
             diasRegimen.push({
               fecha: date,
               tipoDeDia: dow === 6 ? 'SATURDAY' : dow === 0 ? 'SUNDAY' : 'WORKDAY',
-              intervalo: candidato && inicio && candidato.end
-                ? { inicio: minutosDelDia(inicio, date), fin: minutosDelDia(candidato.end, date), ...(porHorario ? { tramos: candidato.tramos } : {}) }
+              intervalo: overtimeResult
+                ? { inicio: overtimeResult.tramos[0].desde, fin: overtimeResult.tramos[overtimeResult.tramos.length - 1].hasta, tramos: overtimeResult.tramos }
                 : null,
-              // "Lo que supera el horario" ya aplicó el corte (y, si cuenta,
-              // la llegada anticipada): no se vuelve a recortar por el corte.
-              plantilla: porHorario ? { ...plantillaDelDia, cuentanDesde: null } : plantillaDelDia,
+              // Ya recortado por la plantilla (recortarDelDia): sin corte de nuevo.
+              plantilla: { ...plantillaParaRegimen(schedule), cuentanDesde: null },
               omitido: isManuallyOmitted,
               minimoPlantilla: cfgHEDelDia.minimoPlantilla || null,
             });
@@ -4816,6 +4916,10 @@ async function attendanceRangeHandler(req, res) {
               overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | 'schedule' (lo que supera el horario) | null
               // "Lo que supera el horario": cuánto de eso fue llegar antes de hora.
               overtimeEarlyMinutes: (dayOvertimeSource === 'schedule' && overtimeResult && overtimeResult.minutosAntes) || 0,
+              // Qué se descontó por la plantilla (dentro de la jornada, en un
+              // descanso, antes del corte...), para mostrarlo: "se descontaron
+              // 18 min del descanso". Vacío = nada.
+              overtimeRecortes: (!isManuallyOmitted && overtimeResult && overtimeResult.recortes) || [],
               // Trabajó todo el día fuera de su horario (¿horario mal asignado?).
               overtimeOutsideSchedule: !!(dayOvertimeSource === 'schedule' && overtimeResult && overtimeResult.fueraDeHorario),
               // Horas extra que no sumaron por ser menos que el mínimo de la empresa (0 = ninguna).
@@ -4969,7 +5073,7 @@ async function attendanceRangeHandler(req, res) {
         const internalId = u.internalEmployeeId;
         const enc = (f) => regimenCfg.encuadreDe(internalId, f);
         const minimoPlantillaPorFecha = new Map(diasRegimen.filter((d) => d.minimoPlantilla).map((d) => [d.fecha, d.minimoPlantilla]));
-        const r = horasExtraRegimen.calcularPeriodo({
+        const rPeriodo = horasExtraRegimen.calcularPeriodo({
           dias: diasRegimen,
           // Mínimo: el de la plantilla de ese día; si no, el de su
           // convenio/régimen; si no, el de la empresa.
@@ -4989,12 +5093,61 @@ async function attendanceRangeHandler(req, res) {
             ? true
             : (u.overtimeAuthorized === undefined || u.overtimeAuthorized === null ? true : !!Number(u.overtimeAuthorized)),
         });
+        // Un rango que no es de meses enteros (una quincena, una semana): los
+        // topes del mes se reparten sobre el MES ENTERO y de ahí se toma lo de
+        // estos días. Si no, la 2da quincena sola "no llegaba" al tope que sí
+        // alcanzaba dentro del mes, y el mismo día daba distinto según cómo se
+        // pidiera (ver regimenCanonico más arriba).
+        const canonico = regimenCanonico && regimenCanonico.get(String(employeeId));
+        const r = canonico ? horasExtraRegimen.recortarAlRango(canonico, from, formatLocalDate(effectiveEndDate)) : rPeriodo;
         const manualesMinutos = overtimeMinutes - autoLegacyMinutes;
         overtimeMinutes = manualesMinutos + r.computables;
         regimenHorasExtra = { ...r, manuales: manualesMinutos, dias: undefined };
+        if (juntarRegimenDias) regimenDiasPorEmpleado[String(employeeId)] = rPeriodo;
+        // UNA SOLA VERDAD: lo que cuenta cada día es lo del régimen (después
+        // de su mínimo, redondeo, tipo de día y topes). El calendario, los
+        // días a revisar y las vistas previas muestran ESE número, así la
+        // suma de los días da el total del mes.
+        const porFecha = new Map(r.dias.map((d) => [d.fecha, d]));
+        // Días que pasan por el régimen (con o sin tiempo fuera de horario).
+        const fechasRegimen = new Set(diasRegimen.map((d) => d.fecha));
+        // Lo que cuenta de automático ese día: sus computables (0 si no es
+        // hora extra para su régimen, o si quedó bajo el mínimo).
+        const autoRegimen = (fecha) => {
+          const x = porFecha.get(fecha);
+          return x && x.computables != null ? x.computables : 0;
+        };
+        for (const d of diasRegimen) {
+          if (!d.fecha || d.fecha < from || d.fecha > formatLocalDate(effectiveEndDate)) continue;
+          const prev = heFinalDelEmpleado.get(d.fecha) || { aRevisar: false, estimada: false, bruto: 0 };
+          const auto = d.omitido ? 0 : autoRegimen(d.fecha);
+          heFinalDelEmpleado.set(d.fecha, { ...prev, auto, aRevisar: prev.aRevisar && auto > 0 });
+        }
+        if (juntarDiasARevisar) {
+          // Un día "a revisar" que su régimen no cuenta (bajo su mínimo, día
+          // que no paga) ya no hay nada que revisar: sale de la lista. Los
+          // demás muestran lo que de verdad cuenta.
+          for (let i = diasARevisar.length - 1; i >= 0; i--) {
+            const x = diasARevisar[i];
+            if (x.employeeId !== String(employeeId) || !fechasRegimen.has(x.fecha)) continue;
+            const auto = autoRegimen(x.fecha);
+            if (auto > 0) x.minutos = auto;
+            else if (!x.omitido) diasARevisar.splice(i, 1);
+          }
+        }
         if (days) {
-          const porFecha = new Map(r.dias.map((d) => [d.fecha, d]));
-          for (const d of days) if (porFecha.has(d.date)) d.regimen = porFecha.get(d.date);
+          for (const d of days) {
+            if (!fechasRegimen.has(d.date)) continue;
+            const x = porFecha.get(d.date);
+            if (x) d.regimen = x;
+            const auto = d.overtimeManuallyOmitted ? 0 : autoRegimen(d.date);
+            d.overtimeMinutes = auto + (d.overtimeManualMinutes || 0);
+            // Lo que no suma por el mínimo (de su plantilla, régimen o empresa),
+            // a la vista: "8 min, menos del mínimo de 10".
+            d.overtimeBelowMinimumMinutes = x ? (x.bajoMinimo || 0) : 0;
+            d.overtimeMinimumMinutes = x && x.minimo != null ? x.minimo : (d.overtimeMinimumMinutes ?? null);
+            if (!auto) d.overtimeStartTime = null;
+          }
         }
       }
 
@@ -5018,6 +5171,11 @@ async function attendanceRangeHandler(req, res) {
           .sort((a, b) => b.dias - a.dias || a.motivo.localeCompare(b.motivo)),
         partialAbsence,
         overtimeHours: (overtimeMinutes / 60).toFixed(2),
+        // El mismo total en MINUTOS enteros (2026-10-18). Los totales de las
+        // pantallas, el PDF y el Excel se suman en minutos: sumar horas ya
+        // redondeadas a 2 decimales (0,01 h = 36 s) corría el total de la
+        // empresa unos minutos respecto de la suma real.
+        overtimeMinutes: Math.round(overtimeMinutes),
         personalLeaveHours: (personalLeaveMinutes / 60).toFixed(2),
         personalLeaveLimitHours: (personalLeaveLimitMinutesForRange / 60).toFixed(2),
         overLimitHours: (Math.max(0, personalLeaveMinutes - personalLeaveLimitMinutesForRange) / 60).toFixed(2),
@@ -5057,6 +5215,11 @@ async function attendanceRangeHandler(req, res) {
       };
       if (days) {
         row.days = days;
+      }
+      if (juntarHEDias) {
+        for (const [fecha, x] of heFinalDelEmpleado) {
+          if (x.auto > 0 || x.bruto > 0 || x.aRevisar) heDias.push({ employeeId: String(employeeId), nombre: u.Name, fecha, ...x });
+        }
       }
       result.push(row);
     });
@@ -5106,8 +5269,14 @@ async function attendanceRangeHandler(req, res) {
       overtimeCapMinutes: overtimeSettings.capMinutes,
       data: result,
       ...(juntarDiasARevisar ? { diasARevisar } : {}),
-      ...(juntarMinutosHE ? { minutosHECortos } : {}),
-      ...(simulacionHE ? { comparacionHE } : {})
+      // Meses del rango que están CERRADOS en Liquidación. Lo que se pagó es la
+      // foto del cierre; esta pantalla muestra el cálculo de hoy. Si dan
+      // distinto, la diferencia se paga (o descuenta) como ajuste en el mes
+      // siguiente. Las pantallas lo avisan para que nadie vea "dos números"
+      // sin saber por qué (2026-10-18).
+      cierres: await mesesCerradosEn(tenantId, from, formatLocalDate(effectiveEndDate)),
+      ...(juntarHEDias ? { heDias } : {}),
+      ...(juntarRegimenDias ? { regimenDias: regimenDiasPorEmpleado } : {})
     });
 
   } catch (err) {
@@ -6301,14 +6470,25 @@ app.get('/config/minimo-horas-extra/impacto', requirePermission('attendance', 'r
     if (!minutos || !/^\d{4}-\d{2}-\d{2}$/.test(String(from || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(to || ''))) {
       return res.status(400).json({ error: 'minutos (1 a 240), from y to son requeridos' });
     }
-    const cuerpo = await calcularAsistencia(req, from, to, tenantId, { minutosHE: '1' });
-    const afectados = (cuerpo.minutosHECortos || []).filter((d) => d.minutos < minutos);
+    // El cálculo completo dos veces (con el mínimo de hoy y con el nuevo),
+    // comparado día por día (compararHorasExtra.js): incluye a quien tiene
+    // régimen o plantilla con mínimo propio (a esos no los cambia).
+    const [hoy, con] = await Promise.all([
+      calcularAsistencia(req, from, to, tenantId, { heDias: '1' }),
+      calcularAsistencia(req, from, to, tenantId, { heDias: '1', simularMinimoEmpresaHE: String(minutos) }),
+    ]);
+    const filas = compararDias(hoy.heDias || [], con.heDias || []);
+    const afectados = filas.filter((f) => f.con < f.hoy);
+    const vuelven = filas.filter((f) => f.con > f.hoy);
     res.json({
       from, to, minutos,
       dias: afectados.length,
       personas: new Set(afectados.map((d) => d.employeeId)).size,
-      minutosQueDejanDeContar: afectados.reduce((a, d) => a + d.minutos, 0),
+      minutosQueDejanDeContar: afectados.reduce((a, d) => a + (d.hoy - d.con), 0),
       estimadas: afectados.filter((d) => d.estimada).length,
+      // Si el mínimo nuevo es MENOR que el de hoy, hay días que empiezan a contar.
+      diasQueEmpiezanAContar: vuelven.length,
+      minutosQueEmpiezanAContar: vuelven.reduce((a, d) => a + (d.con - d.hoy), 0),
     });
   } catch (err) {
     console.error('ERROR impacto minimo HE:', err);

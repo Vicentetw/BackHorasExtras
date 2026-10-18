@@ -128,7 +128,15 @@ test('/attendance-range junio 2026 (mes cerrado): mismos totales que hoy', async
   // de las 7 y sale después de las 14 con solo dos fichajes (ej. 06:55 y
   // 18:27, horario 7 a 14: 4 h 27 min que contaban 0). Son estimadas: quedan
   // "a revisar". Verificado caso por caso en septiembre (61 personas).
-  assert.equal(sumOvertime.toFixed(2), '2801.06', 'suma total de horas extras del mes');
+  // Actualizado 2026-10-18: 2801.06 -> 2682.28. UNA SOLA VERDAD: las horas
+  // extra de cada día pasan para TODOS por el recorte de la plantilla (nada
+  // dentro de la jornada ni de un descanso), que antes hacía solo el cálculo
+  // por régimen (con régimen, el calendario y el total daban distinto). Baja
+  // porque había horas extra contadas dentro del horario: ej. marcador 9 a
+  // las 05:10 y salida 13:52 con horario 7 a 14 = 8 h 42 min "de horas extra"
+  // dentro de su jornada; o marcador a las 13:38 con plantilla hasta las
+  // 14:00 (22 min por día). Verificado caso por caso en septiembre (65 personas).
+  assert.equal(sumOvertime.toFixed(2), '2682.28', 'suma total de horas extras del mes');
   // 113 -> 118 el 2026-10-17, por lo mismo (regla 7 a 14 quitada).
   assert.equal(withOvertime, 118, 'cantidad de empleados con horas extras > 0');
 });

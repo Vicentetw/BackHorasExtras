@@ -13,6 +13,7 @@ const { requirePermission, requireAnyPermission, resolveTenantId } = require('..
 const { getAppSetting } = require('../motor-laboral/repositories/appSettingsRepository');
 const configHE = require('../motor-laboral/services/configHorasExtra');
 const minimoHorasExtra = require('../motor-laboral/services/minimoHorasExtra');
+const { compararDias, resumen } = require('../motor-laboral/services/compararHorasExtra');
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const ELEGIR = 'Elegí la empresa: cada empresa tiene su propia configuración.';
@@ -120,35 +121,21 @@ module.exports = function configHorasExtraRoutes(db, { calcularAsistencia }) {
       return res.status(400).json({ error: 'metodo, from y to son requeridos' });
     }
     try {
-      const cuerpo = await calcularAsistencia(req, from, to, tenantId, {
-        simularMetodoHE: metodo,
-        simularLlegadaHE: llegada === '1' ? '1' : '',
-        ...(minimo ? { simularMinimoHE: String(minimo) } : {}),
-        ...(plantillaId ? { simularPlantillaHE: String(plantillaId) } : {}),
-      });
-      const filas = cuerpo.comparacionHE || [];
-      const nombres = new Map((cuerpo.data || []).map((e) => [String(e.employeeId), e.name || e.employeeName || '']));
-      const suman = filas.filter((f) => f.con > f.hoy);
-      const restan = filas.filter((f) => f.con < f.hoy);
-      const porPersona = new Map();
-      for (const f of filas) {
-        const p = porPersona.get(f.employeeId) || { employeeId: f.employeeId, nombre: nombres.get(f.employeeId) || '', hoy: 0, con: 0, dias: 0 };
-        p.hoy += f.hoy; p.con += f.con; p.dias++;
-        porPersona.set(f.employeeId, p);
-      }
-      res.json({
-        from, to,
-        dias: filas.length,
-        personas: porPersona.size,
-        minutosHoy: filas.reduce((a, f) => a + f.hoy, 0),
-        minutosCon: filas.reduce((a, f) => a + f.con, 0),
-        diasQueSuman: suman.length,
-        diasQueRestan: restan.length,
-        aRevisarHoy: filas.filter((f) => f.aRevisarHoy).length,
-        aRevisarCon: filas.filter((f) => f.aRevisarCon).length,
-        // Las 10 personas con más diferencia, para poder mirar casos reales.
-        ejemplos: [...porPersona.values()].sort((a, b) => Math.abs(b.con - b.hoy) - Math.abs(a.con - a.hoy)).slice(0, 10),
-      });
+      // El cálculo completo dos veces (como está y con lo nuevo), comparado
+      // día por día: exactamente lo que pasaría al guardar (compararHorasExtra.js).
+      const [hoy, con] = await Promise.all([
+        calcularAsistencia(req, from, to, tenantId, { heDias: '1' }),
+        calcularAsistencia(req, from, to, tenantId, {
+          heDias: '1',
+          simularMetodoHE: metodo,
+          simularLlegadaHE: llegada === '1' ? '1' : '',
+          ...(minimo ? { simularMinimoHE: String(minimo) } : {}),
+          ...(plantillaId ? { simularPlantillaHE: String(plantillaId) } : {}),
+        }),
+      ]);
+      const filas = compararDias(hoy.heDias || [], con.heDias || []);
+      // Las 10 personas con más diferencia (en `ejemplos`), para poder mirar casos reales.
+      res.json({ from, to, ...resumen(filas) });
     } catch (err) {
       console.error('ERROR impacto config HE:', err);
       res.status(err.status || 500).json({ error: err.status ? err.message : 'Error calculando el impacto' });
