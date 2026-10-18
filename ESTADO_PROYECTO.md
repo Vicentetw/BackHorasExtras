@@ -10,6 +10,19 @@
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
 > Probado: suite 1135/1135 + Chrome.
 >
+> **SIN PUBLICAR (espera el "publicá" del dueño): rama `una-sola-verdad-he`**
+> (backend `d5e11bc`, frontend `26cc845`). Probado: suite 1157/1157, la copia
+> de producción y Chrome. Análisis completo en `UNA_SOLA_VERDAD_HORAS_EXTRA.md`
+> (en la rama).
+> - Pedido del dueño: ningún informe puede dar distinto de otro.
+> - Corrige 9 diferencias: calendario ≠ total con régimen, punto F, recorte de
+>   la plantilla solo con régimen, topes según el rango, tope anual según el
+>   rango, mes cerrado sin aviso, totales en horas redondeadas, manuales en
+>   días no laborables y vistas previas aproximadas.
+> - Impacto en la copia de producción: septiembre −73 h (60 personas, todas
+>   horas extra que caían dentro de su jornada); octubre sin cambios.
+> - `test/una-sola-verdad-horas-extra.test.js` controla la regla en cada `npm test`.
+>
 > **PUBLICADO 2026-10-17/18:**
 > - Rama `horas-extra-centralizado`: backend merge `3f5aa26`, frontend
 >   `145210d` (chunk verificado). **Falta la migración 20261023.**
