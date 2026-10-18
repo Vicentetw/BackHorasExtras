@@ -64,6 +64,8 @@ async function verificarCupoJustificacion({ tenantId, userId, eventTypeId, type,
 const overtimeCalc = require('./motor-laboral/services/overtimeCalculations');
 const { getAppSetting, setAppSetting } = require('./motor-laboral/repositories/appSettingsRepository');
 const minimoHorasExtra = require('./motor-laboral/services/minimoHorasExtra');
+const configHorasExtra = require('./motor-laboral/services/configHorasExtra');
+const excesoSobreHorario = require('./motor-laboral/services/excesoSobreHorario');
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./motor-laboral/services/holidayScope');
 const limitesAsistencia = require('./motor-laboral/services/limitesAsistencia');
 const autorizacionSalidas = require('./motor-laboral/services/autorizacionSalidas');
@@ -233,6 +235,7 @@ app.use('/api/regimen-horas-extra', require('./routes/regimenHorasExtra')(db));
 app.use('/api/liquidacion-horas-extra', reportesRateLimiter, require('./routes/liquidacionHorasExtra')(db, { calcularAsistencia }));
 app.use('/api/mi', reportesRateLimiter, require('./routes/miPortal')(db, { calcularAsistencia }));
 // "Días a revisar" de horas extra (2026-10-16): mismo cálculo que Presentismo.
+app.use('/api/config-horas-extra', reportesRateLimiter, require('./routes/configHorasExtra')(db, { calcularAsistencia }));
 app.use('/api/horas-extra-revisar', reportesRateLimiter, require('./routes/horasExtraRevisar')(db, { calcularAsistencia, calcularFichajesDelDia: (tenantId, fecha) => calcularFichajesDelDia(tenantId, fecha) }));
 app.use('/api/portal-empleados', require('./routes/portalAdmin')(db));
 app.use('/api/solicitudes-alta', require('./routes/solicitudesAlta')(db));
@@ -3173,7 +3176,8 @@ app.get('/attendance-range', requirePermission('attendance', 'read'), reportesRa
 // liquidacion (B5): asi no existe una segunda formula que pueda dar distinto.
 // Para la vista previa del mínimo: ¿la hora extra de ese día es estimada?
 function dayOvertimeSourceBruto(overtimeResult, useEngineAsOfficial) {
-  return !useEngineAsOfficial && !!overtimeResult && overtimeResult.source === 'fallback';
+  return !useEngineAsOfficial && !!overtimeResult
+    && (overtimeResult.source === 'fallback' || (overtimeResult.source === 'schedule' && !!overtimeResult.needsVerification));
 }
 
 function calcularAsistencia(req, from, to, tenantId, extra = {}) {
@@ -3310,6 +3314,36 @@ async function attendanceRangeHandler(req, res) {
     // Sin cargar = sin mínimo: todo queda como siempre.
     const minimoHEPorTenant = new Map();
     for (const tid of tenantIds) minimoHEPorTenant.set(tid, await minimoHorasExtra.leer(db, tid));
+    // Cómo se cuentan las horas extra (configHorasExtra.js): lo de la empresa
+    // y las excepciones por plantilla. Sin cargar = como siempre.
+    const configHEPorTenant = new Map();
+    const excepcionesHEPorTenant = new Map();
+    for (const tid of tenantIds) {
+      configHEPorTenant.set(tid, await configHorasExtra.leerEmpresa(db, tid));
+      excepcionesHEPorTenant.set(tid, (await configHorasExtra.leerPlantillas(db, tid)).mapa);
+    }
+    // Vista previa de "Ver qué cambiaría" (/config/horas-extra/impacto): otra
+    // configuración, solo para comparar. No cambia nada de lo que se devuelve.
+    let simulacionHE = null;
+    if (req.query.simularMetodoHE) {
+      simulacionHE = {
+        metodo: configHorasExtra.metodoValido(req.query.simularMetodoHE) || configHorasExtra.POR_DEFECTO,
+        contarLlegadaAnticipada: req.query.simularLlegadaHE === '1',
+        minimo: configHorasExtra.minimoValido(req.query.simularMinimoHE) || null,
+        plantillaId: req.query.simularPlantillaHE ? Number(req.query.simularPlantillaHE) : null,
+      };
+    }
+    const comparacionHE = [];
+    // Lo que vale para una persona un día: excepción de su plantilla > empresa.
+    const configHEDelDia = (tenantIdDelDia, templateId, simular) => {
+      const empresa = configHEPorTenant.get(tenantIdDelDia);
+      const excepcion = (excepcionesHEPorTenant.get(tenantIdDelDia) || new Map()).get(Number(templateId));
+      if (!simular) return configHorasExtra.resolver(empresa, excepcion);
+      const s = simulacionHE;
+      if (s.plantillaId == null) return configHorasExtra.resolver({ metodo: s.metodo, contarLlegadaAnticipada: s.contarLlegadaAnticipada }, excepcion);
+      if (Number(templateId) !== s.plantillaId) return configHorasExtra.resolver(empresa, excepcion);
+      return configHorasExtra.resolver(empresa, { metodo: s.metodo, contarLlegadaAnticipada: s.contarLlegadaAnticipada, minimo: s.minimo });
+    };
 
     // Fase 21: se suma el filtro por tenant_id (bug real -- esta consulta
     // nunca lo tuvo, una empresa veia el feriado de otra) y ciudad_id (para
@@ -4337,7 +4371,7 @@ async function attendanceRangeHandler(req, res) {
           const effectiveCapMinutes = overtimeCalc.resolveOvertimeCapMinutes(schedule, overtimeSettings.capMinutes);
           // Turno de noche: el corte (su salida) es del dia siguiente.
           const cutoffNextDay = overtimeCalc.corteAlDiaSiguiente(schedule, effectiveCutoffMinutes);
-          const overtimeResult = overtimeCalc.resolveDailyOvertime(heInterval, overtimeChecks, {
+          const overtimeResultMarcas = overtimeCalc.resolveDailyOvertime(heInterval, overtimeChecks, {
             cutoffMinutes: effectiveCutoffMinutes,
             capMinutes: effectiveCapMinutes,
             cutoffNextDay,
@@ -4345,6 +4379,41 @@ async function attendanceRangeHandler(req, res) {
             // (ver resolveDailyOvertime).
             explicitCutoffMinutes: schedule && schedule.overtimeCutoffTime ? timeToMinutes(schedule.overtimeCutoffTime) : null
           });
+          // Cómo cuenta las horas extra esta empresa / esta plantilla
+          // (configHorasExtra.js). Por defecto, lo de siempre: marcas o estimado.
+          const excesoDelDia = new Map(); // se calcula una sola vez por opción, si hace falta
+          const excesoComoResultado = (contarLlegada) => {
+            const clave = contarLlegada ? 'con' : 'sin';
+            if (excesoDelDia.has(clave)) return excesoDelDia.get(clave);
+            const base = new Date(`${date}T00:00:00`);
+            const r = excesoSobreHorario.calcular({
+              fichajes: overtimeChecks.map((d) => (d - base) / 60000),
+              blocks: schedule && schedule.blocks,
+              corte: schedule && schedule.overtimeCutoffTime ? String(schedule.overtimeCutoffTime).slice(0, 5) : null,
+              contarLlegadaAnticipada: !!contarLlegada,
+            });
+            const minutos = r ? Math.round(r.minutos) : 0;
+            excesoDelDia.set(clave, minutos > 0 ? {
+              source: 'schedule',
+              start: new Date(base.getTime() + r.desde * 60000),
+              end: new Date(base.getTime() + r.hasta * 60000),
+              minutes: minutos,
+              cappedMinutes: Math.min(minutos, effectiveCapMinutes),
+              overCap: minutos > effectiveCapMinutes,
+              needsVerification: r.aRevisar,
+              fueraDeHorario: r.fueraDeHorario,
+              tramos: r.tramos,
+              minutosAntes: Math.round(r.minutosAntes),
+            } : null);
+            return excesoDelDia.get(clave);
+          };
+          const heSegunMetodo = (cfg) => {
+            if (cfg.metodo === 'EXCESO') return excesoComoResultado(cfg.contarLlegadaAnticipada);
+            if (cfg.metodo === 'MARCAS_O_EXCESO') return overtimeResultMarcas && overtimeResultMarcas.source === 'marker' ? overtimeResultMarcas : excesoComoResultado(cfg.contarLlegadaAnticipada);
+            return overtimeResultMarcas;
+          };
+          const cfgHEDelDia = configHEDelDia(u.tenantId, schedule && schedule.templateId, false);
+          const overtimeResult = heSegunMetodo(cfgHEDelDia);
           // "Autorizado a hacer horas extras" (employees.overtime_authorized):
           // existia la columna desde hacia tiempo pero ningun motor la
           // aplicaba (confirmado al investigar antes de este cambio) -- un
@@ -4453,12 +4522,27 @@ async function attendanceRangeHandler(req, res) {
           const computedOvertimeMinutesBruto = useEngineAsOfficial
             ? (engineResult.overtimeMinutes || 0)
             : ((overtimeResult && isOvertimeAuthorized) ? overtimeResult.minutes : 0);
-          // Mínimo de horas extra de la empresa: menos que eso, el día no suma
-          // (se muestra igual en el detalle). Solo las automáticas.
-          const minimoHEDelDia = minimoHEPorTenant.get(u.tenantId) || null;
+          // Mínimo de horas extra: el de la plantilla si tiene; si no, el de la
+          // empresa. Menos que eso, el día no suma (se muestra igual en el
+          // detalle). Solo las automáticas.
+          const minimoHEDelDia = cfgHEDelDia.minimoPlantilla || minimoHEPorTenant.get(u.tenantId) || null;
           const conMinimoHE = minimoHorasExtra.aplicar(computedOvertimeMinutesBruto, minimoHEDelDia);
           const computedOvertimeMinutes = conMinimoHE.minutos;
-          if (juntarMinutosHE && computedOvertimeMinutesBruto > 0 && computedOvertimeMinutesBruto <= minimoHorasExtra.MAXIMO_PERMITIDO) {
+          // "Ver qué cambiaría" de Horas extra: lo de hoy contra la otra configuración.
+          if (simulacionHE && !useEngineAsOfficial) {
+            const cfgSim = configHEDelDia(u.tenantId, schedule && schedule.templateId, true);
+            const resSim = heSegunMetodo(cfgSim);
+            const brutoSim = resSim && isOvertimeAuthorized ? resSim.minutes : 0;
+            const minSim = minimoHorasExtra.aplicar(brutoSim, cfgSim.minimoPlantilla || minimoHEPorTenant.get(u.tenantId) || null).minutos;
+            if (minSim !== computedOvertimeMinutes || !!(resSim && resSim.needsVerification) !== !!(overtimeResult && overtimeResult.needsVerification)) {
+              comparacionHE.push({
+                employeeId: String(employeeId), fecha: date, hoy: computedOvertimeMinutes, con: minSim,
+                aRevisarHoy: !!(overtimeResult && isOvertimeAuthorized && overtimeResult.needsVerification && computedOvertimeMinutes > 0),
+                aRevisarCon: !!(resSim && isOvertimeAuthorized && resSim.needsVerification && minSim > 0),
+              });
+            }
+          }
+          if (juntarMinutosHE && !cfgHEDelDia.minimoPlantilla && computedOvertimeMinutesBruto > 0 && computedOvertimeMinutesBruto <= minimoHorasExtra.MAXIMO_PERMITIDO) {
             minutosHECortos.push({ employeeId: String(employeeId), fecha: date, minutos: computedOvertimeMinutesBruto, estimada: dayOvertimeSourceBruto(overtimeResult, useEngineAsOfficial) });
           }
           const dayOvertimeNeedsVerification = useEngineAsOfficial
@@ -4494,12 +4578,15 @@ async function attendanceRangeHandler(req, res) {
           const isManuallyOmitted = !!(manualKey && manualOmitByUserDate.has(manualKey));
           const omitEntryId = manualKey ? (manualOmitByUserDate.get(manualKey) || null) : null;
           const dayOvertimeMinutes = (isManuallyOmitted ? 0 : computedOvertimeMinutes) + manualMinutesThisDay;
-          if (juntarDiasARevisar && dayOvertimeSource === 'fallback' && computedOvertimeMinutes > 0) {
+          // Estimadas: las de siempre sin marcador, y las de "lo que supera el
+          // horario" cuando falta un fichaje.
+          if (juntarDiasARevisar && (dayOvertimeSource === 'fallback' || (dayOvertimeSource === 'schedule' && dayOvertimeNeedsVerification)) && computedOvertimeMinutes > 0) {
             const hm = (d) => (d instanceof Date ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : null);
             diasARevisar.push({
               employeeId: String(employeeId), fecha: date, minutos: computedOvertimeMinutes,
               aRevisar: dayOvertimeNeedsVerification, omitido: isManuallyOmitted, conCargaManual: manualEntriesThisDay.length > 0,
-              userId: u.USERID ?? null, omitEntryId,
+              userId: u.USERID ?? null, omitEntryId, fuente: dayOvertimeSource,
+              fueraDeHorario: !!(overtimeResult && overtimeResult.fueraDeHorario),
               desde: hm(overtimeResult.start), hasta: hm(overtimeResult.end),
             });
           }
@@ -4515,15 +4602,28 @@ async function attendanceRangeHandler(req, res) {
             const fuente = politicaDelDia.fuente || 'MARCADORES_O_ESTIMADO';
             let candidato = overtimeResult;
             if (fuente === 'MARCADORES' && candidato && candidato.source !== 'marker') candidato = null;
-            if (fuente === 'FICHAJES') candidato = overtimeCalc.computeDailyOvertime(overtimeChecks, { cutoffMinutes: effectiveCutoffMinutes, capMinutes: effectiveCapMinutes, cutoffNextDay });
+            if (fuente === 'FICHAJES') {
+              // Solo fichajes: con "lo que supera el horario" configurado, ese
+              // cálculo; si no, el estimado de siempre.
+              candidato = cfgHEDelDia.metodo === configHorasExtra.POR_DEFECTO
+                ? overtimeCalc.computeDailyOvertime(overtimeChecks, { cutoffMinutes: effectiveCutoffMinutes, capMinutes: effectiveCapMinutes, cutoffNextDay })
+                : excesoComoResultado(cfgHEDelDia.contarLlegadaAnticipada);
+            }
             const inicio = candidato && (candidato.markerStart || candidato.start);
             const dow = scheduleRepository.getLocalDayOfWeek(date);
+            const porHorario = !!(candidato && candidato.source === 'schedule');
+            const plantillaDelDia = plantillaParaRegimen(schedule);
             diasRegimen.push({
               fecha: date,
               tipoDeDia: dow === 6 ? 'SATURDAY' : dow === 0 ? 'SUNDAY' : 'WORKDAY',
-              intervalo: candidato && inicio && candidato.end ? { inicio: minutosDelDia(inicio, date), fin: minutosDelDia(candidato.end, date) } : null,
-              plantilla: plantillaParaRegimen(schedule),
+              intervalo: candidato && inicio && candidato.end
+                ? { inicio: minutosDelDia(inicio, date), fin: minutosDelDia(candidato.end, date), ...(porHorario ? { tramos: candidato.tramos } : {}) }
+                : null,
+              // "Lo que supera el horario" ya aplicó el corte (y, si cuenta,
+              // la llegada anticipada): no se vuelve a recortar por el corte.
+              plantilla: porHorario ? { ...plantillaDelDia, cuentanDesde: null } : plantillaDelDia,
               omitido: isManuallyOmitted,
+              minimoPlantilla: cfgHEDelDia.minimoPlantilla || null,
             });
           }
           // Pedido real: "el tope es una opcion solo para que salte un aviso
@@ -4710,7 +4810,11 @@ async function attendanceRangeHandler(req, res) {
                 ? formatLocalTime(overtimeResult.markerStart) : null,
               overtimeMinutesBeforeCutoff: (!useEngineAsOfficial && dayOvertimeStartTime && overtimeResult && overtimeResult.minutosAntesDelCorte) || 0,
               overtimeNeedsVerification: dayOvertimeNeedsVerification,
-              overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | null
+              overtimeSource: dayOvertimeSource, // 'marker' (badge 9/10 real) | 'fallback' (heuristico) | 'schedule' (lo que supera el horario) | null
+              // "Lo que supera el horario": cuánto de eso fue llegar antes de hora.
+              overtimeEarlyMinutes: (dayOvertimeSource === 'schedule' && overtimeResult && overtimeResult.minutosAntes) || 0,
+              // Trabajó todo el día fuera de su horario (¿horario mal asignado?).
+              overtimeOutsideSchedule: !!(dayOvertimeSource === 'schedule' && overtimeResult && overtimeResult.fueraDeHorario),
               // Horas extra que no sumaron por ser menos que el mínimo de la empresa (0 = ninguna).
               overtimeBelowMinimumMinutes: conMinimoHE.bajoMinimo,
               overtimeMinimumMinutes: minimoHEDelDia,
@@ -4861,12 +4965,16 @@ async function attendanceRangeHandler(req, res) {
       if (diasRegimen && diasRegimen.length) {
         const internalId = u.internalEmployeeId;
         const enc = (f) => regimenCfg.encuadreDe(internalId, f);
+        const minimoPlantillaPorFecha = new Map(diasRegimen.filter((d) => d.minimoPlantilla).map((d) => [d.fecha, d.minimoPlantilla]));
         const r = horasExtraRegimen.calcularPeriodo({
           dias: diasRegimen,
-          // El mínimo de su convenio/régimen gana; si no tiene, el de la empresa.
+          // Mínimo: el de la plantilla de ese día; si no, el de su
+          // convenio/régimen; si no, el de la empresa.
           politicaDe: (f) => {
             const e = enc(f);
             const p = regimenCfg.politicaPara(e.conventionId, f, e.regimeId);
+            const diaR = minimoPlantillaPorFecha.get(f);
+            if (p && diaR) return { ...p, minimo: diaR };
             const minEmpresa = minimoHEPorTenant.get(u.tenantId) || null;
             return p && (p.minimo === null || p.minimo === undefined) && minEmpresa ? { ...p, minimo: minEmpresa } : p;
           },
@@ -4995,7 +5103,8 @@ async function attendanceRangeHandler(req, res) {
       overtimeCapMinutes: overtimeSettings.capMinutes,
       data: result,
       ...(juntarDiasARevisar ? { diasARevisar } : {}),
-      ...(juntarMinutosHE ? { minutosHECortos } : {})
+      ...(juntarMinutosHE ? { minutosHECortos } : {}),
+      ...(simulacionHE ? { comparacionHE } : {})
     });
 
   } catch (err) {
