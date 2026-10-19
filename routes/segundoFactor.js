@@ -33,6 +33,9 @@ module.exports = function segundoFactorRoutes(db) {
       }
       res.json({
         nivel,
+        // Para que la pantalla le ofrezca a un superadmin habilitarlo ahí mismo
+        // (antes veía "tu empresa no lo habilitó", sin salida: 2026-10-19).
+        esSuperadmin: !!real.isSuperadmin,
         // Portal del empleado: nunca.
         disponible: real.employeeId == null && nivel !== 'apagado' && firebaseHabilitado !== false,
         exigido: sf.exigidoPara(real, { nivelEmpresa: nivel, nivelPlataforma: nivel }),
