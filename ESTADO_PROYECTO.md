@@ -416,7 +416,7 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
-> - **2026-10-19 — "Fichajes" de una persona (mes o año) en rama
+> - **2026-10-19 — PUBLICADO "Fichajes" de una persona (backend `3cf7e4e`, frontend `9dafd7d`, verificados). Antes en rama
 >   `fichajes-persona` (los dos repos), SIN publicar.** `GET
 >   /api/fichajes-persona` (hasta 31 días; el año se pide mes por mes):
 >   cada día sale de `calcularFichajesDelDia` + `calcularAsistencia` (mismo
