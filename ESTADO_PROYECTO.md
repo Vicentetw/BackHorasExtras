@@ -416,6 +416,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-19 — PUBLICADO recarga por versión nueva + escudo verde**
+>   (frontend `35ff670`). Con la app abierta durante una publicación, entrar a
+>   una pantalla no visitada fallaba en silencio (el hosting devuelve
+>   index.html por el chunk viejo: "tipo MIME text/html"). Ahora la app
+>   recarga sola en esa pantalla (`core/version-nueva.ts`, una vez cada 30 s).
+>   El escudo del segundo factor queda verde cuando está activo.
 > - **2026-10-19 — PUBLICADO Ausencias A y B** (backend merge `4c8d0d5`,
 >   `/health` verificado y `/api/ausencias/persona` responde 401 sin sesión;
 >   frontend merge `5b062d1` desplegado, chunk verificado en el hosting) (ver `REDISENO_AUSENCIAS.md`). A: un solo
