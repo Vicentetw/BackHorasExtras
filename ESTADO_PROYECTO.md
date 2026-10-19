@@ -416,6 +416,19 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-19 — Ausencias A y B listos en rama `ausencias-ab` (los dos
+>   repos), SIN publicar** (ver `REDISENO_AUSENCIAS.md`). A: un solo
+>   formulario "Cargar ausencia" (¿Quién? ¿Qué días? ¿Por qué?) desde
+>   Presentismo, el detalle, Justificaciones y Licencias; decide solo si va a
+>   licencia o justificación y explica el efecto en palabras. B: "Saldos de
+>   vacaciones" con botón "Cargar vacaciones" por fila y días por antigüedad
+>   (escala de la empresa o LCT 14/21/28/35) cuando no hay saldo guardado; el
+>   saldo sale de UN cálculo (`motor-laboral/services/saldoVacaciones.js`).
+>   No necesita migración. Probado en navegador sobre la base local (cargar 5
+>   días: quedan 25 → 20) y suite 1170/1170. También:
+>   `scripts/resetear-segundo-factor.js` (emergencia si el único superadmin
+>   pierde el celular) y aviso de guardar la clave de 32 letras al activar el
+>   segundo factor. Falta: el "publicá" del dueño.
 > - **2026-10-17 — PUBLICADO mínimo de horas extra + resolver "Días a
 >   revisar" con un clic** (backend merge `7e37d6d`, `/health` verificado y
 >   rutas nuevas responden 401 sin sesión; frontend `acf6601` desplegado,
