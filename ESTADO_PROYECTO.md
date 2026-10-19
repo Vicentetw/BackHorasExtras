@@ -416,8 +416,9 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
-> - **2026-10-19 — Ausencias A y B listos en rama `ausencias-ab` (los dos
->   repos), SIN publicar** (ver `REDISENO_AUSENCIAS.md`). A: un solo
+> - **2026-10-19 — PUBLICADO Ausencias A y B** (backend merge `4c8d0d5`,
+>   `/health` verificado y `/api/ausencias/persona` responde 401 sin sesión;
+>   frontend merge `5b062d1` desplegado, chunk verificado en el hosting) (ver `REDISENO_AUSENCIAS.md`). A: un solo
 >   formulario "Cargar ausencia" (¿Quién? ¿Qué días? ¿Por qué?) desde
 >   Presentismo, el detalle, Justificaciones y Licencias; decide solo si va a
 >   licencia o justificación y explica el efecto en palabras. B: "Saldos de
