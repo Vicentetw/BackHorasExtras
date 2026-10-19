@@ -10,6 +10,14 @@
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
 > Probado: suite 1135/1135 + Chrome.
 >
+> **SEGUNDO FACTOR, 2026-10-18/19:** Firebase con TOTP habilitado (lo hizo el
+> dueño). Prueba completa de punta a punta OK (activar, entrar con código,
+> código equivocado rechazado, obligatorio, reset). Publicado el arreglo
+> "verificar el email antes" (Firebase lo exige). **Sin publicar:** rama
+> `sf-reingreso` del frontend (`3`): si Firebase pide ingreso reciente, se
+> confirma la contraseña o Google en la misma pantalla (probado con sesión de
+> 6 min). La base: `MYSQL_SSL=require` + `MYSQL_SSL_CA` puesto por el dueño.
+>
 > **PUBLICADO 2026-10-18: TLS verificado de la base** (merge `f6fcffe`): con
 > `MYSQL_SSL=require` + `MYSQL_SSL_CA` (el "sello" de la autoridad de la base,
 > que muestra Seguridad → "Probar verificación del certificado"). En producción
