@@ -416,6 +416,22 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-19 — "Fichajes" de una persona (mes o año) en rama
+>   `fichajes-persona` (los dos repos), SIN publicar.** `GET
+>   /api/fichajes-persona` (hasta 31 días; el año se pide mes por mes):
+>   cada día sale de `calcularFichajesDelDia` + `calcularAsistencia` (mismo
+>   cálculo que Presentismo/Salidas), más el horario del día (`days[].horario`,
+>   solo en el detalle de UNA persona) y el "marcador previo" de cada fichaje
+>   (lectura de marcador hasta 5 min antes, asignada o no, con pistas: otro
+>   fichaje en el medio, otro reloj, fuera de tolerancia). Ventana desde el
+>   detalle de Presentismo ("Ver todos los fichajes") y Empleados ("Fichajes").
+>   Verificado: idéntico a fichajes-del-dia y a Presentismo (15 personas, 617
+>   fichajes, 0 inconsistencias); toda la empresa sin cambios sobre la copia de
+>   producción; suite 1175/1175. Un mes tarda ~6 s (local). Caso Calderón:
+>   ficha de noche (23→07) con plantilla de día y los marcadores 9/10 al revés.
+> - **2026-10-19 — PUBLICADO Horas extra paso 2** (backend `c901853`, frontend
+>   `83a09f9`; verificado sin cambios de números sobre la copia de producción).
+>   Detalle abajo.
 > - **2026-10-19 — Horas extra paso 2 "Quién puede hacer horas extra" en rama
 >   `he-autorizados` (los dos repos), SIN publicar.** Caso: Calderón (2519)
 >   sin tilde de autorizado pero con 9 h 20 m el 02/10 (AVP en modo "todas";

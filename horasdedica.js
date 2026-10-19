@@ -3204,6 +3204,24 @@ async function mesesCerradosEn(tenantId, desde, hasta) {
   }
 }
 
+// Qué horario le tocaba a una persona un día, en palabras (pestaña
+// "Fichajes" del detalle, 2026-10-19). Sale del mismo `schedule` que usa el
+// cálculo; acá solo se lo resume. Sin horario: null.
+function horarioDelDia(schedule, porDefecto) {
+  if (!schedule) return null;
+  const hhmm = (t) => (t ? String(t).slice(0, 5) : null);
+  const trabaja = schedule.isWorkDay === undefined ? null : !!Number(schedule.isWorkDay);
+  return {
+    plantilla: schedule.template && schedule.template.name ? schedule.template.name : (schedule.description || null),
+    turno: schedule.turnoNombre || null,
+    trabaja,
+    entrada: trabaja === false ? null : hhmm(schedule.timeEntrance),
+    salida: trabaja === false ? null : hhmm(schedule.timeExit),
+    // Sin plantilla asignada ese día: se usó la de por defecto de la empresa.
+    porDefecto: !!porDefecto,
+  };
+}
+
 function calcularAsistencia(req, from, to, tenantId, extra = {}) {
   return new Promise((resolve, reject) => {
     const pedido = Object.create(req);
@@ -4268,6 +4286,7 @@ async function attendanceRangeHandler(req, res) {
       // debe contarse ni mostrarse como "ausente" solo por no fichar -- ver
       // el mismo criterio aplicado en attendanceService.js (motor diario).
       const employeeActivo = u.activo === undefined || u.activo === null ? true : !!Number(u.activo);
+      const horarioPorFecha = new Map();
 
       dateRange.forEach(date => {
         cerrarDiaParaRacha();
@@ -4285,6 +4304,10 @@ async function attendanceRangeHandler(req, res) {
           defaultScheduleDays++;
           defaultScheduleName = (defaultDeEmpresa.template && defaultDeEmpresa.template.name) || defaultScheduleName;
         }
+        // "Fichajes" de una persona (2026-10-19): qué horario le tocaba ese día
+        // (para ver si su plantilla coincide con cómo ficha). Solo en el detalle
+        // de UNA persona; es el mismo `schedule` que usa todo el cálculo.
+        if (detailEmployeeId) horarioPorFecha.set(date, horarioDelDia(schedule, !!defaultDeEmpresa));
         // Feriado por ciudad (Fase 21): solo cuentan las filas de holidays
         // que aplican a ESTE empleado (toda la empresa, o su propia ciudad
         // -- ver holidayScope.js). Si varias aplican y alguna dice "no
@@ -5221,6 +5244,7 @@ async function attendanceRangeHandler(req, res) {
         ...(regimenHorasExtra ? { regimenHorasExtra } : {})
       };
       if (days) {
+        if (detailEmployeeId) for (const d of days) d.horario = horarioPorFecha.get(d.date) || null;
         row.days = days;
       }
       if (juntarHEDias) {
@@ -5837,6 +5861,134 @@ async function calcularFichajesDelDia(tenantId, fecha, soloLegajo = null) {
     }
     return empleados;
 }
+
+// ============================================================================
+// Fichajes de UNA persona en un período (pestaña "Fichajes" del detalle,
+// 2026-10-19). Pedido del dueño: "ver todo el fichaje del empleado, mensual o
+// anual... no me coincide la plantilla, quizás cambió de días y debo verificar
+// sus fichajes en crudo" + "qué marcadores puso antes de cada fichaje".
+//
+// UNA SOLA VERDAD: cada día sale de calcularFichajesDelDia (lo mismo que
+// Presentismo y Salidas, con los fichajes de TODA la empresa, ver
+// MARCADORES_Y_SALIDAS.md) y de calcularAsistencia (estado, horas extra y el
+// horario del día). Lo único nuevo es "marcador previo": la última lectura de
+// un marcador en el reloj antes de cada fichaje (hasta 5 minutos antes),
+// AUNQUE el sistema no se lo haya asignado, con el dato de si se lo asignó y,
+// si no, una pista de por qué (otro fichaje en el medio, otro reloj, fuera de
+// la tolerancia). Es para revisar a mano: no cambia ningún cálculo.
+// Hasta 31 días por pedido (el año se pide mes por mes).
+const VENTANA_MARCADOR_PREVIO_MS = 5 * 60 * 1000;
+app.get('/api/fichajes-persona', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
+    const legajo = String(req.query.legajo || '').trim();
+    const from = String(req.query.from || '');
+    const to = String(req.query.to || '');
+    const FECHA = /^\d{4}-\d{2}-\d{2}$/;
+    if (!legajo || !FECHA.test(from) || !FECHA.test(to) || from > to) {
+      return res.status(400).json({ error: 'legajo, from y to (AAAA-MM-DD) son requeridos' });
+    }
+    if ((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000 > 30) {
+      return res.status(400).json({ error: 'Pedí hasta 31 días por vez (el año se pide mes por mes).' });
+    }
+    const [[emp]] = await db.query('SELECT employee_id, nombre FROM employees WHERE tenant_id = ? AND employee_id = ?', [tenantId, legajo]);
+    if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+    const asistencia = await calcularAsistencia(req, from, to, tenantId, { employeeId: legajo });
+    const fila = (asistencia.data || []).find((r) => String(r.employeeId) === legajo);
+    const diasAsistencia = new Map(((fila && fila.days) || []).map((d) => [d.date, d]));
+
+    const maxMarkerGapMs = await fetchMarkerMaxGapMs(tenantId);
+    const [marcadores] = await db.query(
+      'SELECT userId, badgeNumber, name, category, direction FROM specialusers WHERE tenant_id = ? AND isActive = TRUE', [tenantId]);
+    const porUserId = new Map(marcadores.map((m) => [String(m.userId), m]));
+    const porTarjeta = new Map(marcadores.filter((m) => m.badgeNumber != null).map((m) => [String(m.badgeNumber), m]));
+    // Un fichaje es de un marcador si no es de una persona y su número es el
+    // USERID o la tarjeta de un marcador (mismo criterio que fetchMarkerMap).
+    const marcadorDe = (c) => (c.employeeId ? null : porUserId.get(String(c.userId)) || porTarjeta.get(String(c.userId)) || null);
+    const fmt = movementsCalc.fechaHoraLocal;
+
+    // Los fichajes crudos de la empresa de todo el período (desde 5 minutos
+    // antes), una sola vez; cada día mira su parte.
+    const inicio = new Date(new Date(`${from}T00:00:00`).getTime() - VENTANA_MARCADOR_PREVIO_MS);
+    const todosLosCrudos = await fetchMovementCheckins(fmt(inicio), nextDayStr(to), tenantId);
+    const fechas = [];
+    for (let f = from; f <= to; f = nextDayStr(f)) fechas.push(f);
+    // Los tipos de cada día, de a varios días a la vez (cada uno es
+    // independiente): un mes pasó de ~14 s a unos pocos.
+    const tiposPorFecha = new Map();
+    for (let i = 0; i < fechas.length; i += 8) {
+      const tanda = fechas.slice(i, i + 8);
+      const r = await Promise.all(tanda.map((f) => calcularFichajesDelDia(tenantId, f, legajo)));
+      tanda.forEach((f, k) => tiposPorFecha.set(f, r[k][legajo] || []));
+    }
+
+    const dias = [];
+    for (const fecha of fechas) {
+      const tipos = tiposPorFecha.get(fecha);
+      const desdeMs = new Date(`${fecha}T00:00:00`).getTime() - VENTANA_MARCADOR_PREVIO_MS;
+      const hastaMs = new Date(`${nextDayStr(fecha)}T00:00:00`).getTime();
+      const crudos = todosLosCrudos.filter((c) => c.checktime.getTime() >= desdeMs && c.checktime.getTime() < hastaMs);
+      const fichajes = tipos.map((f) => {
+        const t = new Date(f.en.replace(' ', 'T')).getTime();
+        const propio = crudos.find((c) => c.employeeId === legajo && c.checktime.getTime() === t);
+        // Todas las lecturas de marcadores en la ventana. Si el motor le asignó
+        // una, se muestra ESA (puede no ser la última: ej. dos lecturas del
+        // mismo marcador en dos relojes); si no, la más cercana.
+        const enVentana = [];
+        for (const c of crudos) {
+          const ct = c.checktime.getTime();
+          if (ct > t) break;
+          if (ct < t - VENTANA_MARCADOR_PREVIO_MS) continue;
+          const m = marcadorDe(c);
+          if (m) enVentana.push({ c, m });
+        }
+        // `at` es la hora del marcador que el motor le asignó.
+        const instante = (v) => (v instanceof Date ? v.getTime() : new Date(String(v).replace(' ', 'T')).getTime());
+        const asignadas = new Set(f.tipos.filter((x) => x.marcador && x.marcador.at != null).map((x) => instante(x.marcador.at)));
+        const previo = enVentana.find((x) => asignadas.has(x.c.checktime.getTime())) || enVentana[enVentana.length - 1] || null;
+        let marcadorPrevio = null;
+        if (previo) {
+          const { c, m } = previo;
+          const en = fmt(c.checktime);
+          const asignado = asignadas.has(c.checktime.getTime());
+          const otroEnMedio = crudos.some((o) => o.employeeId && o.employeeId !== legajo
+            && o.checktime.getTime() > c.checktime.getTime() && o.checktime.getTime() < t);
+          marcadorPrevio = {
+            hora: en.slice(11), tarjeta: m.badgeNumber != null ? String(m.badgeNumber) : String(m.userId),
+            nombre: m.name || null, categoria: m.category || null, sentido: m.direction || null,
+            segundosAntes: Math.round((t - c.checktime.getTime()) / 1000),
+            asignado,
+            // Otras lecturas de marcadores en los 5 minutos antes (no mostradas).
+            otrasLecturas: enVentana.length - 1,
+            // Pistas de por qué no se le asignó (las mismas reglas del motor).
+            otroFichajeEnMedio: otroEnMedio,
+            otroReloj: !!(propio && propio.machineIp && c.machineIp && propio.machineIp !== c.machineIp),
+            fueraDeTolerancia: t - c.checktime.getTime() > maxMarkerGapMs,
+          };
+        }
+        return { ...f, reloj: propio ? propio.machineIp : null, marcadorPrevio };
+      });
+      const a = diasAsistencia.get(fecha) || {};
+      dias.push({
+        fecha, horario: a.horario || null, estado: a.status || null,
+        // El aviso "Fuera de su horario" de Presentismo, tal cual.
+        fueraDeHorario: a.fueraDeHorario || null,
+        horasExtraMinutos: a.overtimeMinutes || 0, aRevisar: !!a.overtimeNeedsVerification,
+        fichajes,
+      });
+    }
+    res.json({
+      legajo, nombre: emp.nombre, from, to,
+      ventanaSegundos: VENTANA_MARCADOR_PREVIO_MS / 1000, toleranciaSegundos: Math.round(maxMarkerGapMs / 1000),
+      dias,
+    });
+  } catch (err) {
+    console.error('ERROR fichajes de una persona:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Error armando los fichajes de la persona' });
+  }
+});
 
 app.get('/api/fichajes-del-dia', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
   try {
