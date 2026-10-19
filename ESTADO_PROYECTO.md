@@ -416,6 +416,16 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **2026-10-19 — Horas extra paso 2 "Quién puede hacer horas extra" en rama
+>   `he-autorizados` (los dos repos), SIN publicar.** Caso: Calderón (2519)
+>   sin tilde de autorizado pero con 9 h 20 m el 02/10 (AVP en modo "todas";
+>   corte 13:38). A: "Elegir quiénes" (lista con filtros, marcar en lote; es
+>   el mismo `employees.overtime_authorized` de la ficha). B: "Ver qué
+>   cambiaría" obligatorio antes de pasar a "Solo autorizadas" (septiembre
+>   local: 123 personas, 2634 h), con la lista de afectados. C: nota en la
+>   ficha si la empresa está en "todas". D: textos del paso 3. Sin migración.
+>   Suite 1171/1171. Pendiente de decidir: vista de fichajes en crudo por
+>   persona (mes/año) con el marcador previo de cada fichaje.
 > - **2026-10-19 — PUBLICADO recarga por versión nueva + escudo verde**
 >   (frontend `35ff670`). Con la app abierta durante una publicación, entrar a
 >   una pantalla no visitada fallaba en silencio (el hosting devuelve
