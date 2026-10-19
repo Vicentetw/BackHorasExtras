@@ -1,10 +1,64 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-17 — ver "Dónde quedamos" justo abajo)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-19 — ver "Dónde quedamos" justo abajo)
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 >
-> ### Dónde quedamos (2026-10-17)
+> ### Dónde quedamos (2026-10-19)
+>
+> **Todo publicado; nada pendiente en ramas.** Los 3 repos (backend, frontend,
+> landing) están en `main`, limpios y subidos. Producción: backend `d99d5ec`
+> (`/health`), frontend `3745473`. Suite 1165/1165.
+>
+> **El rumbo: `PLAN_LISTO_PARA_VENDER.md`** (qué falta para que un cliente
+> exigente lo compre, fase por fase, con criterio de aceptación). Estado:
+> - **Fase 0 — Seguridad urgente:** HECHA salvo: repo privado (el dueño, antes
+>   de vender: Render tiene que conectarse por la cuenta de GitHub) y **0.6**
+>   (llave del servidor ante Firebase con mínimo permiso, otra llave para la PC,
+>   segundo factor en Render y en la cuenta Google dueña de `asistenciatw`).
+>   Base: `MYSQL_SSL=require` + `MYSQL_SSL_CA` ya puestos en Render (el dueño).
+> - **Fase 1 — Segundo factor:** HECHA y probada de punta a punta (TOTP
+>   habilitado en Firebase). Falta: cierre de sesión por inactividad para
+>   administradores, "cerrar mis otras sesiones", y registrar ingresos y
+>   fallidos en el registro de actividad. El dueño está activando el suyo; para
+>   AVP sigue "apagado" (lo decide él en Empresas).
+> - **Fase 2 — No perder datos:** SIN EMPEZAR. Es lo siguiente y lo más
+>   importante: backup automático fuera de la PC del dueño, prueba de
+>   restauración semanal, alertas si el servidor se cae (Sentry ya está en el
+>   código, apagado: falta `SENTRY_DSN`).
+> - **Fase 3 — Staging y CI obligatorio:** SIN EMPEZAR. Guía para crear los 3
+>   servidores: `MUDAR_O_CREAR_SERVIDORES.md`.
+> - **Fase 4 — Legal (Ley 25.326):** SIN EMPEZAR. Términos, privacidad, AAIP,
+>   contrato de datos, SLA, exportación. Necesita abogado.
+> - **Fase 5 — Producto:** pendiente (detector "plantilla no coincide",
+>   reglas de horas extra "fin sin inicio" y "regreso oficial", turno de hoy ≠
+>   Ausente, asistente de alta, app más liviana: hoy ~1 MB, el presupuesto de
+>   `angular.json` se subió a 1.1 MB y bajarlo es el 5.5, video).
+> - **Fase 6 — Piloto de un mes con conciliación.**
+> - **Al final:** unificar las dos cuentas de Google/Firebase.
+>
+> **¿Se puede ofrecer ya?** (respuesta del 2026-10-19) Como **piloto** con un
+> cliente de confianza, sí. Como venta abierta, no todavía: faltan la Fase 2
+> (backups fuera de la PC y alertas) y lo mínimo de la Fase 4 (términos y
+> privacidad).
+>
+> **Cómo se trabaja (lo aprendido estos días):**
+> - Principio "una sola verdad": ningún informe de horas extra puede dar
+>   distinto de otro (`UNA_SOLA_VERDAD_HORAS_EXTRA.md`, test
+>   `una-sola-verdad-horas-extra`). Toda regla nueva va dentro del único
+>   cálculo (`/attendance-range`).
+> - Antes de publicar: suite completa con el backend REINICIADO (así apareció
+>   que `firebase-admin` 14 rompía el login), Chrome, y si toca números, la
+>   copia de producción (`horas_backup_prueba`).
+> - Login (Firebase `asistenciatw`) es el MISMO proyecto en local y en
+>   producción: cambios de configuración de Firebase, solo con el sí del dueño.
+> - Pruebas del segundo factor de punta a punta: la cuenta QA se crea con
+>   `admin-local-t6.js`, el código TOTP se calcula desde la clave (RFC 6238) y
+>   el email se marca verificado con firebase-admin. Firebase exige email
+>   verificado e "ingreso reciente" (≈5 min) para activarlo.
+>
+> ---
+> ### Detalle de lo publicado entre el 17 y el 19/10
 >
 > **PUBLICADO 2026-10-17:** rama `minimo-y-revisar` (backend merge `7e37d6d`
 > verificado en `/health`; frontend `acf6601` desplegado, chunk verificado).
