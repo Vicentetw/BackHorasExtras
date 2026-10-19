@@ -6,12 +6,9 @@ const { resolveTenantId, resolveTenantForWrite, MENSAJE_ELEGIR_EMPRESA, requireP
 // "global" de la base, que en realidad era la de AVP (14/21/25/30 dias): una
 // empresa nueva heredaba dias de vacaciones de otra empresa
 // (AISLAMIENTO_POR_EMPRESA.md, F). Cada empresa puede cargar la suya.
-const ESCALA_LCT = [
-  { id: null, min_years: 0, max_years: 5, days: 14 },
-  { id: null, min_years: 5, max_years: 10, days: 21 },
-  { id: null, min_years: 10, max_years: 20, days: 28 },
-  { id: null, min_years: 20, max_years: null, days: 35 }
-];
+// (ahora vive en motor-laboral/services/saldoVacaciones.js, junto con la
+// cuenta del saldo que usan todas las pantallas).
+const { ESCALA_LCT, saldos } = require('../motor-laboral/services/saldoVacaciones');
 
 module.exports = function (db) {
   const router = express.Router();
@@ -167,38 +164,20 @@ module.exports = function (db) {
       }
       const employeeId = employee.id;
 
-      const [[balanceRow]] = await db.query(
-        `SELECT allotted_days, notes, expiration_date, is_automatic FROM employee_leave_balances WHERE employee_id = ? AND year = ?`,
-        [employeeId, year]
-      );
-
-      // balance_year explicito (arrastre entre anios) tiene prioridad sobre
-      // inferir el anio de la fecha del evento -- asi un mismo evento puede
-      // descontar del saldo de un anio aunque las fechas caigan en otro
-      // (ej. licencia de fin de diciembre que se carga contra el saldo del
-      // anio siguiente a proposito).
-      const [[takenRow]] = await db.query(
-        `SELECT COALESCE(SUM(ee.dias), 0) AS taken
-         FROM employee_events ee
-         JOIN event_types et ON et.id = ee.event_type_id
-         WHERE ee.employee_id = ? AND et.code = 'VACACIONES'
-           AND COALESCE(ee.balance_year, YEAR(ee.fecha_desde)) = ?`,
-        [employeeId, year]
-      );
-
-      const allotted = balanceRow ? Number(balanceRow.allotted_days) : 0;
-      const taken = Number(takenRow.taken);
-
+      // La misma cuenta que la lista y que "Cargar ausencia" (saldoVacaciones.js).
+      const [[conAlta]] = await db.query('SELECT fecha_alta FROM employees WHERE id = ?', [employeeId]);
+      const sal = (await saldos(db, employee.tenant_id, Number(year), [{ id: employeeId, fecha_alta: conAlta && conAlta.fecha_alta }])).get(employeeId);
       res.json({
         success: true,
         employeeId: Number(legajo),
         year: Number(year),
-        allotted,
-        taken,
-        pending: Number((allotted - taken).toFixed(2)),
-        notes: balanceRow ? balanceRow.notes : null,
-        expirationDate: balanceRow ? balanceRow.expiration_date : null,
-        isAutomatic: balanceRow ? !!balanceRow.is_automatic : false
+        allotted: sal.asignados,
+        taken: sal.tomados,
+        pending: sal.quedan,
+        porEscala: sal.porEscala,
+        notes: sal.notas,
+        expirationDate: sal.vencimiento,
+        isAutomatic: sal.isAutomatic
       });
     } catch (err) {
       console.error('ERROR fetching leave balance:', err);
@@ -219,19 +198,8 @@ module.exports = function (db) {
 
       const [rows] = await db.query(
         `SELECT e.id AS employeeId, e.employee_id AS legajo, e.nombre AS employeeName,
-                e.fecha_alta AS fechaAlta,
-                COALESCE(b.allotted_days, 0) AS allotted,
-                COALESCE((
-                  SELECT SUM(ee.dias) FROM employee_events ee
-                  JOIN event_types et ON et.id = ee.event_type_id
-                  WHERE ee.employee_id = e.id AND et.code = 'VACACIONES'
-                    AND COALESCE(ee.balance_year, YEAR(ee.fecha_desde)) = ?
-                ), 0) AS taken,
-                b.notes,
-                b.expiration_date AS expirationDate,
-                b.is_automatic AS isAutomatic
+                e.fecha_alta AS fechaAlta, e.tenant_id AS tenantId
          FROM employees e
-         LEFT JOIN employee_leave_balances b ON b.employee_id = e.id AND b.year = ?
          WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)
            -- Pedido real: no listar inactivos / bajas en Vacaciones. activo
            -- NULL (filas viejas) se cuenta como activo, igual criterio que
@@ -240,16 +208,28 @@ module.exports = function (db) {
            AND e.fecha_baja IS NULL
            ${tenantClause}
          ORDER BY e.nombre ASC`,
-        [year, year, ...tenantParams]
+        [...tenantParams]
       );
 
-      const balances = rows.map(r => ({
-        ...r,
-        allotted: Number(r.allotted),
-        taken: Number(r.taken),
-        pending: Number((Number(r.allotted) - Number(r.taken)).toFixed(2)),
-        isAutomatic: !!r.isAutomatic
-      }));
+      // La misma cuenta que el saldo de una persona y que "Cargar ausencia"
+      // (saldoVacaciones.js): asignados = lo cargado a mano, o por escala si
+      // no se cargó nada; tomados = licencias con motivo que descuenta vacaciones.
+      const porEmpresa = new Map();
+      for (const r of rows) {
+        if (!porEmpresa.has(r.tenantId)) porEmpresa.set(r.tenantId, []);
+        porEmpresa.get(r.tenantId).push({ id: r.employeeId, fecha_alta: r.fechaAlta });
+      }
+      const todos = new Map();
+      for (const [tid, emps] of porEmpresa) for (const [id, v] of await saldos(db, tid, Number(year), emps)) todos.set(id, v);
+      const balances = rows.map((r) => {
+        const v = todos.get(r.employeeId);
+        return {
+          employeeId: r.employeeId, legajo: r.legajo, employeeName: r.employeeName, fechaAlta: r.fechaAlta,
+          allotted: v.asignados, taken: v.tomados, pending: v.quedan,
+          porEscala: v.porEscala, antiguedadAnios: v.anios,
+          notes: v.notas, expirationDate: v.vencimiento, isAutomatic: v.isAutomatic,
+        };
+      });
 
       res.json({ success: true, year: Number(year), balances });
     } catch (err) {
