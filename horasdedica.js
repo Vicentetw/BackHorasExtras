@@ -4068,7 +4068,11 @@ async function attendanceRangeHandler(req, res) {
 
     const overtimeSettings = await fetchOvertimeSettings(tenantId);
     const authModeValue = await getAppSetting('overtimeAuthorizationMode', tenantId, db);
-    const overtimeAuthorizationMode = authModeValue || 'all';
+    // Vista previa del paso 2 "Quién puede hacer horas extra" (2026-10-19):
+    // con simularAutorizacionHE todo el cálculo corre como si la empresa
+    // tuviera ese modo (solo pedidos internos, igual que las otras vistas previas).
+    const simAut = interno ? req.query.simularAutorizacionHE : undefined;
+    const overtimeAuthorizationMode = simAut === 'all' || simAut === 'custom' ? simAut : (authModeValue || 'all');
 
     // Regimen de horas extra (bloque B3, ver HORAS_EXTRA_REGIMENES.md): OPT-IN
     // por empresa. Si la empresa no configuro ninguna politica, usaRegimen es
@@ -4099,6 +4103,7 @@ async function attendanceRangeHandler(req, res) {
         ...(detailEmployeeId ? { employeeId: detailEmployeeId } : {}),
         ...(simulacionHE ? { simularMetodoHE: req.query.simularMetodoHE, simularLlegadaHE: req.query.simularLlegadaHE, simularMinimoHE: req.query.simularMinimoHE, simularPlantillaHE: req.query.simularPlantillaHE } : {}),
         ...(req.query.simularMinimoEmpresaHE !== undefined && interno ? { simularMinimoEmpresaHE: req.query.simularMinimoEmpresaHE } : {}),
+        ...(simAut ? { simularAutorizacionHE: simAut } : {}),
       });
       regimenCanonico = new Map(Object.entries(completo.regimenDias || {}));
     }

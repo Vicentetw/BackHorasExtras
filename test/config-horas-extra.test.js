@@ -175,6 +175,30 @@ test('solo autorizados: quien no está autorizado no suma', async () => {
   }
 });
 
+test('paso 2: marcar autorizados en lote y ver qué cambiaría antes de activar "solo autorizados"', async () => {
+  // La empresa sigue en "todas las personas" (lo dejó así el test anterior).
+  const lista = await (await pedir('GET', '/api/config-horas-extra/autorizados')).json();
+  assert.equal(lista.length, 5);
+  assert.equal(lista[0].plantilla, 'Oficina 8 a 17 (test)');
+  const id = (leg) => lista.find((x) => x.legajo === String(leg)).id;
+  assert.equal((await pedir('PUT', '/api/config-horas-extra/autorizados', { ids: lista.map((x) => x.id), autorizado: true })).status, 200);
+  const r = await (await pedir('PUT', '/api/config-horas-extra/autorizados', { ids: [id(LEG.almuerzo)], autorizado: false })).json();
+  assert.equal(r.cambiados, 1);
+  const cfg = await (await pedir('GET', '/api/config-horas-extra')).json();
+  assert.deepEqual(cfg.autorizados, { si: 4, total: 5 });
+  // Vista previa: con "solo autorizados", almuerzo (120 min) deja de sumar.
+  const j = await (await pedir('GET', `/api/config-horas-extra/impacto?autorizacion=custom&from=${DIA}&to=${DIA}`)).json();
+  assert.equal(j.dias, 1);
+  assert.equal(j.minutosHoy - j.minutosCon, 120);
+  assert.equal(j.ejemplos[0].employeeId, String(LEG.almuerzo));
+  assert.equal((await dia(LEG.almuerzo)).overtimeMinutes, 120, 'la vista previa no cambia nada');
+  // Otra empresa no puede tocar a estas personas (ni las ve).
+  const otra = await (await pedir('PUT', '/api/config-horas-extra/autorizados', { ids: [id(LEG.vuelve)], autorizado: false }, hOtra)).json();
+  assert.equal(otra.cambiados, 0);
+  assert.ok(!(await (await pedir('GET', '/api/config-horas-extra/autorizados', null, hOtra)).json()).some((x) => x.id === id(LEG.vuelve)));
+  assert.equal((await pedir('PUT', '/api/config-horas-extra/autorizados', { ids: [], autorizado: true })).status, 400);
+});
+
 test('aislamiento: la configuración de una empresa no toca a otra', async () => {
   const v = await dia(LEG.vuelve + 1000, hOtra);
   assert.deepEqual([v.overtimeMinutes, v.overtimeSource], [180, 'fallback']);
