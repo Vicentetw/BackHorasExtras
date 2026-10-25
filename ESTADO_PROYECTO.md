@@ -13,15 +13,20 @@
 > - Suite **1175/1175**. Publicado desde el 19/10: ausencias A/B, recarga por
 >   versión nueva + escudo verde, horas extra paso 2 (autorizados), fichajes de
 >   una persona (mes/año, marcador previo).
-> - **Listo sin publicar:** rama `feriado-no-es-falta` (frontend): el
->   calendario contaba "Feriado (no fue)" como falta (caso 2525, 5 y 12/10).
->   Probado en Chrome con feriados temporales en la base local.
+> - **PUBLICADO 24/10:** `feriado-no-es-falta` (frontend `96a0084`): el
+>   calendario contaba "Feriado (no fue)" como falta (caso 2525, 5 y 12/10);
+>   ahora "N feriados" aparte, igual que el resumen.
 > - Rama vieja `justificaciones-y-limites` (frontend): NO se publica a
 >   propósito (pantalla de límites = etapa E4, decisión del 15/10).
-> - **Dependencias con fallas nuevas** (aparecieron después del 18/10):
->   backend body-parser y multer (altas, DoS), ip-address (moderada);
->   frontend dompurify (crítica) y zod (alta). Todas con arreglo compatible
->   (`npm audit fix`). Pendiente de aprobación.
+> - **PUBLICADO 24/10: seguridad de dependencias** (backend `f6db21a`,
+>   frontend `8dac21c`): body-parser 2.4.0, multer 2.5.0, ip-address 10.7.4,
+>   qs 6.16.1, dompurify 3.4.17, zod 4.6.6 (`npm audit fix`, versiones
+>   compatibles). 0 vulnerabilidades en lo que se publica. Suite 1175/1175 con
+>   el backend reiniciado; Chrome: PDF del detalle y formulario sin errores.
+>   **Quedan 2 avisos solo de desarrollo** (no llegan a producción): vite
+>   8.3.0 (alta, servidor de `ng serve`, escucha solo en la PC) y
+>   @vitest/mocker (moderada); `@angular/build` 22.2.4 los fija a esas
+>   versiones: actualizar cuando Angular publique el arreglo (no forzar).
 > - **Incidente 2026-10-22: disco C lleno** (0 bytes). MySQL de Docker se
 >   detuvo restaurando un backup en una base local nueva. El dueño liberó
 >   espacio (hoy 43 GB). El disco de Docker (`docker_data.vhdx`) ocupa 58,6 GB
