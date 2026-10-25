@@ -130,7 +130,14 @@ app.set('trust proxy', 1);
 // registrada antes que nada mas.
 app.use('/webhooks/mercadopago', mercadopagoWebhookRoutes(require('./db')));
 
-app.use(express.json({ limit: '1mb' }));
+// inflate:false (2026-10-24): NO se aceptan cuerpos comprimidos (gzip,
+// deflate, br). Ninguna parte del sistema los manda (pantallas, agente de
+// fichajes, MercadoPago), y descomprimir lo que manda un desconocido es
+// justamente la puerta de la falla de Node de octubre 2026 (CVE-2026-111497,
+// "Node2Shell": un cuerpo Brotli armado a propósito podía ejecutar código).
+// Con esto, aunque algún día corriera un Node viejo, el servidor responde
+// 415 sin descomprimir nada. Ver SEGURIDAD_WEB.md.
+app.use(express.json({ limit: '1mb', inflate: false }));
 // Fase 11 (landing publica + alta autoservicio): /api/public es la unica
 // superficie del sistema pensada para alguien SIN ninguna cuenta todavia
 // -- ver security.js para el detalle de que capas salta y cuales no.
@@ -6724,6 +6731,12 @@ app.use((err, req, res, next) => {
       ? 'El archivo supera el tamaño máximo permitido (20MB).'
       : 'Error al procesar el archivo subido.';
     return res.status(413).json({ error: message });
+  }
+  // Cuerpo comprimido (gzip/deflate/br): no se acepta (inflate:false, ver
+  // express.json arriba). No es un error del servidor: 415, y sin ruido en
+  // el log ni en Sentry (lo puede mandar cualquiera desde afuera).
+  if (err && err.type === 'encoding.unsupported') {
+    return res.status(415).json({ error: 'No se aceptan datos comprimidos.' });
   }
   console.error('[UNHANDLED ERROR]:', err);
   // Avisar en vez de esperar a que el cliente llame. Si SENTRY_DSN no esta

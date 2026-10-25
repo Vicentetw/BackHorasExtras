@@ -58,7 +58,7 @@ function anotar(v, ahora = Date.now()) {
 
 const router = express.Router();
 router.post('/',
-  express.json({ type: ['application/csp-report', 'application/reports+json', 'application/json'], limit: '16kb' }),
+  express.json({ type: ['application/csp-report', 'application/reports+json', 'application/json'], limit: '16kb', inflate: false }),
   (req, res) => {
     for (const v of extraer(req.body)) anotar(v);
     res.status(204).end();
