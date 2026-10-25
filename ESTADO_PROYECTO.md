@@ -18,6 +18,17 @@
 >   ahora "N feriados" aparte, igual que el resumen.
 > - Rama vieja `justificaciones-y-limites` (frontend): NO se publica a
 >   propósito (pantalla de límites = etapa E4, decisión del 15/10).
+> - **PUBLICADO 24/10: falla de Node.js de octubre 2026** (backend `45cee47`,
+>   frontend `3e69bd8`). Node publicó el 21/10 diez arreglos; el grave es
+>   CVE-2026-111497 ("Node2Shell": datos Brotli armados → ejecutar código, vía
+>   Express). Hecho: (1) `.node-version` = **22.23.4** (la corregida; antes
+>   "22" sin parche fijo) y `engines` >=22.23.4; (2) el servidor **rechaza
+>   cuerpos comprimidos** (`inflate:false` en express.json, CSP y webhook de
+>   MercadoPago; 415): nadie los manda y cierra la puerta aunque corriera un
+>   Node viejo; (3) Seguridad muestra la versión de Node y si está al día.
+>   Verificado en producción: deploy OK con 22.23.4 y gzip → 415. Test
+>   `cuerpo-comprimido`. Suite 1180/1180. **La PC del dueño tiene Node
+>   24.16.0: actualizar a 24.22.1** (solo desarrollo).
 > - **PUBLICADO 24/10: seguridad de dependencias** (backend `f6db21a`,
 >   frontend `8dac21c`): body-parser 2.4.0, multer 2.5.0, ip-address 10.7.4,
 >   qs 6.16.1, dompurify 3.4.17, zod 4.6.6 (`npm audit fix`, versiones
