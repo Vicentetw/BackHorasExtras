@@ -1,8 +1,35 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-19 — ver "Dónde quedamos" justo abajo)
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-24 — ver "Revisión del 24/10" y "Dónde quedamos")
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
+>
+> ### Revisión general del 2026-10-24
+>
+> - **Producción sana:** backend `9fa15c3` (`/health`), frontend arriba.
+>   **Todas las migraciones hasta la 20261023 están aplicadas** (verificado
+>   tabla por tabla y columna por columna en el backup del 23/10): lo que más
+>   abajo dice "migración pendiente" ya no corre.
+> - Suite **1175/1175**. Publicado desde el 19/10: ausencias A/B, recarga por
+>   versión nueva + escudo verde, horas extra paso 2 (autorizados), fichajes de
+>   una persona (mes/año, marcador previo).
+> - **Listo sin publicar:** rama `feriado-no-es-falta` (frontend): el
+>   calendario contaba "Feriado (no fue)" como falta (caso 2525, 5 y 12/10).
+>   Probado en Chrome con feriados temporales en la base local.
+> - Rama vieja `justificaciones-y-limites` (frontend): NO se publica a
+>   propósito (pantalla de límites = etapa E4, decisión del 15/10).
+> - **Dependencias con fallas nuevas** (aparecieron después del 18/10):
+>   backend body-parser y multer (altas, DoS), ip-address (moderada);
+>   frontend dompurify (crítica) y zod (alta). Todas con arreglo compatible
+>   (`npm audit fix`). Pendiente de aprobación.
+> - **Incidente 2026-10-22: disco C lleno** (0 bytes). MySQL de Docker se
+>   detuvo restaurando un backup en una base local nueva. El dueño liberó
+>   espacio (hoy 43 GB). El disco de Docker (`docker_data.vhdx`) ocupa 58,6 GB
+>   y no se achica solo: compactarlo (pendiente). Lección: los backups de
+>   producción viven solo en esta PC → la Fase 2 es urgente.
+> - Análisis de salidas sin marcador: `ANALISIS_SALIDAS_SIN_MARCADOR.md`
+>   (orden propuesto: 4a → 4b → salidas sin marcador → regla par/impar →
+>   compensar tardanza; esperando aprobación).
 >
 > ### Dónde quedamos (2026-10-19)
 >
