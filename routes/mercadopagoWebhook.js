@@ -24,7 +24,7 @@ const eventsRepo = require('../motor-laboral/repositories/mercadopagoEventsRepos
 module.exports = function (db, options = {}) {
   const router = express.Router();
 
-  router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
+  router.post('/', express.raw({ type: 'application/json', inflate: false }), async (req, res) => {
     // MercadoPago espera 200/201 rapido -- si tarda o devuelve otra cosa,
     // reintenta la notificacion. Por eso este handler nunca deja "colgado"
     // el request: cualquier error interno nuestro responde 200 igual (ver

@@ -2130,6 +2130,17 @@ function createMotorLaboralAdminRoutes(db) {
     }
   });
 
+  // Mínimo seguro por versión mayor de Node (release del 21/10/2026). Una
+  // mayor que no está en la lista se considera sin datos (null), no "segura".
+  const NODE_MINIMO_SEGURO = { 22: '22.23.4', 24: '24.22.1', 26: '26.12.1' };
+  function estadoNode(version) {
+    const [mayor, menor, parche] = String(version).replace(/^v/, '').split('.').map(Number);
+    const minimo = NODE_MINIMO_SEGURO[mayor] || null;
+    if (!minimo) return { version, minimo: null, alDia: null };
+    const [, mMenor, mParche] = minimo.split('.').map(Number);
+    return { version, minimo, alDia: menor > mMenor || (menor === mMenor && parche >= mParche) };
+  }
+
   router.get('/system/status', requireSuperadmin, async (req, res) => {
     let poolStats = null;
     try {
@@ -2161,6 +2172,10 @@ function createMotorLaboralAdminRoutes(db) {
     res.json({
       poolStats,
       baseDeDatos,
+      // Versión de Node con la que corre el servidor y si tiene los arreglos
+      // de seguridad de octubre 2026 (CVE-2026-111497 y otros 9). Así se ve
+      // en Seguridad qué versión usa Render de verdad, sin entrar a Render.
+      node: estadoNode(process.version),
       memory: {
         rssMb: Math.round(mem.rss / 1024 / 1024),
         heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024)
