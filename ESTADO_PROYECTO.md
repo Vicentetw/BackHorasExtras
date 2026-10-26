@@ -24,8 +24,9 @@
 >   grupo de la pantalla actual se abre solo. Rutas sin cambios. Colores con
 >   variables del tema (claro/oscuro/paleta). Probado: 24 opciones como admin
 >   llevan a su pantalla, superadmin, plegado, oscuro, celular. Ojo: el azul
->   fijo del menú había sido pedido del dueño; si lo quiere de vuelta, es solo
->   CSS en `shell.css`. **El único test del frontend (`app.spec.ts`) no corre
+>   fijo del menú había sido pedido del dueño: **lo pidió de vuelta el mismo
+>   día** → publicado `66f40fe`: fondo y botones con el color de cada tema
+>   (azul/verde/marrón/oscuro) + el orden por grupos. **El único test del frontend (`app.spec.ts`) no corre
 >   desde antes ("zone.js/testing" no resuelve): arreglar.**
 > - **PUBLICADO 26/10: textos (H de `REVISION_PROFUNDA_2026-10-26.md`)**
 >   (backend `76036e7`, frontend `367ded9`): "Justificado" en vez de
