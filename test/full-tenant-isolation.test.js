@@ -123,7 +123,7 @@ test('Justificaciones (GET /config/user-exclusions): solo las de la empresa A', 
   assertNoLeak(text, 'user-exclusions');
 });
 
-test('Bajas y Exclusiones (GET /config/excluded-users): no expone al de la B', async () => {
+test('Bajas y exclusiones (GET /config/excluded-users): no expone al de la B', async () => {
   const res = await fetch(`${BASE_URL}/config/excluded-users?limit=500`, { headers: headersA });
   const text = await res.text();
   assert.equal(res.status, 200);

@@ -240,10 +240,10 @@ test('titular: solo el superadmin lo designa; no puede ser un usuario de otra em
   assert.ok(usuarios.usuarios.some((u) => u.email === `${UID_TENANT}@test.local`), 'lista los usuarios de la empresa para elegir');
 });
 
-test('titular: un mail que no es usuario no se nombra (se crea antes en Usuarios y Roles)', async () => {
+test('titular: un mail que no es usuario no se nombra (se crea antes en Usuarios y roles)', async () => {
   const r = await nombrarTitular(EMAIL_NUEVO_TITULAR);
   assert.equal(r.status, 404);
-  assert.match((await r.json()).error, /Usuarios y Roles/);
+  assert.match((await r.json()).error, /Usuarios y roles/);
   const [[u]] = await db.query('SELECT COUNT(*) AS n FROM app_users WHERE email = ?', [EMAIL_NUEVO_TITULAR]);
   assert.equal(u.n, 0, 'no se crea ninguna cuenta por esta via');
 });

@@ -26,7 +26,7 @@ const asistente = require('../services/asistenteHorario');
 const { revisarEliminacion, eliminarEmpresaPrueba, ErrorDeEliminacion } = require('../services/eliminarEmpresaPrueba');
 const { usoDePlantillas, decisiones, listarAsignacionesRotas, quitarAsignacionesRotas } = require('../services/usoDePlantillas');
 
-const ARCHIVADA_NO_SE_ASIGNA = 'Esa plantilla está archivada: no se puede asignar. Desarchivala en Plantillas de Horario si la necesitás.';
+const ARCHIVADA_NO_SE_ASIGNA = 'Esa plantilla está archivada: no se puede asignar. Desarchivala en Plantillas de horario si la necesitás.';
 
 // Mismo motivo que ya documenta /attendance-range en horasdedica.js:
 // toISOString() usa UTC, y en un servidor con huso horario negativo
@@ -290,7 +290,7 @@ function createMotorLaboralAdminRoutes(db) {
   // Quien paga y el UNICO de la empresa que puede pedir la baja. Lo designa
   // SOLO el superadmin (no el formulario publico, que no es confiable),
   // eligiendo un usuario que ya existe en la empresa. Si todavia no existe,
-  // se crea como siempre en Usuarios y Roles (una sola forma de crear
+  // se crea como siempre en Usuarios y roles (una sola forma de crear
   // usuarios, no dos).
 
   router.get('/tenants/:id/usuarios', requireSuperadmin, async (req, res) => {
@@ -325,7 +325,7 @@ function createMotorLaboralAdminRoutes(db) {
       if (!t) return res.status(404).json({ error: 'Empresa no encontrada' });
 
       const [[u]] = await db.query('SELECT id, tenant_id, is_active, is_superadmin FROM app_users WHERE LOWER(email) = ?', [email]);
-      if (!u) return res.status(404).json({ error: 'Ese mail no es un usuario del sistema: crealo primero en Usuarios y Roles.' });
+      if (!u) return res.status(404).json({ error: 'Ese mail no es un usuario del sistema: crealo primero en Usuarios y roles.' });
       if (u.is_superadmin || u.tenant_id !== tenantId) {
         return res.status(409).json({ error: 'Ese mail es un usuario de otra empresa (o del superadmin).' });
       }
@@ -1896,7 +1896,7 @@ function createMotorLaboralAdminRoutes(db) {
   // Convenio vigente HOY de cada empleado de la empresa: la columna
   // "Convenio" de Horarios de empleados (sin pedir uno por uno).
   // Horario que rige HOY para cada empleado (columna y filtro "Horario" de
-  // Horarios de Empleados, pedido 2026-10-16). MISMA regla que el cálculo
+  // Horarios de empleados, pedido 2026-10-16). MISMA regla que el cálculo
   // (scheduleRepository.findAssignedScheduleMapForDate): asignación vigente a
   // una plantilla activa de su empresa; si hay dos, gana la que empezó más
   // tarde. Quien no aparece se mide con la plantilla por defecto.

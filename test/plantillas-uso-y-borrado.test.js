@@ -279,7 +279,7 @@ test('asignaciones rotas: un usuario de otra empresa no las ve ni las puede quit
   }
 });
 
-// Columna "Horario" de Horarios de Empleados: la plantilla que rige HOY, con
+// Columna "Horario" de Horarios de empleados: la plantilla que rige HOY, con
 // la misma regla que el cálculo (si hay dos superpuestas, la que empezó más tarde).
 test('horario vigente: el mismo que usa el cálculo, también con asignaciones superpuestas', async () => {
   const hoy = new Date();

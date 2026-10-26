@@ -1,7 +1,7 @@
 // UNA SOLA VERDAD de horas extra (2026-10-18). Pedido del dueño: "cómo vas a
 // tener dos informes distintos cuando se utiliza para pagar". Para la misma
 // persona y el mismo período, TODAS las pantallas tienen que dar lo mismo:
-//   - el listado de la empresa (Presentismo, Horas Extra por Régimen),
+//   - el listado de la empresa (Presentismo, Horas extra por régimen),
 //   - el detalle de la persona (calendario, portal) y la SUMA de sus días,
 //   - una quincena o una semana = su parte del mes (los topes del mes se
 //     reparten sobre el mes entero),

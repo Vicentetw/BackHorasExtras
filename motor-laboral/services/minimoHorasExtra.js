@@ -12,7 +12,7 @@
 //
 // CÓMO SE APLICA (una sola verdad)
 // --------------------------------
-// - Cálculo de siempre (Presentismo, Horas Extra por Régimen, portal,
+// - Cálculo de siempre (Presentismo, Horas extra por régimen, portal,
 //   liquidación sin convenio): si las horas extra AUTOMÁTICAS de un día son
 //   menos que el mínimo, ese día no suma; el detalle lo muestra ("8 min,
 //   menos del mínimo de 10"). Las cargas manuales no se tocan: son una

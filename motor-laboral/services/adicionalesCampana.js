@@ -4,7 +4,7 @@
 //
 // MÓDULO que el superadmin prende por empresa ('adicionalesCampana', ver
 // modulos.js): no todas las empresas tienen esta regla. Los números los
-// configura el administrador de cada empresa (Configuración General), con
+// configura el administrador de cada empresa (Configuración general), con
 // los del CCT 572/09 (vialidad) por defecto:
 //
 //   - Dedicación Funcional Exclusiva (art. 33 B): "Será reconocida solo al
