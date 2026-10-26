@@ -3,7 +3,7 @@
 // ============================================================================
 //
 // UN SOLO LUGAR. Antes había dos límites parecidos en dos pantallas distintas
-// ("Límite de licencia personal" en Configuración General y el tope de
+// ("Límite de licencia personal" en Configuración general y el tope de
 // Salidas), y ninguno decía qué sumaba. El dueño cargó los dos porque no
 // sabía cuál era. Ahora los tres conceptos se configuran juntos, en
 // Administración → "Llegadas tarde y salidas", y cada número que los muestra
@@ -13,7 +13,7 @@
 //   1. tardanzas:             llegadas tarde SIN justificar.
 //   2. tardanzasJustificadas: llegadas tarde justificadas (con un motivo,
 //                             ej. "Salida particular"). Era la "licencia
-//                             personal" de Configuración General.
+//                             personal" de Configuración general.
 //   3. salidasParticulares:   salidas en horario con el marcador particular
 //                             (pantalla Salidas).
 //

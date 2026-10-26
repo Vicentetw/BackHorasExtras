@@ -1958,10 +1958,10 @@ app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), asyn
 // Pedido del dueño: que quede escrito POR QUÉ se justificó algo (no solo el
 // motivo de la lista). Es configuración por empresa y viene APAGADA: así no
 // le cambia nada a quien ya usa el sistema; la prende el administrador en
-// Configuración General. Encendida, el servidor rechaza crear o modificar una
+// Configuración general. Encendida, el servidor rechaza crear o modificar una
 // justificación sin razón escrita (la pantalla también lo avisa antes, pero
 // el control que vale es este: no se puede saltear desde otra pantalla).
-const MENSAJE_RAZON_EXIGIDA = 'Tu empresa exige escribir la razón al justificar (Configuración General).';
+const MENSAJE_RAZON_EXIGIDA = 'Tu empresa exige escribir la razón al justificar (Configuración general).';
 async function exigeRazonJustificacion(tenantId) {
   if (tenantId == null) return false;
   return (await getAppSetting('exigirRazonJustificacion', tenantId, db)) === '1';
@@ -4814,7 +4814,7 @@ async function attendanceRangeHandler(req, res) {
           const entradaAutorizada = !!(isLate && !lateJustifiedThisDay && entradaParticular && entradaParticular.estado === 'autorizada');
           if (entradaAutorizada || entradaJustificada) lateJustifiedThisDay = true;
           // ¿Ese tiempo se descuenta de la bolsa de la persona? Depende del
-          // MOTIVO (Motivos de Ausencia → "consume la bolsa"). Por defecto sí,
+          // MOTIVO (Motivos de ausencia → "consume la bolsa"). Por defecto sí,
           // como siempre. Vale igual para una justificación del día cargada en
           // Justificaciones (exclusion) que para la de la salida.
           const motivoNoConsume = (entradaJustificada && entradaParticular.justificacion.consume === false)

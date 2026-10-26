@@ -35,10 +35,10 @@
 // Una consulta por día para todas las personas (no una por salida).
 const scheduleRepository = require('../repositories/scheduleRepository');
 
-const AVISO_SIN_PLANTILLA = 'No tiene plantilla de horario asignada: se usó el horario general de la empresa. Asignale su horario en Horarios de Empleados.';
-const AVISO_SIN_HORARIO = 'No tiene plantilla de horario asignada y la empresa no tiene un horario general: no se puede calcular la duración. Asignale su horario en Horarios de Empleados.';
+const AVISO_SIN_PLANTILLA = 'No tiene plantilla de horario asignada: se usó el horario general de la empresa. Asignale su horario en Horarios de empleados.';
+const AVISO_SIN_HORARIO = 'No tiene plantilla de horario asignada y la empresa no tiene un horario general: no se puede calcular la duración. Asignale su horario en Horarios de empleados.';
 const AVISO_SIN_JORNADA = 'Su horario no tiene jornada ese día: no se puede calcular la duración.';
-const AVISO_EMPRESA_SIN_JORNADA = 'No tiene plantilla de horario asignada y el horario general no tiene jornada ese día: no se puede calcular la duración. Asignale su horario en Horarios de Empleados.';
+const AVISO_EMPRESA_SIN_JORNADA = 'No tiene plantilla de horario asignada y el horario general no tiene jornada ese día: no se puede calcular la duración. Asignale su horario en Horarios de empleados.';
 
 const cruzaMedianoche = (sched) => {
   const trabajo = (sched.blocks || []).filter((b) => b.block_type === 'WORK');
