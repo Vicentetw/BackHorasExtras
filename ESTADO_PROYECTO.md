@@ -477,6 +477,12 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
+> - **26/10 — Roles probados (sin cambios).** Los 4 roles de sistema andan:
+>   el menú coincide con lo que se puede abrir y no hay rechazos ni errores.
+>   Hay 3 propuestas pendientes (O roles por empresa, P permiso propio de
+>   horas extra/liquidación, Q encargado de sector), en la sección 8 de
+>   `REVISION_PROFUNDA_2026-10-26.md`.
+>
 > - **2026-10-19 — PUBLICADO "Fichajes" de una persona (backend `3cf7e4e`, frontend `9dafd7d`, verificados). Antes en rama
 >   `fichajes-persona` (los dos repos), SIN publicar.** `GET
 >   /api/fichajes-persona` (hasta 31 días; el año se pide mes por mes):

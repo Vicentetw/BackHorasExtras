@@ -138,6 +138,41 @@ Inicio con la puesta en marcha paso a paso; el formulario único "Cargar
 ausencia"; la ventana de fichajes de una persona; la ayuda (?) en cada
 concepto; Presentismo en el celular; 157 archivos de test (1.180 casos).
 
+## 8. Roles (probado el 26/10, sin cambios)
+
+Prueba real en la base local, empresa 6: un usuario por rol (Administrador,
+Solo lectura, RRHH, Feriados) entra, recorre el menú y prueba las 27
+pantallas por URL directa.
+
+**Funciona bien:**
+- Cada rol ve en el menú exactamente lo que puede abrir.
+- Lo demás va a "No tenés permiso".
+- Ninguna pantalla recibe rechazos del servidor a medias (respuestas 403).
+- No hay errores de JavaScript.
+- Solo lectura no ve botones de crear, editar ni borrar.
+- Las pantallas de plataforma quedan cerradas para todos.
+
+Script: `scratchpad/qa_roles.js`.
+
+**Lo que falta (diseño, no errores):**
+
+**O. La empresa no puede armar sus roles.** Los roles son de toda la
+plataforma y solo el superadmin los crea (`routes/roles.js`). Va contra
+"el administrador configura todo lo de su empresa". Además, un rol
+personalizado (hoy existe "lector") lo ven en la lista todas las empresas.
+Propuesta: roles por empresa (`tenant_id`). Los 4 de sistema siguen globales.
+
+**P. "Ver presentismo" incluye ver la plata.** Con `attendance:read`
+(lo tienen Solo lectura, RRHH y hasta Feriados) se abren Liquidación y
+Horas extra por régimen. Propuesta: un permiso propio "Horas extra y
+liquidación" (ver / cerrar mes / autorizar). Hoy cerrar el mes y autorizar
+piden `attendance:update`, que solo tiene el Administrador.
+
+**Q. No hay "encargado de un sector".** Los permisos valen para toda la
+empresa. Un supervisor que solo debería ver a su gente ve a todos. Para
+empresas grandes (5000 empleados) es lo que van a pedir. Propuesta: limitar
+un usuario a un sector o ciudad.
+
 ## Orden recomendado
 
 H e I (textos y marca: cero riesgo, se nota mucho) → G y J (menú) → K, L, M
