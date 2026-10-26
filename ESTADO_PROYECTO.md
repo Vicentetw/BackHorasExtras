@@ -18,6 +18,15 @@
 >   ahora "N feriados" aparte, igual que el resumen.
 > - Rama vieja `justificaciones-y-limites` (frontend): NO se publica a
 >   propósito (pantalla de límites = etapa E4, decisión del 15/10).
+> - **PUBLICADO 26/10: menú por tarea (G) y menú lateral claro (J)**
+>   (frontend `e284639`). Grupos: Día a día / Horas extra / Personas y
+>   horarios / Configuración (desplegable) / Plataforma (superadmin); el
+>   grupo de la pantalla actual se abre solo. Rutas sin cambios. Colores con
+>   variables del tema (claro/oscuro/paleta). Probado: 24 opciones como admin
+>   llevan a su pantalla, superadmin, plegado, oscuro, celular. Ojo: el azul
+>   fijo del menú había sido pedido del dueño; si lo quiere de vuelta, es solo
+>   CSS en `shell.css`. **El único test del frontend (`app.spec.ts`) no corre
+>   desde antes ("zone.js/testing" no resuelve): arreglar.**
 > - **PUBLICADO 26/10: textos (H de `REVISION_PROFUNDA_2026-10-26.md`)**
 >   (backend `76036e7`, frontend `367ded9`): "Justificado" en vez de
 >   "Excusado"; "vinculado / sin vincular" en vez de "Match"; ayuda de

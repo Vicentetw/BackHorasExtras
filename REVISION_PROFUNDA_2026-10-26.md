@@ -1,7 +1,8 @@
 # Revisión profunda: qué simplificar, qué mejorar y qué estética cambiar (2026-10-26)
 
 > Pedido del dueño: "revisa en forma muy profunda y no hagas ningún cambio
-> antes de preguntar". **Nada de esto está hecho.** Cada punto lleva letra para
+> antes de preguntar". **Hechos y publicados (26/10): H, G y J.** El resto
+> espera aprobación. Cada punto lleva letra para
 > aprobarlo por separado. Medido sobre el código de `main` y capturas de la
 > app local (empresa 6) en computadora (1366 px) y celular (390 px).
 
