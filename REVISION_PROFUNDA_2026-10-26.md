@@ -162,11 +162,23 @@ plataforma y solo el superadmin los crea (`routes/roles.js`). Va contra
 personalizado (hoy existe "lector") lo ven en la lista todas las empresas.
 Propuesta: roles por empresa (`tenant_id`). Los 4 de sistema siguen globales.
 
-**P. "Ver presentismo" incluye ver la plata.** Con `attendance:read`
-(lo tienen Solo lectura, RRHH y hasta Feriados) se abren Liquidación y
-Horas extra por régimen. Propuesta: un permiso propio "Horas extra y
-liquidación" (ver / cerrar mes / autorizar). Hoy cerrar el mes y autorizar
-piden `attendance:update`, que solo tiene el Administrador.
+**P. Cerrar el mes sin ser administrador (prioridad baja).** Ver
+Liquidación con `attendance:read` está bien: el sistema muestra horas, no
+dinero (corrección del dueño, 26/10). Lo único que falta: cerrar el mes y
+autorizar horas extra piden `attendance:update`, y entre los roles de
+sistema solo lo tiene el Administrador. Un permiso propio para esas dos
+acciones permitiría un rol "Liquidación".
+
+**Roles propuestos (charla del 26/10, sin aprobar):**
+- Administrador.
+- Encargado de presentismo: justifica, carga licencias, fichajes a mano y
+  feriados. Absorbe al rol "Feriados" suelto.
+- Liquidación: autoriza horas extra y cierra el mes (necesita P).
+- Supervisor de sector: solo su gente (necesita Q).
+- Solo lectura.
+- Empleado (portal).
+
+Antes de cambiar nada: ver cuántos usuarios tienen cada rol en producción.
 
 **Q. No hay "encargado de un sector".** Los permisos valen para toda la
 empresa. Un supervisor que solo debería ver a su gente ve a todos. Para
