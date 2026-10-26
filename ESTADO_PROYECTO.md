@@ -18,6 +18,14 @@
 >   ahora "N feriados" aparte, igual que el resumen.
 > - Rama vieja `justificaciones-y-limites` (frontend): NO se publica a
 >   propósito (pantalla de límites = etapa E4, decisión del 15/10).
+> - **PUBLICADO 26/10: textos (H de `REVISION_PROFUNDA_2026-10-26.md`)**
+>   (backend `76036e7`, frontend `367ded9`): "Justificado" en vez de
+>   "Excusado"; "vinculado / sin vincular" en vez de "Match"; ayuda de
+>   Empleados sin "Dashboard"; títulos, menú y mensajes con mayúscula solo al
+>   inicio. Solo textos visibles (valores internos iguales). Suite 1180/1180,
+>   21 pantallas en Chrome sin errores. Pendiente de aprobar: G (menú por
+>   tarea), J–M (estética), D/E/F (configuraciones duplicadas; sumar "Bajas y
+>   exclusiones" vs "Inactivo"), N, B/C, A. I (marca) espera el nombre.
 > - **PUBLICADO 24/10: falla de Node.js de octubre 2026** (backend `45cee47`,
 >   frontend `3e69bd8`). Node publicó el 21/10 diez arreglos; el grave es
 >   CVE-2026-111497 ("Node2Shell": datos Brotli armados → ejecutar código, vía
