@@ -138,7 +138,7 @@ Inicio con la puesta en marcha paso a paso; el formulario único "Cargar
 ausencia"; la ventana de fichajes de una persona; la ayuda (?) en cada
 concepto; Presentismo en el celular; 157 archivos de test (1.180 casos).
 
-## 8. Roles (probado el 26/10, sin cambios)
+## 8. Roles (probado el 26/10) — S, P, R, O y Q HECHOS el 27/10, sin publicar: ver `ROLES_Y_AREAS.md`
 
 Prueba real en la base local, empresa 6: un usuario por rol (Administrador,
 Solo lectura, RRHH, Feriados) entra, recorre el menú y prueba las 27

@@ -1,8 +1,21 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-24 — ver "Revisión del 24/10" y "Dónde quedamos")
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-27 — ver "Roles y áreas" y "Revisión del 24/10")
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
+>
+> ### Roles y áreas (S, P, R, O, Q) — HECHO, SIN PUBLICAR (2026-10-27)
+>
+> - Todo en `ROLES_Y_AREAS.md`. Ramas `roles-completos` en backend y frontend.
+> - S nadie da lo que no tiene; P permiso "Horas extra y cierre de mes";
+>   R roles por puesto (Encargado de presentismo, Liquidación, Supervisor);
+>   O roles propios de cada empresa; Q áreas: un supervisor ve solo a su gente
+>   (lista blanca central en `alcance.js`).
+> - Migraciones nuevas **20261024_roles_completos** y **20261025_areas**
+>   (tolerantes; aplicadas en la base local, NO en producción).
+> - Suite 1198/1198 (también sin migraciones). Dos tutoriales nuevos.
+> - Falta: el sí del dueño para publicar, correr las 2 migraciones en
+>   producción y revisar quién de AVP tiene `users:update` sin ser Administrador.
 >
 > ### Revisión general del 2026-10-24
 >
@@ -476,6 +489,11 @@
 > | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
+>
+> - **27/10 — Roles y áreas hechos (sin publicar).** S, P, R, O y Q con
+>   tutoriales; ver `ROLES_Y_AREAS.md`. De paso: "Fichajes manuales" a medias
+>   sin permiso de Marcadores (corregido) y la limpieza de tests borraba la
+>   empresa demo (corregido).
 >
 > - **26/10 — Roles probados (sin cambios).** Los 4 roles de sistema andan:
 >   el menú coincide con lo que se puede abrir y no hay rechazos ni errores.
