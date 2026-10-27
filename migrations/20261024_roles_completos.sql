@@ -124,6 +124,17 @@ WHERE r.name = 'Supervisor de sector' AND r.is_system = 1;
 UPDATE roles SET ofrecido = 0
  WHERE is_system = 1 AND name IN ('RRHH - Ausencias y Licencias', 'Feriados');
 
+-- 7. Descripciones de los dos que siguen, con tildes y en el mismo tono
+--    (solo el texto; nombres y permisos no se tocan).
+UPDATE roles SET description = 'Todo dentro de su empresa: configuración, usuarios y roles, horarios, presentismo y horas extra.'
+ WHERE is_system = 1 AND name = 'Administrador de Empresa';
+UPDATE roles SET description = 'Ve y exporta los informes de todos los módulos, sin poder crear, editar ni borrar nada.'
+ WHERE is_system = 1 AND name = 'Solo Lectura / Reportes';
+UPDATE roles SET description = 'Rol anterior: gestiona justificaciones, licencias y motivos de ausencia; ve empleados y asistencia sin modificarlos.'
+ WHERE is_system = 1 AND name = 'RRHH - Ausencias y Licencias';
+UPDATE roles SET description = 'Rol anterior: gestiona el calendario de feriados; ve el resto sin modificarlo.'
+ WHERE is_system = 1 AND name = 'Feriados';
+
 -- Control.
 SELECT r.name, r.tenant_id, r.ofrecido, COUNT(rp.permission) AS permisos
   FROM roles r LEFT JOIN role_permissions rp ON rp.role_id = r.id
