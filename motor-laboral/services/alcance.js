@@ -93,7 +93,19 @@ const REGLAS = [
   { m: GET, r: /^\/api\/puesta-en-marcha$/, libre: true },
   { m: GET, r: /^\/api\/(ciudades|sucursales|employee-categories|holidays|areas|sync-status)$/, libre: true },
   { m: GET, r: /^\/api\/event-types$/, libre: true },
+  { m: GET, r: /^\/api\/event-types\/\d+\/cupos$/, libre: true },
+  // Estado de los cupos por persona (employeeId = legajo).
+  { m: GET, r: /^\/api\/event-types\/cupos\/estado$/, filtrar: (b, v) => ({ ...b, filas: porLegajo(b.filas, v) }) },
+  // Cuánto usó una persona de un motivo: employeeId = id interno (licencias) o userId = número de reloj (justificaciones).
+  { m: GET, r: /^\/api\/event-types\/\d+\/consumo$/,
+    persona: async (req, v) => [req.query.employeeId != null ? v.ids.has(Number(req.query.employeeId)) : v.userIds.has(Number(req.query.userId))] },
   { m: GET, r: /^\/api\/leave-balances\/vacation-scale$/, libre: true },
+  { m: GET, r: /^\/api\/employee-events\/preview-dias$/, libre: true }, // cuenta días de un rango, sin personas
+  { m: GET, r: /^\/api\/labor-engine\/admin\/templates\/\d+\/(blocks|ciclo)$/, libre: true },
+  { m: GET, r: /^\/config\/schedule\/[\d-]+$/, libre: true },
+  // "Ver el reloj" muestra lo que pasó en el aparato alrededor de un fichaje,
+  // con OTRAS personas: para un limitado, cerrado (la pantalla no lo ofrece).
+  { m: GET, r: /^\/api\/ver-reloj$/, cerrada: true },
   { m: GET, r: /^\/api\/labor-engine\/admin\/(templates|templates\/uso|turnos|conventions|conventions\/\d+\/regimes|day-type-rules)$/, libre: true },
   { m: GET, r: /^\/api\/billing\//, libre: true },
   { m: GET, r: /^\/api\/config-horas-extra$/, libre: true },
@@ -107,6 +119,7 @@ const REGLAS = [
 
   // --- listas con personas: se filtran ---
   { m: GET, r: /^\/api\/employees$/, libre: true }, // filtrada en su consulta (routes/employees.js)
+  { m: GET, r: /^\/api\/manual-checkins$/, libre: true }, // filtrada en su consulta (horasdedica.js)
   { m: GET, r: /^\/api\/employees\/stats$/, reemplazar: estadisticasDeEmpleados },
   { m: GET, r: /^\/api\/labor-engine\/attendance\/[\d-]+$/,
     filtrar: (b, v) => { const attendance = porLegajo(b.attendance, v); return { ...b, attendance, summary: resumenDelDia(attendance) }; } },
@@ -138,6 +151,8 @@ const REGLAS = [
   // --- sobre una persona ---
   { m: GET, r: /^\/api\/fichajes-persona$/, persona: async (req, v) => [v.legajos.has(String(req.query.legajo))] },
   { m: GET, r: /^\/api\/ausencias\/persona$/, persona: async (req, v) => [v.legajos.has(String(req.query.legajo))] },
+  { m: GET, r: /^\/api\/leave-balances\/(suggest\/)?\d+(\/\d{4})?$/,
+    persona: async (req, v) => [v.legajos.has(req.path.split('/').filter(Boolean)[req.path.includes('/suggest/') ? 3 : 2])] },
   { m: ['POST'], r: /^\/config\/user-exclusions(\/range)?$/, persona: async (req, v) => [v.userIds.has(Number(req.body?.userId))] },
   { m: ['PUT', 'DELETE'], r: /^\/config\/user-exclusions\/\d+$/,
     persona: async (req, v, db) => { const f = await duenoDe(db, 'SELECT userId FROM userexclusions WHERE id = ?', req.path.split('/').pop()); return [!f || v.userIds.has(Number(f.userId))]; } },

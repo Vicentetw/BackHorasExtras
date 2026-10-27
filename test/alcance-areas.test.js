@@ -73,7 +73,7 @@ const LECTURAS = [
   `/movements-range?from=${DIA}&to=${DIA}&category=PARTICULAR`, `/movements-range?from=${DIA}&to=${DIA}&category=OFICIAL&groupBy=month`,
   `/campana-range?from=${DIA}&to=${DIA}`, '/config/user-exclusions?limit=100', '/api/employee-events', `/api/leave-balances?year=2026`,
   `/api/liquidacion-horas-extra?periodo=${MES}`, `/api/horas-extra-revisar?from=${DIA}&to=${DIA}`,
-  '/api/labor-engine/admin/employees', '/api/config-horas-extra/autorizados',
+  '/api/labor-engine/admin/employees', '/api/config-horas-extra/autorizados', '/api/manual-checkins', '/api/event-types/cupos/estado',
 ];
 
 test('el supervisor limitado a Depósito no ve a nadie de Ventas en ninguna pantalla', async () => {

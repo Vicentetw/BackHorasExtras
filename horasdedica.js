@@ -704,7 +704,11 @@ app.delete('/delete/manual/:id', requireAnyPermission([['attendance', 'delete'],
 // que un admin de la empresa (permiso settings:update) lo habilite a
 // propósito, ademas del permiso attendance:create que ya hace falta para
 // usarlo -- doble candado, ver migración 20260920_checkins_manual_audit.
-app.get('/config/manual-checkins-enabled', requirePermission('settings', 'read'), async (req, res) => {
+// Leerlo (no cambiarlo) también lo puede quien carga fichajes: la pantalla
+// "Fichajes manuales" lo necesita para saber si está habilitado, y sin
+// "Marcadores: Ver" quedaba a medias (caso: rol Encargado de presentismo,
+// 2026-10-26). Guardarlo sigue pidiendo settings:update.
+app.get('/config/manual-checkins-enabled', requireAnyPermission([['settings', 'read'], ['attendance', 'create']]), async (req, res) => {
   try {
     const value = await getAppSetting('manualCheckinsEnabled', resolveTenantId(req), db);
     res.json({ manualCheckinsEnabled: value === 'true' });
@@ -840,6 +844,10 @@ app.get('/api/manual-checkins', requirePermission('attendance', 'read'), async (
       where += ' AND e.employee_id = ?';
       params.push(employeeId);
     }
+    // Usuario limitado a algunas áreas: solo los de su gente (alcance.js).
+    const porArea = condicionDeAreas(req, 'e.area_id');
+    where += porArea.sql;
+    params.push(...porArea.params);
 
     const [rows] = await db.query(
       `SELECT

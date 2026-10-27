@@ -39,6 +39,11 @@ const db = require('../db');
 
 // Todo id por debajo de esto es una empresa REAL y no se toca jamas.
 const PRIMER_ID_DE_PRUEBA = 999900;
+// La EMPRESA DEMO (scripts/crear-empresa-demo.js) tampoco se toca aunque su
+// id caiga arriba del límite: en la base local los ids nuevos ya pasan el
+// millón, y cada `npm test` la borraba (se perdían las capturas de los
+// tutoriales y la demo de venta). Visto el 2026-10-26.
+const NO_TOCAR = "code <> 'empresa-demo'";
 
 if (PRIMER_ID_DE_PRUEBA < 999000) {
   console.error('El limite de ids de prueba quedo peligrosamente bajo. Abortando.');
@@ -56,7 +61,7 @@ async function main() {
   const aplicar = process.argv.includes('--aplicar');
 
   const [tenants] = await db.query(
-    'SELECT id, name FROM tenants WHERE id >= ? ORDER BY id', [PRIMER_ID_DE_PRUEBA]);
+    `SELECT id, name FROM tenants WHERE id >= ? AND ${NO_TOCAR} ORDER BY id`, [PRIMER_ID_DE_PRUEBA]);
 
   if (tenants.length === 0) {
     if (aplicar) console.log('Base limpia: no hay empresas de prueba.');
@@ -160,7 +165,7 @@ async function main() {
 
   if (r.affectedRows < tenants.length) {
     const [quedan] = await db.query(
-      'SELECT id, name FROM tenants WHERE id >= ?', [PRIMER_ID_DE_PRUEBA]);
+      `SELECT id, name FROM tenants WHERE id >= ? AND ${NO_TOCAR}`, [PRIMER_ID_DE_PRUEBA]);
     console.error('\nQuedaron sin borrar:');
     quedan.forEach(t => console.error(`   ${t.id}  ${t.name}  <-- algo la sigue referenciando`));
     process.exitCode = 1;
