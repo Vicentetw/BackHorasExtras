@@ -766,5 +766,7 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
 module.exports = {
   calculateDailyAttendance,
   calculateLegacyAttendance,
-  desgloseDelDia
+  desgloseDelDia,
+  // Lo reusa alcance.js para recalcular el resumen con la gente de sus áreas.
+  buildSummary
 };

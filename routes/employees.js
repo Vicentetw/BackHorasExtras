@@ -3,6 +3,7 @@ const { guardarEmailDeEmpleado, verificarEmailDeEmpleado } = require('../motor-l
 const router = express.Router();
 const db = require('../db');
 const { resolveTenantId, requirePermission, requireAnyPermission, requireActiveSubscription } = require('../appUserMiddleware');
+const { limitado } = require('../motor-laboral/services/alcance');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
 
 // La ciudad y la sucursal de un empleado tienen que ser de SU empresa.
@@ -172,6 +173,11 @@ router.get('/', requireAnyPermission([['employees', 'read'], ['attendance', 'rea
       params.push(effectiveTenantId);
     }
 
+    // Usuario limitado a algunas áreas: solo su gente (alcance.js).
+    if (limitado(req)) {
+      whereClauses.push('area_id IN (?)');
+      params.push(req.appUser.areas);
+    }
     const where = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
     // Obtener total

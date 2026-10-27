@@ -245,6 +245,7 @@ app.use('/api/mi', reportesRateLimiter, require('./routes/miPortal')(db, { calcu
 // "Días a revisar" de horas extra (2026-10-16): mismo cálculo que Presentismo.
 app.use('/api/segundo-factor', require('./routes/segundoFactor')(db));
 app.use('/api/ausencias', require('./routes/ausencias')(db));
+app.use('/api/areas', require('./routes/areas')(db));
 app.use('/api/config-horas-extra', reportesRateLimiter, require('./routes/configHorasExtra')(db, { calcularAsistencia }));
 app.use('/api/horas-extra-revisar', reportesRateLimiter, require('./routes/horasExtraRevisar')(db, { calcularAsistencia, calcularFichajesDelDia: (tenantId, fecha) => calcularFichajesDelDia(tenantId, fecha) }));
 app.use('/api/portal-empleados', require('./routes/portalAdmin')(db));
@@ -439,6 +440,7 @@ app.get('/config/manual-entries', requirePermission('attendance', 'read'), async
 });
 
 const { puedeHorasExtra } = require('./motor-laboral/services/permisos');
+const { condicionDeAreas } = require('./motor-laboral/services/alcance');
 // Cargas a mano (ManualEntries): qué permiso pide cada tipo (2026-10-26,
 // punto P). Horas extra ('he') y "omitir horas extra de un día" ('omit')
 // deciden qué se paga: piden "Horas extra: Editar". Las horas de licencia
@@ -1914,6 +1916,12 @@ app.get('/config/user-exclusions', requirePermission('exclusions', 'read'), asyn
     if (effectiveTenantId !== null) {
       where += (where ? ' AND' : 'WHERE') + ' ue.tenant_id = ?';
       params.push(effectiveTenantId);
+    }
+    // Usuario limitado a algunas áreas: solo las de su gente (alcance.js).
+    const porArea = condicionDeAreas(req, 'e.area_id');
+    if (porArea.sql) {
+      where += (where ? '' : 'WHERE 1=1') + porArea.sql;
+      params.push(...porArea.params);
     }
 
     // Obtener total

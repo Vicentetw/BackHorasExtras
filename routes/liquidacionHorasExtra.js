@@ -421,6 +421,7 @@ module.exports = function (db, { calcularAsistencia }) {
 };
 
 module.exports.filaDeLiquidacion = filaDeLiquidacion;
+module.exports.totales = totales; // lo reusa alcance.js
 module.exports.mesAnterior = mesAnterior;
 module.exports.mesesAntes = mesesAntes;
 module.exports.ultimoDia = ultimoDia;

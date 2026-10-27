@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { firebaseAuthMiddleware } = require('./firebaseAuth');
 const { appUserMiddleware } = require('./appUserMiddleware');
+const { alcanceMiddleware } = require('./motor-laboral/services/alcance');
 const { middlewareRegistroActividad } = require('./registroActividad');
 const { origenPermitido } = require('./origenesPermitidos');
 
@@ -156,6 +157,10 @@ function securityMiddlewares(app, cors, { publicPaths = [] } = {}) {
   // user_permissions (paso 2 del plan multi-tenant), resuelto aca y colgado
   // en req.appUser para que cada ruta filtre por tenant y chequee permisos.
   app.use((req, res, next) => (isPublicPath(req, publicPaths) ? next() : appUserMiddleware(req, res, next)));
+  // Usuarios limitados a algunas áreas (2026-10-26): ven y tocan solo a su
+  // gente. A un usuario sin áreas no le hace nada. Ver alcance.js.
+  const porAreas = alcanceMiddleware(require('./db'));
+  app.use((req, res, next) => (isPublicPath(req, publicPaths) ? next() : porAreas(req, res, next)));
   // Registro de actividad (2026-10-09): cada cambio (POST/PUT/PATCH/DELETE)
   // de un usuario identificado queda guardado con su autor, su empresa y si
   // lo hizo el superadmin como soporte. Ver registroActividad.js.

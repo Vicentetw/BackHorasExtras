@@ -8,7 +8,7 @@ const { initFirebaseAdmin } = require('../firebaseAuth');
 const { resolveTenantId, requireSuperadmin, requirePermission } = require('../appUserMiddleware');
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const { modulosDe } = require('../motor-laboral/services/modulos');
-const { controlarUltimoAdministrador } = require('../motor-laboral/services/administradoresDeEmpresa');
+const { controlarUltimoAdministrador, puedeAdministrar } = require('../motor-laboral/services/administradoresDeEmpresa');
 const permisos = require('../motor-laboral/services/permisos');
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
 const { resolveEffectiveStatus, DEFAULT_GRACE_DAYS } = require('../motor-laboral/services/billingCalculations');
@@ -48,6 +48,37 @@ module.exports = function (db) {
       return { status: 403, error: `No podés dar permisos que vos no tenés: ${permisos.enPalabras(falta)}. Pedíselo a un administrador.` };
     }
     return null;
+  }
+
+  // Áreas que ve una cuenta (2026-10-26, punto Q; ver alcance.js). Lista
+  // vacía = toda la empresa. Sin la migración 20261025 no se pueden elegir.
+  async function areasDe(userId) {
+    try {
+      const [f] = await db.query('SELECT area_id FROM app_user_areas WHERE user_id = ? ORDER BY area_id', [userId]);
+      return f.map((x) => Number(x.area_id));
+    } catch (err) {
+      if (err.code === 'ER_NO_SUCH_TABLE') return [];
+      throw err;
+    }
+  }
+  // Valida y guarda. Devuelve { status, error } o null.
+  async function guardarAreas(userId, tenantId, areas) {
+    const ids = [...new Set((areas || []).map(Number))];
+    if (ids.some((x) => !Number.isInteger(x))) return { status: 400, error: 'Áreas inválidas.' };
+    try {
+      if (ids.length) {
+        const [ok] = await db.query('SELECT id FROM areas WHERE tenant_id = ? AND id IN (?)', [tenantId, ids]);
+        if (ok.length !== ids.length) return { status: 400, error: 'Alguna de esas áreas no es de la empresa.' };
+      }
+      await db.query('DELETE FROM app_user_areas WHERE user_id = ?', [userId]);
+      if (ids.length) await db.query('INSERT INTO app_user_areas (user_id, area_id) VALUES ?', [ids.map((a) => [userId, a])]);
+      return null;
+    } catch (err) {
+      if (err.code === 'ER_NO_SUCH_TABLE') {
+        return ids.length ? { status: 409, error: 'Todavía no se puede limitar por áreas: falta una actualización del sistema.' } : null;
+      }
+      throw err;
+    }
   }
 
   async function controlarQuePuedeManejar(req, userId) {
@@ -117,6 +148,10 @@ module.exports = function (db) {
       // soporte" y sigue mostrando el menú de plataforma (Empresas, etc.).
       soporte: req.appUser.soporte ? { empresaId: req.appUser.soporte.empresaId, empresaNombre: req.appUser.soporte.empresaNombre } : null,
       superadminReal: req.appUser.isSuperadmin || !!req.appUser.soporte,
+      // Usuario limitado a algunas áreas (2026-10-26): cuáles. null = toda la empresa.
+      areas: req.appUser.areas && req.appUser.areas.length
+        ? (await db.query('SELECT id, nombre FROM areas WHERE id IN (?) ORDER BY nombre', [req.appUser.areas]))[0]
+        : null,
     });
   });
 
@@ -147,7 +182,7 @@ module.exports = function (db) {
       const rows = await appUserRepository.listByTenant(effectiveTenantId, db);
       const withPermissions = await Promise.all(rows.map(async (u) => {
         const [permRows] = await db.query('SELECT permission FROM user_permissions WHERE user_id = ?', [u.id]);
-        return { ...u, permissions: permRows.map((p) => p.permission) };
+        return { ...u, permissions: permRows.map((p) => p.permission), areas: await areasDe(u.id) };
       }));
       res.json({ users: withPermissions });
     } catch (err) {
@@ -183,6 +218,10 @@ module.exports = function (db) {
 
       const noOtorga = await controlarQueOtorga(req, { roleId, extras: Array.isArray(permissions) ? permissions : [], tenantId });
       if (noOtorga) return res.status(noOtorga.status).json({ error: noOtorga.error });
+      if (Array.isArray(req.body.areas) && req.body.areas.length && !isSuperadminRequested
+          && await puedeAdministrar(db, { roleId, permisos: Array.isArray(permissions) ? permissions : [] })) {
+        return res.status(400).json({ error: 'Quien administra usuarios ve toda la empresa: no se lo puede limitar a áreas.' });
+      }
 
       let created;
       try {
@@ -195,6 +234,11 @@ module.exports = function (db) {
           return res.status(409).json({ error: err.message });
         }
         throw err;
+      }
+
+      if (Array.isArray(req.body.areas) && req.body.areas.length && !isSuperadminRequested) {
+        const mal = await guardarAreas(created.id, tenantId, req.body.areas);
+        if (mal) return res.status(mal.status).json({ error: `La cuenta se creó, pero sin limitarla a áreas: ${mal.error}`, id: created.id, resetLink: created.resetLink });
       }
 
       res.json({ ok: true, id: created.id, resetLink: created.resetLink });
@@ -210,7 +254,7 @@ module.exports = function (db) {
   router.put('/:id', requirePermission('users', 'update'), async (req, res) => {
     try {
       const { id } = req.params;
-      const { permissions, isActive, tenant_id: bodyTenantId, isSuperadmin, roleId } = req.body;
+      const { permissions, isActive, tenant_id: bodyTenantId, isSuperadmin, roleId, areas } = req.body;
 
       const [[user]] = await db.query('SELECT id, tenant_id FROM app_users WHERE id = ?', [id]);
       if (!user) {
@@ -249,7 +293,26 @@ module.exports = function (db) {
         return res.status(400).json({ error: 'No podés cambiar tu propio rol ni tus permisos, ni desactivar tu propia cuenta. Pedíselo a otro administrador.' });
       }
       const cambiaActiva = isActive !== undefined && !!isActive !== !!Number(actual.is_active);
-      if (cambiaRol || cambiaPermisos || cambiaActiva) {
+      const areasAntes = await areasDe(id);
+      const cambiaAreas = Array.isArray(areas)
+        && JSON.stringify([...new Set(areas.map(Number))].sort((a, b) => a - b)) !== JSON.stringify(areasAntes);
+      if (cambiaAreas && esCuentaDeEmpleado) {
+        return res.status(400).json({ error: 'Una cuenta del portal del empleado no se limita por áreas: ya ve solo lo suyo.' });
+      }
+      // Sacarse el límite de áreas a uno mismo sería verse más gente.
+      if (cambiaAreas && req.appUser && Number(req.appUser.id) === Number(id)) {
+        return res.status(400).json({ error: 'No podés cambiar tus propias áreas. Pedíselo a otro administrador.' });
+      }
+      // Quien administra usuarios ve toda la empresa: limitado a áreas no
+      // podría entrar a Usuarios y la empresa podría quedarse sin nadie que
+      // administre (alcance.js cierra esa pantalla a los limitados).
+      if (Array.isArray(areas) && areas.length && await puedeAdministrar(db, {
+        roleId: roleId !== undefined ? roleId : actual.role_id,
+        permisos: Array.isArray(permissions) ? permissions : [...permisosActuales],
+      })) {
+        return res.status(400).json({ error: 'Quien administra usuarios ve toda la empresa: no se lo puede limitar a áreas. Sacale "Usuarios y roles: Editar" o dejalo sin áreas.' });
+      }
+      if (cambiaRol || cambiaPermisos || cambiaActiva || cambiaAreas) {
         const masPoderosa = await controlarQuePuedeManejar(req, id);
         if (masPoderosa) return res.status(403).json({ error: masPoderosa });
         const noOtorga = await controlarQueOtorga(req, {
@@ -268,6 +331,10 @@ module.exports = function (db) {
         if (aviso) return res.status(409).json({ error: aviso });
       }
 
+      if (cambiaAreas) {
+        const mal = await guardarAreas(id, actual.tenant_id, areas);
+        if (mal) return res.status(mal.status).json({ error: mal.error });
+      }
       if (Array.isArray(permissions)) {
         await appUserRepository.setPermissions(id, permissions, db);
       }
