@@ -32,7 +32,7 @@ const fichar = (userId, hora) => db.query('INSERT INTO Checkins (USERID, tenant_
 
 before(async () => {
   await db.query('INSERT INTO tenants (id, name, code) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name)', [T, 'Revisar HE (test)', 'revisar-he-test']);
-  h = await getTestAuthHeaders(UID, { isSuperadmin: false, tenantId: T, permissions: ['attendance:read', 'attendance:create', 'attendance:delete'] });
+  h = await getTestAuthHeaders(UID, { isSuperadmin: false, tenantId: T, permissions: ['attendance:read', 'attendance:create', 'attendance:delete', 'horas_extra:update'] });
   await cleanup();
   // Lunes 7 a 14, horas extra desde las 15:00.
   const [t] = await db.query(`INSERT INTO work_schedule_templates (tenant_id, name, type, active, is_default, overtime_cutoff_time) VALUES (?, 'HE desde 15 (test)', 'FIXED', 1, 1, '15:00:00')`, [T]);

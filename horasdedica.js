@@ -438,8 +438,30 @@ app.get('/config/manual-entries', requirePermission('attendance', 'read'), async
   }
 });
 
+const { puedeHorasExtra } = require('./motor-laboral/services/permisos');
+// Cargas a mano (ManualEntries): qué permiso pide cada tipo (2026-10-26,
+// punto P). Horas extra ('he') y "omitir horas extra de un día" ('omit')
+// deciden qué se paga: piden "Horas extra: Editar". Las horas de licencia
+// siguen con Presentismo (Crear, Editar o Eliminar, según la acción). Así el
+// encargado de presentismo carga fichajes y licencias sin decidir horas extra.
+function permisoDeCargaManual(type, accion) {
+  return type === 'he' || type === 'omit' ? 'horas_extra:update' : `attendance:${accion}`;
+}
+async function faltaPermisoDeCarga(req, tipos, accion) {
+  if (!req.appUser || req.appUser.isSuperadmin) return null;
+  for (const p of new Set(tipos.map((t) => permisoDeCargaManual(t, accion)))) {
+    if (p === 'horas_extra:update') {
+      // Sin la migración 20261024, la regla de antes (ver permisos.js).
+      if (!(await puedeHorasExtra(db, req.appUser, accion))) return 'Para cargar u omitir horas extra hace falta el permiso "Horas extra y cierre de mes: Editar".';
+    } else if (!req.appUser.permissions.has(p)) {
+      return 'Para cargar horas de licencia hace falta el permiso de Presentismo y fichajes.';
+    }
+  }
+  return null;
+}
+
 // Endpoint para agregar horas extras manuales o licencias
-app.post('/add/manual', requirePermission('attendance', 'create'), async (req, res) => {
+app.post('/add/manual', requireAnyPermission([['attendance', 'create'], ['horas_extra', 'update']]), async (req, res) => {
   try {
     const {
       userId,
@@ -478,6 +500,9 @@ app.post('/add/manual', requirePermission('attendance', 'create'), async (req, r
         error: 'endDatetime debe ser mayor que startDatetime'
       });
     }
+
+    const sinPermiso = await faltaPermisoDeCarga(req, [type], 'create');
+    if (sinPermiso) return res.status(403).json({ error: sinPermiso });
 
     // Aislamiento entre empresas: hasta la migracion 20260927 este endpoint
     // no validaba nada -- un administrador de la empresa A podia cargarle
@@ -550,7 +575,7 @@ app.post('/add/manual', requirePermission('attendance', 'create'), async (req, r
 ================================ */
 // No existia antes (solo alta/baja) -- lo pide Fase 6: "es necesario poder
 // editar" una entrada manual, no solo borrarla y volver a cargarla.
-app.put('/update/manual/:id', requirePermission('attendance', 'update'), async (req, res) => {
+app.put('/update/manual/:id', requireAnyPermission([['attendance', 'update'], ['horas_extra', 'update']]), async (req, res) => {
   const { id } = req.params;
   if (!id || isNaN(id)) {
     return res.status(400).json({ error: 'ID inválido' });
@@ -586,6 +611,10 @@ app.put('/update/manual/:id', requirePermission('attendance', 'update'), async (
     if (!previous) {
       return res.status(404).json({ error: 'Registro manual no encontrado' });
     }
+    // El tipo de antes y el nuevo: cambiar una licencia a horas extra
+    // también es decidir horas extra.
+    const sinPermiso = await faltaPermisoDeCarga(req, [previous.type, type], 'update');
+    if (sinPermiso) return res.status(403).json({ error: sinPermiso });
     const performedBy = auditLog.actorId(req);
 
     // Misma regla que en el alta: editar una carga para moverla ENCIMA de un
@@ -625,7 +654,7 @@ app.put('/update/manual/:id', requirePermission('attendance', 'update'), async (
 /* ===============================
    DELETE MANUAL ENTRY, ONLY MANUAL
 ================================ */
-app.delete('/delete/manual/:id', requirePermission('attendance', 'delete'), async (req, res) => {
+app.delete('/delete/manual/:id', requireAnyPermission([['attendance', 'delete'], ['horas_extra', 'update']]), async (req, res) => {
   const { id } = req.params;
 
   if (!id || isNaN(id)) {
@@ -641,6 +670,8 @@ app.delete('/delete/manual/:id', requirePermission('attendance', 'delete'), asyn
     if (!previous) {
       return res.status(404).json({ error: 'Registro manual no encontrado' });
     }
+    const sinPermiso = await faltaPermisoDeCarga(req, [previous.type], 'delete');
+    if (sinPermiso) return res.status(403).json({ error: sinPermiso });
     const performedBy = auditLog.actorId(req);
 
     await auditLog.inTransaction(db, async (conn) => {

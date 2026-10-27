@@ -9,6 +9,7 @@ const { resolveTenantId, requireSuperadmin, requirePermission } = require('../ap
 const appUserRepository = require('../motor-laboral/repositories/appUserRepository');
 const { modulosDe } = require('../motor-laboral/services/modulos');
 const { controlarUltimoAdministrador } = require('../motor-laboral/services/administradoresDeEmpresa');
+const permisos = require('../motor-laboral/services/permisos');
 const billingRepository = require('../motor-laboral/repositories/billingRepository');
 const { resolveEffectiveStatus, DEFAULT_GRACE_DAYS } = require('../motor-laboral/services/billingCalculations');
 
@@ -19,6 +20,42 @@ const { resolveEffectiveStatus, DEFAULT_GRACE_DAYS } = require('../motor-laboral
 
 module.exports = function (db) {
   const router = express.Router();
+
+  // "Nadie da lo que no tiene" (2026-10-26, punto S). Antes, alguien con
+  // permiso de crear usuarios podía crear OTRA cuenta (por ejemplo con un
+  // segundo mail suyo) con más permisos que los propios, incluido el rol de
+  // administrador. Ahora:
+  //   - el rol y los permisos sueltos que se dan tienen que estar entre los
+  //     de quien los da;
+  //   - una cuenta con permisos que uno no tiene (más "poderosa") no se puede
+  //     editar, desactivar ni borrar: la maneja alguien que los tenga.
+  // El superadmin queda afuera (administra la plataforma); en modo soporte
+  // tiene todos los de la empresa, así que tampoco lo frena.
+  // Devuelve el mensaje de error o null.
+  async function controlarQueOtorga(req, { roleId, roleIdAnterior, extras, extrasAnteriores, tenantId }) {
+    const nuevos = (extras || []).filter((p) => !(extrasAnteriores || []).includes(p));
+    const raros = permisos.desconocidos(nuevos);
+    if (raros.length) return { status: 400, error: `Permisos que no existen: ${raros.join(', ')}` };
+    let delRol = [];
+    if (roleId != null && Number(roleId) !== Number(roleIdAnterior ?? NaN)) {
+      const rol = await permisos.rolUsable(db, roleId, tenantId);
+      if (!rol) return { status: 400, error: 'Ese rol no existe o es de otra empresa.' };
+      if (!Number(rol.ofrecido)) return { status: 400, error: `El rol "${rol.name}" ya no se ofrece. Elegí uno de la lista.` };
+      delRol = await permisos.permisosDeRol(db, roleId);
+    }
+    const falta = permisos.queNoTiene(req.appUser, [...nuevos, ...delRol]);
+    if (falta.length) {
+      return { status: 403, error: `No podés dar permisos que vos no tenés: ${permisos.enPalabras(falta)}. Pedíselo a un administrador.` };
+    }
+    return null;
+  }
+
+  async function controlarQuePuedeManejar(req, userId) {
+    if (!req.appUser || req.appUser.isSuperadmin) return null;
+    const falta = permisos.queNoTiene(req.appUser, [...(await permisos.permisosDeCuenta(db, userId))]);
+    if (!falta.length) return null;
+    return 'Esta cuenta tiene permisos que vos no tenés, así que solo la puede cambiar un administrador.';
+  }
 
   // ==========================
   // 0. QUIEN SOY (para que el front sepa si mostrar controles de superadmin)
@@ -67,7 +104,8 @@ module.exports = function (db) {
       tenantId: req.appUser.tenantId,
       roleId: req.appUser.roleId,
       isSuperadmin: req.appUser.isSuperadmin,
-      permissions: Array.from(req.appUser.permissions),
+      // (+ "Horas extra: Editar" deducido si falta la migración 20261024, ver permisos.js)
+      permissions: await permisos.paraLaPantalla(db, req.appUser.permissions),
       // Portal del empleado: el frontend muestra SOLO "Mi asistencia".
       employeeId: req.appUser.employeeId ?? null,
       // Modulos que el superadmin le habilito a la empresa (ver modulos.js).
@@ -143,6 +181,9 @@ module.exports = function (db) {
         return res.status(400).json({ error: 'tenantId es requerido (salvo que sea superadmin)' });
       }
 
+      const noOtorga = await controlarQueOtorga(req, { roleId, extras: Array.isArray(permissions) ? permissions : [], tenantId });
+      if (noOtorga) return res.status(noOtorga.status).json({ error: noOtorga.error });
+
       let created;
       try {
         created = await appUserRepository.createInvitedUser(
@@ -206,6 +247,17 @@ module.exports = function (db) {
       const cambiaSuper = isSuperadmin !== undefined && !!isSuperadmin !== !!Number(actual.is_superadmin);
       if (req.appUser && Number(req.appUser.id) === Number(id) && (cambiaRol || cambiaPermisos || seDesactiva || cambiaSuper)) {
         return res.status(400).json({ error: 'No podés cambiar tu propio rol ni tus permisos, ni desactivar tu propia cuenta. Pedíselo a otro administrador.' });
+      }
+      const cambiaActiva = isActive !== undefined && !!isActive !== !!Number(actual.is_active);
+      if (cambiaRol || cambiaPermisos || cambiaActiva) {
+        const masPoderosa = await controlarQuePuedeManejar(req, id);
+        if (masPoderosa) return res.status(403).json({ error: masPoderosa });
+        const noOtorga = await controlarQueOtorga(req, {
+          roleId: cambiaRol ? roleId : null, roleIdAnterior: actual.role_id,
+          extras: cambiaPermisos ? permissions : [], extrasAnteriores: [...permisosActuales],
+          tenantId: actual.tenant_id,
+        });
+        if (noOtorga) return res.status(noOtorga.status).json({ error: noOtorga.error });
       }
       if (!(req.appUser && req.appUser.isSuperadmin) && (cambiaRol || cambiaPermisos || seDesactiva)) {
         const aviso = await controlarUltimoAdministrador(db, actual, {
@@ -351,6 +403,8 @@ module.exports = function (db) {
       if (req.appUser && Number(req.appUser.id) === Number(user.id)) {
         return res.status(400).json({ error: permanente ? 'No podés eliminar tu propia cuenta' : 'No podés desactivar tu propia cuenta. Pedíselo a otro administrador.' });
       }
+      const masPoderosa = await controlarQuePuedeManejar(req, id);
+      if (masPoderosa) return res.status(403).json({ error: masPoderosa });
       // Ni dejar a la empresa sin administrador (salvo el superadmin: soporte).
       if (!(req.appUser && req.appUser.isSuperadmin)) {
         const [[cuenta]] = await db.query('SELECT id, tenant_id, role_id FROM app_users WHERE id = ?', [id]);

@@ -31,7 +31,7 @@
 // y de los MISMOS tipos de fichaje que muestra Presentismo
 // (calcularFichajesDelDia): no hay una segunda fórmula.
 const express = require('express');
-const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const { requirePermission, resolveTenantId, requireHorasExtra } = require('../appUserMiddleware');
 
 const UMBRAL_MINUTOS_ESTIMADAS = 30;
 const MAX_DIAS = 62;
@@ -154,7 +154,8 @@ module.exports = function (db, { calcularAsistencia, calcularFichajesDelDia }) {
 
   // "Está bien": deja constancia de que alguien revisó el día y las horas
   // extra estimadas son correctas. No cambia ningún número.
-  router.post('/aceptar', requirePermission('attendance', 'create'), async (req, res) => {
+  // "Horas extra: Editar" (2026-10-26; antes, permisos de Presentismo). Ver permisos.js.
+  router.post('/aceptar', requireHorasExtra('create'), async (req, res) => {
     const tenantId = resolveTenantId(req);
     if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
     const { legajo, fecha, minutos, nota } = req.body || {};
@@ -180,7 +181,8 @@ module.exports = function (db, { calcularAsistencia, calcularFichajesDelDia }) {
   });
 
   // Deshacer un "Está bien" (el día vuelve a la lista de pendientes).
-  router.delete('/aceptar', requirePermission('attendance', 'delete'), async (req, res) => {
+  // "Horas extra: Editar" (2026-10-26; antes, permisos de Presentismo). Ver permisos.js.
+  router.delete('/aceptar', requireHorasExtra('delete'), async (req, res) => {
     const tenantId = resolveTenantId(req);
     if (tenantId == null) return res.status(400).json({ error: 'Elegí una empresa' });
     const { legajo, fecha } = req.query;

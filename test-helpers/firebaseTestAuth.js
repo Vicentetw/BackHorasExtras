@@ -28,8 +28,8 @@ function initAdmin() {
 // aislamiento por TENANT (no de permisos) no se vean afectados por el
 // gating de permisos de cada ruta. Pasar { permissions: [...] } explicito
 // para probar puntualmente el efecto de un permiso faltante.
-const ALL_PERMISSIONS = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'settings', 'users']
-  .flatMap((m) => ['read', 'create', 'update', 'delete'].map((a) => `${m}:${a}`));
+// Todos los del catálogo (incluye 'salidas' y 'horas_extra', 2026-10-26).
+const { PERMISOS_DE_EMPRESA: ALL_PERMISSIONS } = require('../motor-laboral/services/permisos');
 
 // Por default el usuario de prueba es superadmin (ve todos los tenants),
 // asi los tests existentes (que comparan contra el total de la empresa,

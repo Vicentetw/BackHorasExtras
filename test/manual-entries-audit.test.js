@@ -63,7 +63,7 @@ before(async () => {
   headersA = await getTestAuthHeaders(UID_A, {
     isSuperadmin: false,
     tenantId: TENANT_A,
-    permissions: ['attendance:read', 'attendance:create', 'attendance:update', 'attendance:delete',
+    permissions: ['attendance:read', 'attendance:create', 'attendance:update', 'attendance:delete', 'horas_extra:update',
                   'exclusions:read', 'exclusions:create', 'exclusions:update', 'exclusions:delete']
   });
   const [[appUserA]] = await db.query('SELECT id FROM app_users WHERE firebase_uid = ?', [UID_A]);

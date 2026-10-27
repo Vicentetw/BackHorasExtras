@@ -2,6 +2,7 @@
 const { initializeApp, getApps, cert } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const { initFirebaseAdmin } = require('../../firebaseAuth');
+const { sumarDeducidos } = require('../services/permisos');
 
 // Secuencia compartida "crear usuario de Firebase (o reusar si ya existe) +
 // fila en app_users + generar reset link" -- antes vivia solo dentro de
@@ -94,6 +95,8 @@ async function findByFirebaseUid(firebaseUid, db) {
     );
     rolePermRows.forEach(r => permissions.add(r.permission));
   }
+  // Los que se deducen de otros (ver permisos.js).
+  sumarDeducidos(permissions);
 
   // Cuenta de EMPLEADO: no hereda ningun permiso ni superadmin, aunque la
   // fila los tuviera por error. Lo que puede hacer lo decide la lista blanca

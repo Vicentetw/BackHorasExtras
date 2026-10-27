@@ -80,7 +80,7 @@ before(async () => {
     await db.query(`INSERT INTO tenants (id, name, code) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name)`, [id, n, `liquidacion-${id}-test`]);
   }
   h = await getTestAuthHeaders(UID);
-  hOtra = await getTestAuthHeaders(UID_OTRA, { isSuperadmin: false, tenantId: OTRA, permissions: ['attendance:read', 'attendance:update'] });
+  hOtra = await getTestAuthHeaders(UID_OTRA, { isSuperadmin: false, tenantId: OTRA, permissions: ['attendance:read', 'attendance:update', 'horas_extra:update'] });
   await cleanup();
 
   const [tpl] = await db.query(`INSERT INTO work_schedule_templates (tenant_id, name, type, active, is_default, rules_engine_mode) VALUES (?, 'Lunes a viernes 7-14 (test)', 'FIXED', 1, 0, 'legacy')`, [T]);

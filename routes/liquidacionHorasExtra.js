@@ -25,7 +25,7 @@
 // marzo con febrero abierto, o reabrir febrero con marzo cerrado, la foto de
 // marzo quedaria calculada con un acumulado que ya no es el real.
 const express = require('express');
-const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const { requirePermission, resolveTenantId, requireHorasExtra } = require('../appUserMiddleware');
 const { hoyDeEmpresa } = require('../motor-laboral/services/hoyEmpresa');
 
 const PERIODO = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -295,7 +295,8 @@ module.exports = function (db, { calcularAsistencia }) {
     }
   });
 
-  router.post('/cierres', requirePermission('attendance', 'update'), async (req, res) => {
+  // "Horas extra: Editar" (2026-10-26; antes, permisos de Presentismo). Ver permisos.js.
+  router.post('/cierres', requireHorasExtra('update'), async (req, res) => {
     const tenantId = tenantONada(req, res); if (tenantId == null) return;
     const periodo = String((req.body || {}).periodo || '');
     if (!PERIODO.test(periodo)) return res.status(400).json({ error: 'periodo (AAAA-MM) es requerido' });
@@ -376,7 +377,8 @@ module.exports = function (db, { calcularAsistencia }) {
     }
   });
 
-  router.post('/cierres/reabrir', requirePermission('attendance', 'update'), async (req, res) => {
+  // "Horas extra: Editar" (2026-10-26; antes, permisos de Presentismo). Ver permisos.js.
+  router.post('/cierres/reabrir', requireHorasExtra('update'), async (req, res) => {
     const tenantId = tenantONada(req, res); if (tenantId == null) return;
     const b = req.body || {};
     const periodo = String(b.periodo || '');

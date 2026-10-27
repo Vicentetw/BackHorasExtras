@@ -54,14 +54,18 @@ test('A: no podés desactivarte, eliminarte ni cambiarte rol o permisos; guardar
 
 test('una cuenta que NO es administradora se desactiva y se le cambian permisos sin problema', async () => {
   assert.equal((await put(hAdmin, idOtra, { isActive: false })).status, 200);
-  assert.equal((await put(hAdmin, idOtra, { isActive: true, permissions: ['holidays:read'] })).status, 200);
+  // (Solo permisos que el administrador tiene: nadie da lo que no tiene, 2026-10-26.)
+  assert.equal((await put(hAdmin, idOtra, { isActive: true, permissions: ['users:read'] })).status, 200);
+  await db.query('DELETE FROM user_permissions WHERE user_id = ?', [idOtra]);
 });
 
 test('B: quien solo puede eliminar usuarios no puede desactivar ni eliminar al único administrador', async () => {
+  // Desde 2026-10-26 lo frena antes otra regla: el administrador tiene
+  // permisos que quien borra no tiene (una cuenta más poderosa no se toca).
   const r1 = await del(hSoloBorra, idAdmin);
-  assert.equal(r1.status, 409);
-  assert.match((await r1.json()).error, /último administrador/);
-  assert.equal((await del(hSoloBorra, idAdmin, true)).status, 409);
+  assert.equal(r1.status, 403);
+  assert.match((await r1.json()).error, /permisos que vos no tenés/);
+  assert.equal((await del(hSoloBorra, idAdmin, true)).status, 403);
   const [[u]] = await db.query('SELECT is_active FROM app_users WHERE id = ?', [idAdmin]);
   assert.equal(u.is_active, 1, 'sigue activo');
 });
@@ -69,7 +73,12 @@ test('B: quien solo puede eliminar usuarios no puede desactivar ni eliminar al �
 test('B: con un segundo administrador, el primero ya se puede desactivar (por otro)', async () => {
   // La otra cuenta pasa a ser administradora.
   assert.equal((await put(hAdmin, idOtra, { permissions: ['users:read', 'users:update'] })).status, 200);
+  // Quien desactiva tiene que tener al menos los permisos del que desactiva
+  // (2026-10-26): se le dan los de administrador para esta prueba.
+  const idSoloBorra = await idDe('test-adm-solo-borra');
+  await db.query('INSERT IGNORE INTO user_permissions (user_id, permission) VALUES ?', [ADMIN_PERMS.map((p) => [idSoloBorra, p])]);
   assert.equal((await del(hSoloBorra, idAdmin)).status, 200);
+  await db.query("DELETE FROM user_permissions WHERE user_id = ? AND permission IN ('users:create', 'users:update')", [idSoloBorra]);
   await db.query('UPDATE app_users SET is_active = 1 WHERE id = ?', [idAdmin]);
   await db.query('DELETE FROM user_permissions WHERE user_id = ?', [idOtra]);
 });

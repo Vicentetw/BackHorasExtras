@@ -12,7 +12,7 @@
 // cambia se reemplaza con una vigencia nueva, asi un mes cerrado se sigue
 // pudiendo recalcular con la regla que tenia.
 const express = require('express');
-const { requirePermission, resolveTenantId } = require('../appUserMiddleware');
+const { requirePermission, resolveTenantId, requireHorasExtra } = require('../appUserMiddleware');
 
 const POLITICAS = ['TAL_CUAL', 'AVISAR', 'NO_COMPUTAR', 'AUTORIZAR'];
 const FUENTES = ['MARCADORES', 'FICHAJES', 'MARCADORES_O_ESTIMADO'];
@@ -131,7 +131,8 @@ module.exports = function (db) {
     }
   });
 
-  router.post('/autorizaciones', requirePermission('attendance', 'update'), async (req, res) => {
+  // "Horas extra: Editar" (2026-10-26; antes, permisos de Presentismo). Ver permisos.js.
+  router.post('/autorizaciones', requireHorasExtra('update'), async (req, res) => {
     const tenantId = tenantONada(req, res); if (tenantId == null) return;
     try {
       const b = req.body || {};
@@ -179,7 +180,8 @@ module.exports = function (db) {
     }
   });
 
-  router.post('/aprobaciones', requirePermission('attendance', 'update'), async (req, res) => {
+  // "Horas extra: Editar" (2026-10-26; antes, permisos de Presentismo). Ver permisos.js.
+  router.post('/aprobaciones', requireHorasExtra('update'), async (req, res) => {
     const tenantId = tenantONada(req, res); if (tenantId == null) return;
     try {
       const b = req.body || {};

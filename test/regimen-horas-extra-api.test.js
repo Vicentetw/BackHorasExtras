@@ -9,7 +9,7 @@ const { getTestAuthHeaders, deleteTestUser, closeDb } = require('../test-helpers
 const BASE = `${process.env.TEST_BASE_URL || 'http://localhost:3000'}/api/regimen-horas-extra`;
 const T = 999998;
 const OTRA = 999999;
-const PERMISOS = ['schedules:read', 'schedules:update', 'attendance:read', 'attendance:update'];
+const PERMISOS = ['schedules:read', 'schedules:update', 'attendance:read', 'attendance:update', 'horas_extra:update'];
 let h, hOtra, emp, conv;
 
 const post = (ruta, body, headers = h) => fetch(`${BASE}${ruta}`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

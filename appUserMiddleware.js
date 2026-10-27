@@ -7,16 +7,15 @@ const { resolveEffectiveStatus, isWriteBlocked, isFullyBlocked, DEFAULT_GRACE_DA
 // Modulos y acciones disponibles (documentacion, no una lista cerrada en
 // codigo -- un permiso es simplemente el string "modulo:accion"):
 //   modulos: employees, attendance, schedules, leaves, exclusions,
-//            holidays, matching, settings, users
+//            holidays, matching, settings, users, salidas, horas_extra
 //   acciones: read, create, update, delete
 // ('users' ya se usaba de verdad en routes/appUsers.js -- faltaba en esta
 // lista, corregido al armar routes/roles.js).
 
 // Todos los permisos de una empresa (los que usa cada pantalla): los que tiene
-// el superadmin cuando trabaja en una empresa (modo soporte).
-// + 'salidas' (2026-10-15): "Salidas: modificar" = autorizar salidas particulares.
-const PERMISOS_DE_EMPRESA = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'settings', 'users', 'salidas']
-  .flatMap((m) => ['read', 'create', 'update', 'delete'].map((a) => `${m}:${a}`));
+// el superadmin cuando trabaja en una empresa (modo soporte). El catálogo
+// vive en permisos.js (+ 'salidas' 2026-10-15, + 'horas_extra' 2026-10-26).
+const { PERMISOS_DE_EMPRESA, puedeHorasExtra } = require('./motor-laboral/services/permisos');
 
 // Corre DESPUES de firebaseAuthMiddleware (necesita req.user ya resuelto).
 // Un login de Firebase valido NO alcanza por si solo: ademas hace falta un
@@ -199,6 +198,22 @@ function requirePermission(moduleName, action) {
 // features con permisos propios (ej. ciudades: las usan tanto Empleados
 // como Feriados, un rol con solo "holidays:*" tiene que poder gestionarlas
 // igual sin necesitar "employees:*"). Recibe pares [modulo, accion].
+// "Horas extra: Editar" (2026-10-26, punto P): ver permisos.puedeHorasExtra.
+// accionVieja = la de Presentismo que pedía la ruta antes, para que sin la
+// migración 20261024 todo siga exactamente igual.
+function requireHorasExtra(accionVieja) {
+  return async (req, res, next) => {
+    if (!req.appUser) return res.status(401).json({ error: 'Unauthorized' });
+    try {
+      if (await puedeHorasExtra(db, req.appUser, accionVieja)) return next();
+    } catch (err) {
+      console.error('requireHorasExtra error:', err);
+      return res.status(500).json({ error: 'Error resolviendo permisos del usuario' });
+    }
+    return res.status(403).json({ error: 'Falta el permiso "Horas extra y cierre de mes: Editar".' });
+  };
+}
+
 function requireAnyPermission(pairs) {
   const permissions = pairs.map(([moduleName, action]) => `${moduleName}:${action}`);
   return (req, res, next) => {
@@ -342,6 +357,7 @@ module.exports = {
   esRutaDeRegistro,
   requirePermission,
   requireAnyPermission,
+  requireHorasExtra,
   requireAppUser,
   requireSuperadmin,
   requireActiveSubscription,
