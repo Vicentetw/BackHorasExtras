@@ -4,18 +4,22 @@
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 >
-> ### Roles y áreas (S, P, R, O, Q) — HECHO, SIN PUBLICAR (2026-10-27)
+> ### Roles y áreas (S, P, R, O, Q) — PUBLICADO (2026-10-27)
 >
-> - Todo en `ROLES_Y_AREAS.md`. Ramas `roles-completos` en backend y frontend.
+> - Todo en `ROLES_Y_AREAS.md`. Backend `dd36370` y frontend `200925c` en `main`.
 > - S nadie da lo que no tiene; P permiso "Horas extra y cierre de mes";
 >   R roles por puesto (Encargado de presentismo, Liquidación, Supervisor);
 >   O roles propios de cada empresa; Q áreas: un supervisor ve solo a su gente
 >   (lista blanca central en `alcance.js`).
-> - Migraciones nuevas **20261024_roles_completos** y **20261025_areas**
->   (tolerantes; aplicadas en la base local, NO en producción).
+> - Migraciones **20261024_roles_completos** y **20261025_areas**: el dueño
+>   las corrió en producción el 27/10 con `run-sql.js` (confirmarlo en el
+>   próximo backup nocturno: tablas `areas`, `app_user_areas`, columna
+>   `roles.tenant_id`).
 > - Suite 1198/1198 (también sin migraciones). Dos tutoriales nuevos.
-> - Falta: el sí del dueño para publicar, correr las 2 migraciones en
->   producción y revisar quién de AVP tiene `users:update` sin ser Administrador.
+> - Cambios a lo publicado A–D aprobados por el dueño. Nadie de AVP tenía
+>   `users:update` sin ser Administrador (todos los usuarios los creó él).
+> - Los secretos `MYSQL_ADDON_*` **no** están cargados en GitHub: el workflow
+>   de migraciones no anda hasta cargarlos (o se usa `run-sql.js` en la PC).
 >
 > ### Revisión general del 2026-10-24
 >
@@ -490,7 +494,7 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
-> - **27/10 — Roles y áreas hechos (sin publicar).** S, P, R, O y Q con
+> - **27/10 — Roles y áreas publicados** (migraciones corridas por el dueño). S, P, R, O y Q con
 >   tutoriales; ver `ROLES_Y_AREAS.md`. De paso: "Fichajes manuales" a medias
 >   sin permiso de Marcadores (corregido) y la limpieza de tests borraba la
 >   empresa demo (corregido).
