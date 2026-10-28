@@ -1,8 +1,30 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-27 — ver "Roles y áreas" y "Revisión del 24/10")
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-28 — ver "Ayuda plegable", "Roles y áreas" y "Revisión del 24/10")
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
+>
+> ### Ayuda plegable y tutoriales en el celular (A–D) — HECHO, SIN PUBLICAR (2026-10-28)
+>
+> - Pedido del dueño: "los tutoriales ocupan mucho espacio, más en un celular".
+>   Ramas `ayuda-plegable` en backend y frontend.
+> - **A** las 12 cajas "Cómo funciona esta pantalla" son un componente
+>   (`shared/ayuda-pantalla`): se pliegan a un renglón y se recuerda por
+>   usuario y pantalla en el servidor (`app_user_preferencias`, GET/PUT
+>   `/api/app-users/me/preferencias`). En el celular, desde la 2.ª visita
+>   arranca plegada. **B** tutorial a pantalla completa en el celular, texto
+>   plegable, deslizar para pasar, botones de 48 px. **C** "Seguir en la
+>   pantalla": el tutorial queda como pastilla abajo con el paso en curso.
+>   **D** botón (?) arriba con todos los tutoriales y "Volver a mostrar las
+>   explicaciones". Todo tutorial se abre con `TutorialesService.abrir()` y
+>   se lista en `CATALOGO_TUTORIALES` (ver `scripts/tutoriales/LEEME.md`).
+> - Migración **20261026_preferencias_usuario** (tolerante: sin ella se
+>   recuerda solo en el navegador). Aplicada en local, falta en producción.
+> - Suite 1201/1201. QA en Chrome a 1366 y 390 px: 35/35 controles + los 5
+>   tutoriales del menú e Inicio, sin errores ni rechazos. Carga inicial de
+>   la app igual que antes (los tutoriales se descargan al abrirlos).
+> - Pendiente opcional: rehacer las capturas del tutorial de roles (el paso
+>   1 muestra la caja vieja, sin plegar).
 >
 > ### Roles y áreas (S, P, R, O, Q) — PUBLICADO (2026-10-27)
 >
@@ -493,6 +515,12 @@
 > | Marcadores con varios relojes (datos y diseño) | `ANALISIS_MARCADORES_MULTIRELOJ.md` |
 >
 > ### Bitácora (lo más nuevo arriba)
+>
+> - **28/10 — Ayuda plegable y tutoriales en el celular (sin publicar).**
+>   A–D aprobados ("sin romper nada"). Encontrado en la QA y corregido: en el
+>   celular la caja se plegaba sola mientras se leía, y "Volver a mostrar" no
+>   aparecía ahí. El `.env` local quedó sin la base (después de correr las
+>   migraciones de roles); el dueño lo repuso.
 >
 > - **27/10 — Roles y áreas publicados** (migraciones corridas por el dueño). S, P, R, O y Q con
 >   tutoriales; ver `ROLES_Y_AREAS.md`. De paso: "Fichajes manuales" a medias
