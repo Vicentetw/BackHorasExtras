@@ -156,6 +156,59 @@ module.exports = function (db) {
   });
 
   // ==========================
+  // 0b. MIS PREFERENCIAS (2026-10-27): por ahora, qué cajas de ayuda dejó
+  // plegadas. Se guardan en el servidor para que valgan en la PC y en el
+  // celular. Son de cada usuario y no dan acceso a nada, por eso no piden
+  // permiso. Sin la migración 20261026 se responde como si no hubiera
+  // ninguna y el frontend se arregla con el navegador.
+  // ==========================
+  const CLAVE_PREFERENCIA = /^[a-z0-9._-]{1,100}$/;
+  const MAXIMO_PREFERENCIAS = 300;
+  const sinTablaDePreferencias = (err) => err && err.code === 'ER_NO_SUCH_TABLE';
+
+  router.get('/me/preferencias', async (req, res) => {
+    if (!req.appUser) return res.status(401).json({ error: 'Unauthorized' });
+    try {
+      const [rows] = await db.query('SELECT clave, valor FROM app_user_preferencias WHERE user_id = ?', [req.appUser.id]);
+      res.json({ disponible: true, preferencias: Object.fromEntries(rows.map((r) => [r.clave, r.valor])) });
+    } catch (err) {
+      if (sinTablaDePreferencias(err)) return res.json({ disponible: false, preferencias: {} });
+      console.error('ERROR GET /api/app-users/me/preferencias:', err);
+      res.status(500).json({ error: 'No se pudieron leer tus preferencias' });
+    }
+  });
+
+  // Body: { valor: 'texto' } guarda; { valor: null } la borra.
+  router.put('/me/preferencias/:clave', async (req, res) => {
+    if (!req.appUser) return res.status(401).json({ error: 'Unauthorized' });
+    const { clave } = req.params;
+    const valor = req.body ? req.body.valor : undefined;
+    if (!CLAVE_PREFERENCIA.test(clave)) return res.status(400).json({ error: 'Clave inválida' });
+    if (valor !== null && (typeof valor !== 'string' || valor.length > 255)) {
+      return res.status(400).json({ error: 'El valor tiene que ser un texto de hasta 255 caracteres, o null para borrarlo' });
+    }
+    try {
+      if (valor === null) {
+        await db.query('DELETE FROM app_user_preferencias WHERE user_id = ? AND clave = ?', [req.appUser.id, clave]);
+        return res.json({ guardado: true });
+      }
+      // Tope: que nadie llene la tabla mandando claves inventadas.
+      const [[{ n }]] = await db.query(
+        'SELECT COUNT(*) AS n FROM app_user_preferencias WHERE user_id = ? AND clave <> ?', [req.appUser.id, clave]);
+      if (n >= MAXIMO_PREFERENCIAS) return res.status(409).json({ error: 'Demasiadas preferencias guardadas' });
+      await db.query(
+        `INSERT INTO app_user_preferencias (user_id, clave, valor) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE valor = VALUES(valor)`,
+        [req.appUser.id, clave, valor]);
+      res.json({ guardado: true });
+    } catch (err) {
+      if (sinTablaDePreferencias(err)) return res.json({ guardado: false });
+      console.error('ERROR PUT /api/app-users/me/preferencias:', err);
+      res.status(500).json({ error: 'No se pudo guardar la preferencia' });
+    }
+  });
+
+  // ==========================
   // 1. LISTAR USUARIOS DE MI EMPRESA (o de un tenant puntual si soy superadmin)
   // ==========================
   router.get('/', requirePermission('users', 'read'), async (req, res) => {

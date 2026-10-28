@@ -43,6 +43,8 @@ const SOLO_CONSULTA = [
   /\/simulate$/,
   /\/api\/ayuda/,
   /\/chat/,
+  // Plegar una caja de ayuda: es del propio usuario y no cambia ningún dato.
+  /\/api\/app-users\/me\/preferencias/,
 ];
 
 // Acciones que merecen una frase propia (no alcanza con "Creó/cargó ..."):

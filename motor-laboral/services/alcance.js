@@ -89,6 +89,7 @@ const GET = ['GET'];
 const REGLAS = [
   // --- libres: sin datos de personas ---
   { m: GET, r: /^\/api\/app-users\/me$/, libre: true },
+  { m: ['GET', 'PUT'], r: /^\/api\/app-users\/me\/preferencias(\/[a-z0-9._-]+)?$/, libre: true },
   { m: ['GET', 'POST'], r: /^\/api\/segundo-factor(\/|$)/, libre: true },
   { m: GET, r: /^\/api\/puesta-en-marcha$/, libre: true },
   { m: GET, r: /^\/api\/(ciudades|sucursales|employee-categories|holidays|areas|sync-status)$/, libre: true },
