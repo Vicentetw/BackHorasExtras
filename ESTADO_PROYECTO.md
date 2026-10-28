@@ -4,7 +4,7 @@
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 >
-> ### Fichajes de una persona por día, semana o rango (A y C) — HECHO, SIN PUBLICAR (2026-10-28)
+> ### Fichajes de una persona por día, semana o rango (A y C) — PUBLICADO (2026-10-28)
 >
 > - Pedido: "si tengo dudas con un empleado (un sereno que figura ausente),
 >   ver sus fichajes en crudo de un día, semana, mes o rango, con el marcador".
@@ -20,7 +20,7 @@
 > - QA en Chrome 1366/390 px: 16/16 + detalle mensual sin cambios + rol
 >   Liquidación (solo "Ver fichajes"). Sin errores ni rechazos.
 >
-> ### Ayuda plegable y tutoriales en el celular (A–D) — HECHO, SIN PUBLICAR (2026-10-28)
+> ### Ayuda plegable y tutoriales en el celular (A–D) — PUBLICADO (2026-10-28)
 >
 > - Pedido del dueño: "los tutoriales ocupan mucho espacio, más en un celular".
 >   Ramas `ayuda-plegable` en backend y frontend.
@@ -35,7 +35,10 @@
 >   explicaciones". Todo tutorial se abre con `TutorialesService.abrir()` y
 >   se lista en `CATALOGO_TUTORIALES` (ver `scripts/tutoriales/LEEME.md`).
 > - Migración **20261026_preferencias_usuario** (tolerante: sin ella se
->   recuerda solo en el navegador). Aplicada en local, falta en producción.
+>   recuerda solo en el navegador). El dueño la corrió en producción el 28/10.
+> - Publicado el 28/10 junto con "Fichajes por rango": backend `399bff4`
+>   (`/health`), frontend `4aa1d70` (merge de las dos ramas, QA repetida
+>   sobre la versión combinada: 35/35 y 16/16).
 > - Suite 1201/1201. QA en Chrome a 1366 y 390 px: 35/35 controles + los 5
 >   tutoriales del menú e Inicio, sin errores ni rechazos. Carga inicial de
 >   la app igual que antes (los tutoriales se descargan al abrirlos).
@@ -532,7 +535,8 @@
 >
 > ### Bitácora (lo más nuevo arriba)
 >
-> - **28/10 — Ayuda plegable y tutoriales en el celular (sin publicar).**
+> - **28/10 — Publicados: ayuda plegable (A–D) y fichajes por rango (A, C).**
+> - **28/10 — Ayuda plegable y tutoriales en el celular.**
 >   A–D aprobados ("sin romper nada"). Encontrado en la QA y corregido: en el
 >   celular la caja se plegaba sola mientras se leía, y "Volver a mostrar" no
 >   aparecía ahí. El `.env` local quedó sin la base (después de correr las
