@@ -4,6 +4,22 @@
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 >
+> ### Fichajes de una persona por día, semana o rango (A y C) — HECHO, SIN PUBLICAR (2026-10-28)
+>
+> - Pedido: "si tengo dudas con un empleado (un sereno que figura ausente),
+>   ver sus fichajes en crudo de un día, semana, mes o rango, con el marcador".
+>   Se decidió **no** hacer una página nueva: completar la ventana que ya
+>   existía ("Ver todos los fichajes", un solo lugar).
+> - **A** "Elegir fechas" (Desde/Hasta) además de Un mes y Año completo; se
+>   pide de a 31 días (el límite que ya tenía `/api/fichajes-persona`), hasta
+>   un año. **C** "Ver fichajes" en el menú ⋮ de cada fila de Presentismo
+>   diario: abre ayer y ese día (un turno de noche entero). El ⋮ ahora lo ve
+>   también quien solo puede leer (con solo "Ver fichajes").
+> - Solo frontend, rama `fichajes-rango` (sale de `main`, independiente de
+>   `ayuda-plegable`). Sin cambios de servidor ni migración.
+> - QA en Chrome 1366/390 px: 16/16 + detalle mensual sin cambios + rol
+>   Liquidación (solo "Ver fichajes"). Sin errores ni rechazos.
+>
 > ### Ayuda plegable y tutoriales en el celular (A–D) — HECHO, SIN PUBLICAR (2026-10-28)
 >
 > - Pedido del dueño: "los tutoriales ocupan mucho espacio, más en un celular".
