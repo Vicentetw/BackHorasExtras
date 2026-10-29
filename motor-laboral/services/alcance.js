@@ -148,6 +148,8 @@ const REGLAS = [
     } },
   { m: GET, r: /^\/api\/labor-engine\/admin\/employees$/, filtrar: (b, v) => porLegajo(b, v, 'employee_id') },
   { m: GET, r: /^\/api\/config-horas-extra\/autorizados$/, filtrar: (b, v) => porLegajo(b, v, 'legajo') },
+  // H1: horas extra sin habilitar (employeeId = legajo).
+  { m: GET, r: /^\/api\/config-horas-extra\/sin-habilitar$/, filtrar: (b, v) => ({ ...b, personas: porLegajo(b.personas, v) }) },
 
   // --- sobre una persona ---
   { m: GET, r: /^\/api\/fichajes-persona$/, persona: async (req, v) => [v.legajos.has(String(req.query.legajo))] },

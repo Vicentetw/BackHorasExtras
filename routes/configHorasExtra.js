@@ -16,20 +16,32 @@ const minimoHorasExtra = require('../motor-laboral/services/minimoHorasExtra');
 const { compararDias, resumen } = require('../motor-laboral/services/compararHorasExtra');
 
 const FECHA = /^\d{4}-\d{2}-\d{2}$/;
+
+// H2 (2026-10-29): desde cuántas horas extra sin habilitar (en el período
+// consultado, normalmente el mes) se avisa. Lo elige cada empresa en Horas
+// extra -> paso 2. Sin cargar = 2 horas: así nunca avisa por los 5 o 10
+// minutos de más de cada día. Solo decide qué se avisa; no cambia ningún
+// número ni lo que se paga.
+const AVISO_SIN_HABILITAR = 'overtimeSinHabilitarAvisoMinutos';
+const AVISO_POR_DEFECTO = 120;
+const AVISO_MAXIMO = 6000; // 100 horas
+const avisoValido = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 1 && n <= AVISO_MAXIMO ? n : null; };
 const ELEGIR = 'Elegí la empresa: cada empresa tiene su propia configuración.';
 
 module.exports = function configHorasExtraRoutes(db, { calcularAsistencia }) {
   const router = express.Router();
+  const leerAviso = async (tenantId) => avisoValido(await getAppSetting(AVISO_SIN_HABILITAR, tenantId, db)) || AVISO_POR_DEFECTO;
 
   router.get('/', requireAnyPermission([['schedules', 'read'], ['attendance', 'read']]), async (req, res) => {
     const tenantId = resolveTenantId(req);
     if (tenantId == null) return res.status(400).json({ error: ELEGIR });
     try {
-      const [empresa, excepciones, autorizacion, minimoEmpresa] = await Promise.all([
+      const [empresa, excepciones, autorizacion, minimoEmpresa, avisoSinHabilitarMinutos] = await Promise.all([
         configHE.leerEmpresa(db, tenantId),
         configHE.leerPlantillas(db, tenantId),
         getAppSetting('overtimeAuthorizationMode', tenantId, db),
         minimoHorasExtra.leer(db, tenantId),
+        leerAviso(tenantId),
       ]);
       let plantillas = [];
       try {
@@ -52,6 +64,8 @@ module.exports = function configHorasExtraRoutes(db, { calcularAsistencia }) {
         autorizacion: autorizacion === 'custom' ? 'custom' : 'all',
         // Paso 2: cuántas personas activas tienen el tilde "Autorizado a hacer horas extras".
         autorizados: { si: Number(aut.si) || 0, total: Number(aut.total) || 0 },
+        // H2: desde cuántos minutos sin habilitar en el mes se avisa.
+        avisoSinHabilitarMinutos,
         minimoEmpresa,
         marcadoresHE: Number(marc.n) || 0,
         tablaExcepciones: excepciones.tablaExiste,
@@ -89,6 +103,23 @@ module.exports = function configHorasExtraRoutes(db, { calcularAsistencia }) {
     } catch (err) {
       console.error('ERROR guardando config de horas extra:', err);
       res.status(500).json({ error: 'Error guardando la configuración de horas extra' });
+    }
+  });
+
+  // H2: el tope del aviso de horas extra sin habilitar. Ruta aparte (no va en
+  // POST /empresa) para no cambiar lo que ya guarda esa.
+  router.put('/aviso-sin-habilitar', requirePermission('schedules', 'update'), async (req, res) => {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: ELEGIR });
+    const minutos = avisoValido((req.body || {}).minutos);
+    if (minutos == null) return res.status(400).json({ error: `El aviso tiene que ser un número entero de minutos entre 1 y ${AVISO_MAXIMO}.` });
+    try {
+      const { setAppSetting } = require('../motor-laboral/repositories/appSettingsRepository');
+      await setAppSetting(AVISO_SIN_HABILITAR, tenantId, String(minutos), db);
+      res.json({ ok: true, minutos });
+    } catch (err) {
+      console.error('ERROR guardando aviso de horas extra sin habilitar:', err);
+      res.status(500).json({ error: 'Error guardando el aviso' });
     }
   });
 
@@ -215,6 +246,64 @@ module.exports = function configHorasExtraRoutes(db, { calcularAsistencia }) {
     } catch (err) {
       console.error('ERROR impacto config HE:', err);
       res.status(err.status || 500).json({ error: err.status ? err.message : 'Error calculando el impacto' });
+    }
+  });
+
+  // H1 (2026-10-29): horas extra que NO se cuentan porque la persona no está
+  // habilitada ("Solo las personas autorizadas"). Pedido del dueño: "si me
+  // olvidé de tildar a alguien y hace 30 h extra, no me entero".
+  //
+  // No toca el cálculo: es la misma comparación que "Ver qué cambiaría", el
+  // cálculo completo como está contra el mismo cálculo con "Todas las
+  // personas". La diferencia es exactamente lo descartado, con el mismo
+  // recorte de plantilla, mínimo y régimen que tendría si estuviera
+  // habilitada. Nada se guarda y ningún número oficial cambia.
+  router.get('/sin-habilitar', requirePermission('attendance', 'read'), async (req, res) => {
+    const tenantId = resolveTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: ELEGIR });
+    const { from, to } = req.query;
+    if (!FECHA.test(String(from || '')) || !FECHA.test(String(to || ''))) {
+      return res.status(400).json({ error: 'from y to son requeridos' });
+    }
+    try {
+      const avisoMinutos = await leerAviso(tenantId);
+      // Con "Todas las personas" nadie pierde horas: no hace falta calcular.
+      if ((await getAppSetting('overtimeAuthorizationMode', tenantId, db)) !== 'custom') {
+        return res.json({ from, to, aplica: false, avisoMinutos, superanAviso: 0, personas: [] });
+      }
+      const [hoy, con] = await Promise.all([
+        calcularAsistencia(req, from, to, tenantId, { heDias: '1' }),
+        calcularAsistencia(req, from, to, tenantId, { heDias: '1', simularAutorizacionHE: 'all' }),
+      ]);
+      const porPersona = new Map();
+      for (const f of compararDias(hoy.heDias || [], con.heDias || [])) {
+        const minutos = f.con - f.hoy;
+        if (minutos <= 0) continue;
+        const p = porPersona.get(f.employeeId) || { employeeId: f.employeeId, nombre: f.nombre, minutos: 0, dias: [] };
+        p.minutos += minutos;
+        p.dias.push({ fecha: f.fecha, minutos });
+        porPersona.set(f.employeeId, p);
+      }
+      const personas = [...porPersona.values()].sort((a, b) => b.minutos - a.minutos);
+      // El id interno, para habilitar desde la lista con PUT /autorizados
+      // (el mismo tilde de la ficha). employeeId es el legajo.
+      if (personas.length) {
+        const [ids] = await db.query('SELECT id, employee_id FROM employees WHERE tenant_id = ? AND employee_id IN (?)',
+          [tenantId, personas.map((p) => p.employeeId)]);
+        const idDe = new Map(ids.map((r) => [String(r.employee_id), r.id]));
+        for (const p of personas) p.id = idDe.get(String(p.employeeId)) ?? null;
+      }
+      // H2: van todas (el detalle puede querer ver a cualquiera); la marca
+      // dice a quién avisarle. El tope se compara con el total del período
+      // pedido: las pantallas lo piden por mes.
+      for (const p of personas) {
+        p.dias.sort((a, b) => a.fecha.localeCompare(b.fecha));
+        p.superaAviso = p.minutos >= avisoMinutos;
+      }
+      res.json({ from, to, aplica: true, avisoMinutos, superanAviso: personas.filter((p) => p.superaAviso).length, personas });
+    } catch (err) {
+      console.error('ERROR horas extra sin habilitar:', err);
+      res.status(err.status || 500).json({ error: err.status ? err.message : 'Error calculando las horas extra sin habilitar' });
     }
   });
 

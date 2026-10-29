@@ -28,7 +28,7 @@ const LEG = Object.fromEntries(Object.entries(CASOS).map(([k, [l]]) => [k, l]));
 
 async function cleanup() {
   for (const t of [T, OTRA]) {
-    await db.query("DELETE FROM app_settings WHERE tenant_id = ? AND name IN ('overtimeMethod','overtimeCountEarlyArrival','overtimeAuthorizationMode')", [t]);
+    await db.query("DELETE FROM app_settings WHERE tenant_id = ? AND name IN ('overtimeMethod','overtimeCountEarlyArrival','overtimeAuthorizationMode','overtimeSinHabilitarAvisoMinutos')", [t]);
     await db.query('DELETE FROM plantilla_horas_extra WHERE tenant_id = ?', [t]).catch(() => {});
     await db.query('DELETE FROM Checkins WHERE tenant_id = ?', [t]);
     await db.query('DELETE FROM user_employee_map WHERE tenant_id = ?', [t]);
@@ -197,6 +197,41 @@ test('paso 2: marcar autorizados en lote y ver qué cambiaría antes de activar 
   assert.equal(otra.cambiados, 0);
   assert.ok(!(await (await pedir('GET', '/api/config-horas-extra/autorizados', null, hOtra)).json()).some((x) => x.id === id(LEG.vuelve)));
   assert.equal((await pedir('PUT', '/api/config-horas-extra/autorizados', { ids: [], autorizado: true })).status, 400);
+});
+
+test('H1: horas extra sin habilitar (se ven, no se cuentan)', async () => {
+  // Viene del test anterior: todos autorizados menos almuerzo (120 min).
+  const ruta = `/api/config-horas-extra/sin-habilitar?from=${DIA}&to=${DIA}`;
+  const todas = await (await pedir('GET', ruta)).json();
+  assert.deepEqual([todas.aplica, todas.personas.length], [false, 0], 'con "Todas las personas" no hay nada que avisar');
+  await pedir('POST', '/api/config-horas-extra/empresa', { metodo: 'EXCESO', contarLlegadaAnticipada: false, autorizacion: 'custom' });
+  try {
+    const j = await (await pedir('GET', ruta)).json();
+    assert.equal(j.aplica, true);
+    assert.deepEqual(j.personas.map((p) => [p.employeeId, p.minutos]), [[String(LEG.almuerzo), 120]], 'solo quien no está habilitado');
+    assert.deepEqual(j.personas[0].dias, [{ fecha: DIA, minutos: 120 }]);
+    const [[interno]] = await db.query('SELECT id FROM employees WHERE tenant_id = ? AND employee_id = ?', [T, LEG.almuerzo]);
+    assert.equal(j.personas[0].id, interno.id, 'trae el id interno para habilitar desde la lista');
+    assert.equal((await dia(LEG.almuerzo)).overtimeMinutes, 0, 'lo oficial no cambia: sigue sin contarse');
+    assert.equal((await dia(LEG.vuelve)).overtimeMinutes, 120, 'los habilitados siguen igual');
+    const otra = await (await pedir('GET', ruta, null, hOtra)).json();
+    assert.equal(otra.personas.length, 0, 'otra empresa no ve a estas personas');
+    assert.equal((await pedir('GET', '/api/config-horas-extra/sin-habilitar?from=x&to=y')).status, 400);
+    // H2: tope del aviso, por empresa. Sin cargar = 2 h.
+    assert.deepEqual([j.avisoMinutos, j.personas[0].superaAviso, j.superanAviso], [120, true, 1], '120 min llega al tope de 2 h');
+    assert.equal((await (await pedir('GET', '/api/config-horas-extra')).json()).avisoSinHabilitarMinutos, 120);
+    assert.equal((await pedir('PUT', '/api/config-horas-extra/aviso-sin-habilitar', { minutos: 121 })).status, 200);
+    const j2 = await (await pedir('GET', ruta)).json();
+    assert.deepEqual([j2.avisoMinutos, j2.personas[0].superaAviso, j2.superanAviso, j2.personas.length], [121, false, 0, 1],
+      'bajo el tope: sigue en la lista, sin aviso');
+    for (const malo of [0, -5, 1.5, 'x', 6001, null]) {
+      assert.equal((await pedir('PUT', '/api/config-horas-extra/aviso-sin-habilitar', { minutos: malo })).status, 400, `rechaza ${malo}`);
+    }
+    assert.equal((await (await pedir('GET', '/api/config-horas-extra', null, hOtra)).json()).avisoSinHabilitarMinutos, 120, 'otra empresa sigue con el suyo');
+    assert.equal((await dia(LEG.almuerzo)).overtimeMinutes, 0, 'el aviso no cambia ningún número');
+  } finally {
+    await pedir('POST', '/api/config-horas-extra/empresa', { metodo: 'EXCESO', contarLlegadaAnticipada: false, autorizacion: 'all' });
+  }
 });
 
 test('aislamiento: la configuración de una empresa no toca a otra', async () => {

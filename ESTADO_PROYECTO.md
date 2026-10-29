@@ -1,8 +1,39 @@
 # Estado del proyecto — Horas Dedica
 
-> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-28 — ver "Ayuda plegable", "Roles y áreas" y "Revisión del 24/10")
+> ## ⏩ EMPEZÁ ACÁ (actualizado 2026-10-29 — ver "Horas extra sin habilitar", "Ayuda plegable" y "Roles y áreas")
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
+>
+> ### Avisos de fichajes y horas extra sin habilitar — HECHO, SIN COMMIT NI PUBLICAR (2026-10-29)
+>
+> Se trabaja **de a un punto, con aprobación del dueño en cada uno**.
+> Primero se verifica el código; no se supone nada.
+> - **1** Matching: el aviso decía "no aparecen en los informes / no se
+>   cuentan", y para un dado de baja es falso (Presentismo lo muestra y cuenta
+>   el día). Ahora: "Fichajes a revisar". Solo textos.
+> - **2** (editar a un oculto lo vuelve a mostrar): **salteado**. Ninguna
+>   pantalla oculta a nadie y hay 0 ocultos. Se decide junto con "Bajas y
+>   exclusiones".
+> - **3** Detalle del mes: aviso "marcado como inactivo, pero fichó N días",
+>   y cada día en "Días a revisar". Solo pantalla.
+> - **H1–H3** horas extra de quien no está habilitado: ficha
+>   `FICHA_HE_SIN_HABILITAR.md`.
+>   - **H1** `GET /api/config-horas-extra/sin-habilitar`: misma comparación
+>     que "Ver qué cambiaría", sin tocar el cálculo.
+>   - **H2** tope del aviso por empresa (`overtimeSinHabilitarAvisoMinutos`,
+>     2 h por defecto), en Horas extra → paso 2.
+>   - **H3** bloque en Liquidación antes de cerrar, con "Habilitar" (el mismo
+>     tilde de la ficha). Verificado en el código: habilitar después de cerrar
+>     paga lo anterior como ajuste, hasta 3 meses atrás. La confirmación lo
+>     dice.
+> - Siguen pendientes **H4** (marcas en Presentismo, detalle y ficha), **H5**
+>   (Inicio) y **H6** (habilitación con fecha, con migración). También los
+>   puntos **4–7** de visibilidad: números de reloj 1–10, reactivar limpia la
+>   baja, aviso tras la fecha de baja y ocultos con fichajes.
+> - Suite local **1185/1202**. Los 17 que fallan son esperados: faltan las
+>   empresas de prueba 4 y 1000193, y el dueño decidió no restaurarlas.
+>   **Pantallas sin QA en el navegador**: el usuario de QA era de la empresa
+>   1000193.
 >
 > ### Fichajes de una persona por día, semana o rango (A y C) — PUBLICADO (2026-10-28)
 >

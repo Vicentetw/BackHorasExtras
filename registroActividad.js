@@ -91,6 +91,7 @@ const ACCIONES = [
   ['POST', /^\/api\/config-horas-extra\/empresa$/, 'Cambió cómo se cuentan las horas extra de la empresa'],
   ['PUT', /^\/api\/config-horas-extra\/plantillas\/\d+$/, 'Cambió cómo se cuentan las horas extra de una plantilla'],
   ['PUT', /^\/api\/config-horas-extra\/autorizados$/, 'Cambió quién está autorizado a hacer horas extra (varias personas)'],
+  ['PUT', /^\/api\/config-horas-extra\/aviso-sin-habilitar$/, 'Cambió desde cuántas horas extra sin habilitar se avisa'],
   ['POST', /\/api\/horas-extra-revisar\/aceptar$/, 'Revisó un día de horas extra y lo marcó "Está bien"'],
   ['DELETE', /\/api\/horas-extra-revisar\/aceptar/, 'Deshizo la revisión de un día de horas extra'],
   ['POST', /^\/salidas\/autorizaciones$/, 'Autorizó / no autorizó salidas particulares'],
