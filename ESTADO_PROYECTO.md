@@ -4,7 +4,7 @@
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 >
-> ### Avisos de fichajes y horas extra sin habilitar — HECHO, SIN COMMIT NI PUBLICAR (2026-10-29)
+> ### Avisos de fichajes y horas extra sin habilitar — PUBLICADO (2026-10-29: backend ea8ce19, frontend f14c1e0)
 >
 > Se trabaja **de a un punto, con aprobación del dueño en cada uno**.
 > Primero se verifica el código; no se supone nada.
