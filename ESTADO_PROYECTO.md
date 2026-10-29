@@ -26,7 +26,12 @@
 >     tilde de la ficha). Verificado en el código: habilitar después de cerrar
 >     paga lo anterior como ajuste, hasta 3 meses atrás. La confirmación lo
 >     dice.
-> - Siguen pendientes **H4** (marcas en Presentismo, detalle y ficha), **H5**
+> - **H4** publicado (backend d64fa13, frontend 39ae0c5): botón "Ver horas
+>   extra sin habilitar" en Presentismo mensual (a pedido, porque calcula el
+>   período dos veces más), aviso y detalle por día en el detalle del mes, y
+>   nota en la ficha (este mes y el anterior). También el color terciario de
+>   los temas (frontend 1252ccb).
+> - Siguen pendientes **H5**
 >   (Inicio) y **H6** (habilitación con fecha, con migración). También los
 >   puntos **4–7** de visibilidad: números de reloj 1–10, reactivar limpia la
 >   baja, aviso tras la fecha de baja y ocultos con fichajes.
