@@ -224,6 +224,12 @@ test('H1: horas extra sin habilitar (se ven, no se cuentan)', async () => {
     const j2 = await (await pedir('GET', ruta)).json();
     assert.deepEqual([j2.avisoMinutos, j2.personas[0].superaAviso, j2.superanAviso, j2.personas.length], [121, false, 0, 1],
       'bajo el tope: sigue en la lista, sin aviso');
+    // H4: una sola persona (para el detalle y la ficha).
+    const una = await (await pedir('GET', `${ruta}&employeeId=${LEG.almuerzo}`)).json();
+    assert.deepEqual(una.personas.map((p) => [p.employeeId, p.minutos]), [[String(LEG.almuerzo), 120]]);
+    const otraPersona = await (await pedir('GET', `${ruta}&employeeId=${LEG.vuelve}`)).json();
+    assert.equal(otraPersona.personas.length, 0, 'una persona habilitada no tiene nada sin contar');
+    assert.equal((await pedir('GET', `${ruta}&employeeId=${encodeURIComponent("1' OR 1=1")}`)).status, 400);
     for (const malo of [0, -5, 1.5, 'x', 6001, null]) {
       assert.equal((await pedir('PUT', '/api/config-horas-extra/aviso-sin-habilitar', { minutos: malo })).status, 400, `rechaza ${malo}`);
     }

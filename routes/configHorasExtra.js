@@ -265,6 +265,12 @@ module.exports = function configHorasExtraRoutes(db, { calcularAsistencia }) {
     if (!FECHA.test(String(from || '')) || !FECHA.test(String(to || ''))) {
       return res.status(400).json({ error: 'from y to son requeridos' });
     }
+    // H4: una sola persona (legajo), para el detalle y la ficha. Es el mismo
+    // filtro del detalle de Presentismo: el cálculo igual lee los fichajes de
+    // toda la empresa (marcadores, ver MARCADORES_Y_SALIDAS.md).
+    const legajo = req.query.employeeId != null && req.query.employeeId !== '' ? String(req.query.employeeId) : null;
+    if (legajo !== null && !/^[\w.-]{1,40}$/.test(legajo)) return res.status(400).json({ error: 'employeeId (legajo) inválido' });
+    const filtro = legajo !== null ? { employeeId: legajo } : {};
     try {
       const avisoMinutos = await leerAviso(tenantId);
       // Con "Todas las personas" nadie pierde horas: no hace falta calcular.
@@ -272,8 +278,8 @@ module.exports = function configHorasExtraRoutes(db, { calcularAsistencia }) {
         return res.json({ from, to, aplica: false, avisoMinutos, superanAviso: 0, personas: [] });
       }
       const [hoy, con] = await Promise.all([
-        calcularAsistencia(req, from, to, tenantId, { heDias: '1' }),
-        calcularAsistencia(req, from, to, tenantId, { heDias: '1', simularAutorizacionHE: 'all' }),
+        calcularAsistencia(req, from, to, tenantId, { heDias: '1', ...filtro }),
+        calcularAsistencia(req, from, to, tenantId, { heDias: '1', simularAutorizacionHE: 'all', ...filtro }),
       ]);
       const porPersona = new Map();
       for (const f of compararDias(hoy.heDias || [], con.heDias || [])) {
