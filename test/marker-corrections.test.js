@@ -116,14 +116,17 @@ test('antes de corregir: la salida se la lleva W, y la fila trae el marcador exa
   assert.equal(rows[0].salidaCorreccion, null);
 });
 
-test('no se puede asignar el marcador a alguien que no ficho despues de apretarlo', async () => {
-  // Un empleado sin fichajes ese dia.
-  await db.query(`INSERT INTO employees (employee_id, nombre, tenant_id, activo) VALUES (900789, 'Sin Fichajes', ?, 1)`, [TENANT_A]);
+// L2b (2026-10-30): un marcador nunca se le asigna a otra persona; solo se
+// anula ("no era de nadie"). Si era de otro, se corrige el fichaje de esa
+// persona (correcciones de fichajes).
+test('"era de X" ya no se acepta: un marcador no se le asigna a otra persona', async () => {
   const res = await corregir(headersA, {
-    markerUserId: USERID_MARCADOR, markerAt: MARCADOR_AT, fromEmployeeId: LEGAJO_W, toEmployeeId: 900789, reason: 'prueba',
+    markerUserId: USERID_MARCADOR, markerAt: MARCADOR_AT, fromEmployeeId: LEGAJO_W, toEmployeeId: LEGAJO_X, reason: 'prueba',
   });
   assert.equal(res.status, 400);
-  assert.match((await res.json()).error, /no fichó/);
+  assert.equal((await res.json()).codigo, 'SOLO_ANULAR');
+  const [[{ n }]] = await db.query('SELECT COUNT(*) AS n FROM marker_corrections WHERE marker_user_id = ?', [USERID_MARCADOR]);
+  assert.equal(n, 0, 'no se guardó nada');
 });
 
 test('el motivo es obligatorio', async () => {
@@ -144,24 +147,19 @@ test('otra empresa no puede corregir un marcador ajeno', async () => {
 
 let correctionId;
 
-test('"era de X": la salida pasa a X, y queda quien lo corrigio, cuando y por que', async () => {
+test('"no era de nadie": la salida desaparece, nadie se lleva el marcador, y queda quien, cuando y por que', async () => {
   const res = await corregir(headersA, {
-    markerUserId: USERID_MARCADOR, markerAt: MARCADOR_AT, fromEmployeeId: LEGAJO_W, toEmployeeId: LEGAJO_X,
-    reason: 'W se metio en el medio; lo confirmo el encargado',
+    markerUserId: USERID_MARCADOR, markerAt: MARCADOR_AT, fromEmployeeId: LEGAJO_W, toEmployeeId: null,
+    reason: 'se apreto por error; lo confirmo el encargado',
   });
   const json = await res.json();
   assert.equal(res.status, 200, JSON.stringify(json));
   correctionId = json.id;
 
-  const rows = await salidas();
-  assert.equal(rows.length, 1);
-  assert.equal(String(rows[0].employeeId), String(LEGAJO_X));
-  assert.equal(rows[0].timeIn.slice(11, 16), '12:30');
-  assert.equal(rows[0].salidaCorreccion.id, correctionId);
-  assert.match(rows[0].salidaCorreccion.reason, /encargado/);
-  assert.ok(rows[0].salidaCorreccion.correctedBy, 'se muestra quien corrigio');
+  assert.equal((await salidas()).length, 0, 'ni W ni X tienen la salida');
 
   const [[fila]] = await db.query('SELECT * FROM marker_corrections WHERE id = ?', [correctionId]);
+  assert.equal(fila.assigned_employee_id, null);
   assert.equal(fila.created_by, appUserAId);
   assert.equal(fila.previous_employee_id, LEGAJO_W, 'queda a quien se lo habia dado el sistema');
 
@@ -171,24 +169,23 @@ test('"era de X": la salida pasa a X, y queda quien lo corrigio, cuando y por qu
   assert.equal(log[0].performed_by, appUserAId);
 });
 
-test('cambiar la correccion a "no era de nadie": la salida desaparece y el log guarda como estaba', async () => {
+test('volver a anular el mismo marcador actualiza la misma correccion y el log guarda como estaba', async () => {
   const res = await corregir(headersA, {
-    markerUserId: USERID_MARCADOR, markerAt: MARCADOR_AT, fromEmployeeId: LEGAJO_X, toEmployeeId: null,
-    reason: 'en realidad nadie salio',
+    markerUserId: USERID_MARCADOR, markerAt: MARCADOR_AT, fromEmployeeId: LEGAJO_W, toEmployeeId: null,
+    reason: 'motivo corregido',
   });
   assert.equal(res.status, 200);
   assert.equal((await res.json()).id, correctionId, 'es la misma correccion, actualizada');
-
   assert.equal((await salidas()).length, 0);
 
   const [[fila]] = await db.query('SELECT * FROM marker_corrections WHERE id = ?', [correctionId]);
-  assert.equal(fila.assigned_employee_id, null);
+  assert.equal(fila.reason, 'motivo corregido');
   assert.equal(fila.previous_employee_id, LEGAJO_W, 'sigue siendo a quien se lo dio el sistema al principio');
   assert.equal(fila.updated_by, appUserAId);
 
   const [[log]] = await db.query(`SELECT * FROM marker_correction_log WHERE correction_id = ? AND action = 'updated'`, [correctionId]);
   const antes = typeof log.previous_data === 'string' ? JSON.parse(log.previous_data) : log.previous_data;
-  assert.equal(antes.assigned_employee_id, LEGAJO_X);
+  assert.match(antes.reason, /se apreto por error/);
 });
 
 test('la lista de correcciones del periodo la ve solo la empresa duena', async () => {

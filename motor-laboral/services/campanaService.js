@@ -12,6 +12,7 @@
 // Las funciones reciben `db` como primer parametro (mismo criterio que los
 // repositorios del Motor Laboral): no dependen de ningun modulo global.
 const movementsCalc = require('./movementsCalculations');
+const correccionesFichajes = require('./correccionesFichajes');
 const { getAppSetting } = require('../repositories/appSettingsRepository');
 
 function formatLocalDate(date) {
@@ -26,7 +27,7 @@ function nextDayStr(dateStr) {
   return formatLocalDate(new Date(y, m - 1, d + 1));
 }
 
-async function fetchMovementCheckins(db, fromDate, toDateExclusive, tenantId) {
+async function fetchMovementCheckinsCrudos(db, fromDate, toDateExclusive, tenantId) {
   // El join por badge (ademas de por USERID) es necesario porque no todos
   // los relojes graban Checkins.USERID igual: algunos graban el USERID
   // interno, otros graban directamente el numero de legajo/badge -- mismo
@@ -173,6 +174,17 @@ async function fetchMarkerMaxGapMs(db, tenantId) {
 // correccion es un hecho sobre el marcador, no sobre un reporte. Si se
 // corrigiera solo en un reporte, la misma hora extra diria una cosa en
 // Salidas y otra en Presentismo.
+// Lo que leen los motores: los fichajes con las correcciones de fichajes
+// aplicadas (etapa G, ver correccionesFichajes.js). Sin correcciones activas
+// devuelve exactamente lo mismo que fetchMovementCheckinsCrudos. Lo crudo
+// (lo que mandó el reloj, sin interpretar) queda para "Ver el reloj" y para
+// validar "Corregir marcador".
+async function fetchMovementCheckins(db, fromDate, toDateExclusive, tenantId) {
+  const filas = await fetchMovementCheckinsCrudos(db, fromDate, toDateExclusive, tenantId);
+  const correcciones = await correccionesFichajes.leer(db, tenantId, fromDate, toDateExclusive);
+  return correccionesFichajes.paraDeteccion(filas, correcciones);
+}
+
 async function fetchCorreccionesMarcadores(db, fromDate, toDateExclusive, tenantId) {
   const correcciones = new Map();
   if (tenantId === undefined || tenantId === null) return correcciones;
@@ -280,7 +292,8 @@ async function detectarCampanas(db, tenantId, from, to, opciones = {}) {
   const maxMarkerGapMs = await fetchMarkerMaxGapMs(db, tenantId);
   const todosLosMarcadores = await fetchMarkerMap(db, null, tenantId);
   const correccionesMarcadores = await fetchCorreccionesMarcadores(db, lookbackFromStr, nextDayStr(to), tenantId);
-  const soloPuedenConsumir = opciones.ignorarAfectados ? null : await legajosAfectadosACampana(db, tenantId);
+  const soloPuedenConsumir = opciones.ignorarAfectados ? null
+    : correccionesFichajes.soloPuedenConsumirCon(await legajosAfectadosACampana(db, tenantId), checkins);
   const { closedEvents, openEvents } = movementsCalc.detectMovements(checkins, markerMap, {
     maxMarkerGapMs, todosLosMarcadores, reboteRefinado: true, correccionesMarcadores, soloPuedenConsumir,
     ownCheckinBounceMs: await fetchVentanaReboteMs(db, tenantId),
@@ -296,7 +309,7 @@ async function detectarCampanas(db, tenantId, from, to, opciones = {}) {
       salidaCorregida: ev.salidaCorregida === true,
       regresoMarkerUserId: null, regresoMarkerAt: null, regresoCorregido: false,
     })),
-  ].filter(e => e.category === 'CAMPANA').map(conMarcadores);
+  ].filter(e => e.category === 'CAMPANA' && !correccionesFichajes.esInterno(e.employeeId)).map(conMarcadores);
 }
 
 // Como cuenta Presentismo los dias habiles en campaña sin fichar -- ver
@@ -355,6 +368,7 @@ async function empleadosEnCampanaElDia(db, tenantId, date) {
 
 module.exports = {
   fetchMovementCheckins,
+  fetchMovementCheckinsCrudos,
   fetchMarkerMap,
   fetchMarkerMaxGapMs,
   fetchVentanaReboteMs,

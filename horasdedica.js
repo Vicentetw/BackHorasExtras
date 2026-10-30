@@ -47,6 +47,7 @@ const employeeEventRepository = require('./motor-laboral/repositories/employeeEv
 const attendanceCalc = require('./motor-laboral/services/attendanceCalculations');
 const movementsCalc = require('./motor-laboral/services/movementsCalculations');
 const campanaService = require('./motor-laboral/services/campanaService');
+const correccionesFichajes = require('./motor-laboral/services/correccionesFichajes');
 const cupoMotivoRepository = require('./motor-laboral/repositories/cupoMotivoRepository');
 const tiposDeFichaje = require('./motor-laboral/services/tiposDeFichaje');
 const regimenHorasExtraRepository = require('./motor-laboral/repositories/regimenHorasExtraRepository');
@@ -247,6 +248,9 @@ app.use('/api/segundo-factor', require('./routes/segundoFactor')(db));
 app.use('/api/ausencias', require('./routes/ausencias')(db));
 app.use('/api/areas', require('./routes/areas')(db));
 app.use('/api/config-horas-extra', reportesRateLimiter, require('./routes/configHorasExtra')(db, { calcularAsistencia }));
+// Correcciones de fichajes (etapa G, CORRECCIONES_FICHAJES.md): omitir un
+// fichaje o quitarle / cambiarle el marcador, con vista previa del impacto.
+app.use('/api/correcciones-fichajes', reportesRateLimiter, require('./routes/correccionesFichajes')(db, { calcularAsistencia, calcularSalidas }));
 app.use('/api/horas-extra-revisar', reportesRateLimiter, require('./routes/horasExtraRevisar')(db, { calcularAsistencia, calcularFichajesDelDia: (tenantId, fecha) => calcularFichajesDelDia(tenantId, fecha) }));
 app.use('/api/portal-empleados', require('./routes/portalAdmin')(db));
 app.use('/api/solicitudes-alta', require('./routes/solicitudesAlta')(db));
@@ -369,6 +373,8 @@ async function fichajesDelDia(userId, tenantId, fecha) {
     query += ' AND c.tenant_id = ?';
     params.push(tenantId);
   }
+  // Correcciones de fichajes (etapa G): un fichaje omitido no cuenta.
+  query += correccionesFichajes.sinOmitidos('c.id', correccionesFichajes.idsOmitidos(await correccionesFichajes.leer(db, tenantId, fecha, nextDayStr(fecha))));
   query += ' ORDER BY c.CHECKTIME';
   const [rows] = await db.query(query, params);
   return rows.map((r) => r.CHECKTIME);
@@ -3072,6 +3078,10 @@ app.get('/attendance/:date', requirePermission('attendance', 'read'), async (req
         checkinsQuery += ` AND c.tenant_id = ?`;
         checkinsParams.push(effectiveTenantId);
       }
+      // Correcciones de fichajes (etapa G): un fichaje omitido no cuenta. Sin
+      // correcciones la consulta queda exactamente igual que antes.
+      checkinsQuery += correccionesFichajes.sinOmitidos('c.id',
+        correccionesFichajes.idsOmitidos(await correccionesFichajes.leer(db, effectiveTenantId, date, nextDayStr(date))));
       checkinsQuery += ` ORDER BY u.USERID, c.CHECKTIME`;
       const [checkinsResult] = await db.query(checkinsQuery, checkinsParams);
       checkins = checkinsResult || [];
@@ -3784,6 +3794,11 @@ async function attendanceRangeHandler(req, res) {
     };
     checkins.forEach(resolverPersona);
 
+    // Correcciones de fichajes (etapa G, correccionesFichajes.js): un fichaje
+    // omitido no cuenta para las horas; para los marcadores se arma la lista
+    // corregida más abajo. Sin correcciones, no cambia nada.
+    const correccionesDeFichajes = await correccionesFichajes.leer(db, tenantId, from, exclusiveEndDateStr);
+
     // Fichajes para detectar MARCADORES (salida particular, horas extra 9/10).
     // Bug real (2026-10-05, al comparar el calendario contra Salidas sobre
     // datos de produccion): en el detalle de UNA persona solo se traen sus
@@ -3824,7 +3839,7 @@ async function attendanceRangeHandler(req, res) {
     }
 
     const checkinsByEmployee = {};
-    checkins.forEach(c => {
+    correccionesFichajes.paraHoras(checkins, correccionesDeFichajes).forEach(c => {
       if (!c.employeeId) return;
       const employeeId = String(c.employeeId);
       const date = c.date;
@@ -3990,6 +4005,8 @@ async function attendanceRangeHandler(req, res) {
     checkinsParaDeteccion.forEach(c => {
       if (!checkinsByDateForDetection.has(c.date)) checkinsByDateForDetection.set(c.date, []);
       checkinsByDateForDetection.get(c.date).push({
+        // Número crudo del reloj: identifica el fichaje para las correcciones.
+        rawUserId: c.USERID,
         checktime: new Date(c.CHECKTIME.replace(' ', 'T')),
         userId: c.userId,
         employeeId: c.employeeId !== null ? String(c.employeeId) : null,
@@ -3998,6 +4015,9 @@ async function attendanceRangeHandler(req, res) {
         machineIp: c.MACHINE_IP ?? null
       });
     });
+    for (const [date, filas] of checkinsByDateForDetection) {
+      checkinsByDateForDetection.set(date, correccionesFichajes.paraDeteccion(filas, correccionesDeFichajes));
+    }
 
     // Pedido real: "diferenciar bien... salida particular, que estan en
     // salidas" -- el calendario de Presentismo no distinguia nunca un dia
@@ -5346,6 +5366,24 @@ async function attendanceRangeHandler(req, res) {
       }
     }
 
+    // Ningún fichaje se oculta: cada día dice qué fichajes tiene corregidos
+    // (omitido, sin marcador o con otro marcador), con motivo y quién. Solo
+    // aparece si hay correcciones.
+    if (correccionesDeFichajes.activas.size) {
+      const porDia = new Map();
+      for (const c of correccionesDeFichajes.activas.values()) {
+        const k = `${c.employeeId}|${c.time.slice(0, 10)}`;
+        if (!porDia.has(k)) porDia.set(k, []);
+        porDia.get(k).push({ id: c.id, hora: c.time.slice(11), accion: c.accion, marcadorUserId: c.marcadorUserId, motivo: c.motivo, por: c.por, en: c.en });
+      }
+      for (const fila of result) {
+        for (const d of fila.days || []) {
+          const lista = porDia.get(`${fila.employeeId}|${d.date}`);
+          if (lista) d.fichajesCorregidos = lista;
+        }
+      }
+    }
+
     res.json({
       from,
       to,
@@ -5392,13 +5430,38 @@ async function attendanceRangeHandler(req, res) {
 // motor-laboral/services/campanaService.js, compartida con el motor diario.
 // Estos envoltorios mantienen los nombres de siempre para los llamadores de aca.
 const fetchMovementCheckins = (fromDate, toDateExclusive, tenantId) => campanaService.fetchMovementCheckins(db, fromDate, toDateExclusive, tenantId);
+// Lo que mandó el reloj, sin las correcciones de fichajes (etapa G): para
+// "Ver el reloj", las pistas del "marcador previo" y validar "Corregir marcador".
+const fetchMovementCheckinsCrudos = (fromDate, toDateExclusive, tenantId) => campanaService.fetchMovementCheckinsCrudos(db, fromDate, toDateExclusive, tenantId);
 const fetchMarkerMap = (category, tenantId) => campanaService.fetchMarkerMap(db, category, tenantId);
 const fetchVentanaReboteMs = (tenantId) => campanaService.fetchVentanaReboteMs(db, tenantId);
 // Ventana de llegada de la entrada particular (ver campanaService).
 const fetchVentanaLlegadaParticularMs = (tenantId) => campanaService.fetchVentanaLlegadaParticularMs(db, tenantId);
 
 // GET /movements-range?from=&to=&category=PARTICULAR|OFICIAL&employeeId=&groupBy=day|month|year
-app.get('/movements-range', requirePermission('attendance', 'read'), reportesRateLimiter, async (req, res) => {
+app.get('/movements-range', requirePermission('attendance', 'read'), reportesRateLimiter, (req, res) => movementsRangeHandler(req, res));
+
+// Corre el cálculo de Salidas (/movements-range) DENTRO del proceso, con el
+// usuario del pedido original. Lo usa la vista previa de las correcciones de
+// fichajes: el mismo cálculo que la pantalla, no una segunda fórmula.
+function calcularSalidas(req, from, to, tenantId, category) {
+  return new Promise((resolve, reject) => {
+    const pedido = Object.create(req);
+    Object.defineProperty(pedido, 'query', { value: { from, to, category, ...(tenantId != null ? { tenantId: String(tenantId) } : {}) } });
+    const respuesta = {
+      statusCode: 200,
+      status(codigo) { this.statusCode = codigo; return this; },
+      json(cuerpo) {
+        if (this.statusCode >= 400) reject(Object.assign(new Error((cuerpo && cuerpo.error) || 'Error en salidas'), { status: this.statusCode }));
+        else resolve(cuerpo);
+        return this;
+      },
+    };
+    movementsRangeHandler(pedido, respuesta).catch(reject);
+  });
+}
+
+async function movementsRangeHandler(req, res) {
   try {
     const { from, to } = req.query;
     const category = req.query.category;
@@ -5639,7 +5702,7 @@ app.get('/movements-range', requirePermission('attendance', 'read'), reportesRat
     }
     res.status(500).json({ error: 'Error en movements-range' });
   }
-});
+}
 
 // ============================================================================
 // Campañas de una empresa en un rango -- UNA sola fuente para todo el sistema
@@ -5876,7 +5939,10 @@ async function calcularFichajesDelDia(tenantId, fecha, soloLegajo = null) {
       };
     };
 
-    const legajos = [...new Set(checkins.filter(c => c.employeeId).map(c => c.employeeId))]
+    // Correcciones de fichajes del día (etapa G): `checkins` ya viene con
+    // ellas aplicadas; acá se buscan para MOSTRARLAS (nada se oculta).
+    const correcciones = await correccionesFichajes.leer(db, tenantId, fecha, siguiente);
+    const legajos = [...new Set(checkins.filter(c => c.employeeId && !correccionesFichajes.esInterno(c.employeeId)).map(c => c.employeeId))]
       .filter(l => !soloLegajo || l === soloLegajo);
     const marcasPorLegajo = new Map(legajos.map(l => [l, []]));
     const DESCARTE_AVILA = 'coincide con su primer fichaje del día: el marcador probablemente era de otra persona, y el reporte de Salidas no lo cuenta';
@@ -5917,6 +5983,17 @@ async function calcularFichajesDelDia(tenantId, fecha, soloLegajo = null) {
       empleados[legajo] = tiposDeFichaje.clasificarFichajesDelDia({
         fichajes: propios, marcas: marcasPorLegajo.get(legajo), reboteSegundos: ventanaReboteMs / 1000,
       });
+    }
+    // Ningún fichaje se oculta: el omitido se muestra igual, marcado, y el
+    // que tiene el marcador quitado o cambiado dice qué corrección tiene.
+    for (const c of correcciones.activas.values()) {
+      if (!c.employeeId || (soloLegajo && c.employeeId !== soloLegajo)) continue;
+      const lista = empleados[c.employeeId] || (empleados[c.employeeId] = []);
+      const correccion = { id: c.id, accion: c.accion, marcadorUserId: c.marcadorUserId, motivo: c.motivo, por: c.por, en: c.en };
+      const fila = lista.find((f) => f.en === c.time);
+      if (fila) fila.correccion = correccion;
+      else if (c.accion === 'OMITIR') lista.push({ en: c.time, hora: c.time.slice(11, 16), base: 'Omitido', tipos: [], correccion });
+      lista.sort((a, b) => (a.en < b.en ? -1 : a.en > b.en ? 1 : 0));
     }
     return empleados;
 }
@@ -5971,7 +6048,7 @@ app.get('/api/fichajes-persona', requirePermission('attendance', 'read'), report
     // Los fichajes crudos de la empresa de todo el período (desde 5 minutos
     // antes), una sola vez; cada día mira su parte.
     const inicio = new Date(new Date(`${from}T00:00:00`).getTime() - VENTANA_MARCADOR_PREVIO_MS);
-    const todosLosCrudos = await fetchMovementCheckins(fmt(inicio), nextDayStr(to), tenantId);
+    const todosLosCrudos = await fetchMovementCheckinsCrudos(fmt(inicio), nextDayStr(to), tenantId);
     const fechas = [];
     for (let f = from; f <= to; f = nextDayStr(f)) fechas.push(f);
     // Los tipos de cada día, de a varios días a la vez (cada uno es
@@ -6097,7 +6174,7 @@ app.get('/api/ver-reloj', requirePermission('attendance', 'read'), reportesRateL
     const desde = fmt(new Date(centro - margen * 1000));
     const hasta = fmt(new Date(centro + margen * 1000 + 1000));
 
-    const lecturasVentana = await fetchMovementCheckins(desde, hasta, tenantId);
+    const lecturasVentana = await fetchMovementCheckinsCrudos(desde, hasta, tenantId);
     const propia = lecturasVentana.find((c) => c.employeeId === legajo && fmt(c.checktime) === en);
     if (!propia) return res.status(404).json({ error: 'No se encontró ese fichaje' });
     const ip = propia.machineIp ?? null;
@@ -6452,10 +6529,11 @@ app.get('/marker-corrections', requirePermission('attendance', 'read'), async (r
 });
 
 // POST /marker-corrections
-//   { markerUserId, markerAt: 'YYYY-MM-DD HH:MM:SS', fromEmployeeId, toEmployeeId | null, reason }
-// fromEmployeeId: a quien se lo habia atribuido el sistema (informativo, para
-// el historial). toEmployeeId null = "no era de nadie". Si el marcador ya
-// tenia una correccion, se reemplaza (y el log guarda la anterior).
+//   { markerUserId, markerAt: 'YYYY-MM-DD HH:MM:SS', fromEmployeeId, reason }
+// Anula un marcador ("no era de nadie"). fromEmployeeId: a quien se lo habia
+// atribuido el sistema (informativo, para el historial). Desde 2026-10-30
+// (L2b) ya no se acepta toEmployeeId: ver el comentario de abajo. Si el
+// marcador ya tenia una correccion, se reemplaza (y el log guarda la anterior).
 app.post('/marker-corrections', requirePermission('attendance', 'update'), async (req, res) => {
   try {
     const tenantId = resolveTenantId(req);
@@ -6484,27 +6562,21 @@ app.post('/marker-corrections', requirePermission('attendance', 'update'), async
 
     const fromEmployeeId = await legajoDeLaEmpresa(req.body.fromEmployeeId, tenantId);
     if (fromEmployeeId === undefined) return res.status(400).json({ error: 'El empleado original no es de la empresa' });
-    const toEmployeeId = await legajoDeLaEmpresa(req.body.toEmployeeId, tenantId);
-    if (toEmployeeId === undefined) return res.status(400).json({ error: 'El empleado elegido no es de la empresa' });
-    if (toEmployeeId !== null && toEmployeeId === fromEmployeeId) {
-      return res.status(400).json({ error: 'El marcador ya está atribuido a esa persona' });
+    // L2b (decisión del dueño, 2026-10-30): un marcador NUNCA se le asigna a
+    // otra persona. Solo se puede anular ("no era de nadie"). Si un marcador
+    // era de alguien y lo tomó otro, se corrige el FICHAJE de cada uno
+    // (correcciones de fichajes: quitar o cambiar el marcador), que respeta
+    // que cada marcador pertenece a su reloj. "Era de X" además cruzaba
+    // relojes. En producción no había ninguna corrección "era de X" activa
+    // (backup del 29/10); el motor sigue entendiendo las viejas.
+    if (req.body.toEmployeeId != null && req.body.toEmployeeId !== '') {
+      return res.status(400).json({
+        error: 'Un marcador no se puede asignar a otra persona: solo anularlo ("no era de nadie"). '
+          + 'Si era de otra persona, corregí el fichaje de esa persona (cambiar el marcador).',
+        codigo: 'SOLO_ANULAR',
+      });
     }
-
-    // "Era de X" solo tiene sentido si X ficho poco despues: ese fichaje es
-    // el que se va a llevar el marcador (ver VENTANA_MARCADOR_CORREGIDO_MS).
-    // Si no hay ninguno, la correccion no cambiaria nada y es mejor decirlo
-    // ahora que guardarla en silencio.
-    if (toEmployeeId !== null) {
-      const ventanaMs = movementsCalc.VENTANA_MARCADOR_CORREGIDO_MS;
-      const fichajes = await fetchMovementCheckins(markerAt, sumarMsAFechaHora(markerAt, ventanaMs + 1000), tenantId);
-      const propio = fichajes.find(c => c.employeeId === String(toEmployeeId) && c.checktime >= new Date(markerAt.replace(' ', 'T')));
-      if (!propio) {
-        return res.status(400).json({
-          error: `Esa persona no fichó en los ${ventanaMs / 60000} minutos siguientes al marcador. `
-            + 'Para asignarle el marcador tiene que haber un fichaje suyo después de apretarlo.'
-        });
-      }
-    }
+    const toEmployeeId = null;
 
     const performedBy = auditLog.actorId(req);
     const id = await auditLog.inTransaction(db, async (conn) => {

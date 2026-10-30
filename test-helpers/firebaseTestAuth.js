@@ -111,6 +111,8 @@ async function deleteTestUser(uid) {
     await db.query('UPDATE marker_corrections SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
     await db.query('UPDATE marker_corrections SET updated_by = NULL WHERE updated_by = ?', [appUser.id]).catch(() => {});
     await db.query('UPDATE event_type_quotas SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE fichajes_correcciones SET created_by = NULL WHERE created_by = ?', [appUser.id]).catch(() => {});
+    await db.query('UPDATE fichajes_correcciones SET deshecha_por = NULL WHERE deshecha_por = ?', [appUser.id]).catch(() => {});
     for (const t of ['overtime_regime_policies', 'employee_overtime_authorizations', 'overtime_excess_approvals']) {
       await db.query(`UPDATE ${t} SET created_by = NULL WHERE created_by = ?`, [appUser.id]).catch(() => {});
     }

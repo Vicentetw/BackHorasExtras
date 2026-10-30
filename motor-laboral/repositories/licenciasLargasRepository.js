@@ -26,6 +26,8 @@
 // ESCALA: dos consultas para toda la empresa, no una por empleado (pensado
 // para 5.000 empleados). Los avisos solo se muestran: no cambian ningún número.
 
+const correccionesFichajes = require('../services/correccionesFichajes');
+
 // Una licencia vencida hace más de esto ya no se avisa: para entonces la
 // persona lleva meses de faltas y el aviso de "faltas seguidas" ya lo marca.
 const VENTANA_VENCIDA_DIAS = 90;
@@ -102,8 +104,10 @@ async function vencimientosDeLicencias(db, tenantId, { fecha, largaDesde, porVen
     if (empleadoDeNumero.size) {
       const [fichajes] = await db.query(
         `SELECT USERID, DATE_FORMAT(MAX(CHECKTIME), '%Y-%m-%d') AS ultimo FROM Checkins
-         WHERE tenant_id = ? AND USERID IN (?) AND CHECKTIME >= ? AND CHECKTIME < DATE_ADD(?, INTERVAL 1 DAY)
-         GROUP BY USERID`,
+         WHERE tenant_id = ? AND USERID IN (?) AND CHECKTIME >= ? AND CHECKTIME < DATE_ADD(?, INTERVAL 1 DAY)`
+         // Un fichaje omitido (correcciones de fichajes) no cuenta como "volvió a fichar".
+         + correccionesFichajes.sinOmitidos('id', await correccionesFichajes.idsOmitidosEn(db, tenantId))
+         + ' GROUP BY USERID',
         [tenantId, [...empleadoDeNumero.keys()], desdeVentana, fecha]
       );
       fichajes.forEach((f) => {

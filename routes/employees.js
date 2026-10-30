@@ -4,6 +4,7 @@ const router = express.Router();
 const db = require('../db');
 const { resolveTenantId, requirePermission, requireAnyPermission, requireActiveSubscription } = require('../appUserMiddleware');
 const { limitado } = require('../motor-laboral/services/alcance');
+const correccionesFichajes = require('../motor-laboral/services/correccionesFichajes');
 const billingRepo = require('../motor-laboral/repositories/billingRepository');
 
 // La ciudad y la sucursal de un empleado tienen que ser de SU empresa.
@@ -131,6 +132,8 @@ router.get('/', requireAnyPermission([['employees', 'read'], ['attendance', 'rea
     // el ultimo fichaje de un empleado de OTRA empresa, o duplicar el
     // grupo por employee_id si el mismo USERID crudo resolvia a mas de un
     // vinculo (uno por tenant).
+    // Un fichaje omitido (correcciones de fichajes, etapa G) no es "último fichaje".
+    const sinOmitidos = correccionesFichajes.sinOmitidos('c.id', await correccionesFichajes.idsOmitidosEn(db, resolveTenantId(req)));
     const lastCheckinJoin = `
       LEFT JOIN (
         SELECT uem.employee_id AS emp_pk, MAX(c.CHECKTIME) AS last_checkin
@@ -140,6 +143,7 @@ router.get('/', requireAnyPermission([['employees', 'read'], ['attendance', 'rea
         JOIN user_employee_map uem
           ON uem.USERID = COALESCE(u_direct.USERID, u_badge.USERID)
           AND uem.tenant_id = c.tenant_id
+        WHERE 1 = 1${sinOmitidos}
         GROUP BY uem.employee_id
       ) lc ON lc.emp_pk = employees.id
     `;

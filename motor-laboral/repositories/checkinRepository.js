@@ -1,3 +1,5 @@
+const correccionesFichajes = require('../services/correccionesFichajes');
+
 function nextDayStr(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const next = new Date(y, m - 1, d + 1);
@@ -39,6 +41,10 @@ async function findByDate(date, tenantId, db) {
 
   query += ` ORDER BY c.CHECKTIME ASC`;
 
+  // Correcciones de fichajes (etapa G): un fichaje omitido no cuenta. Sin
+  // correcciones la consulta queda exactamente igual que antes.
+  const omitidos = correccionesFichajes.idsOmitidos(await correccionesFichajes.leer(db, tenantId, date, nextDayStr(date)));
+  if (omitidos.length) query = query.replace('ORDER BY c.CHECKTIME ASC', `${correccionesFichajes.sinOmitidos('c.id', omitidos)} ORDER BY c.CHECKTIME ASC`);
   const [rows] = await db.query(query, params);
   return rows.map(r => ({
     USERID: r.USERID,

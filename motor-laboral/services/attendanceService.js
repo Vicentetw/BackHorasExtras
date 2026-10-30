@@ -11,6 +11,7 @@ const {
 const { holidayAppliesToEmployee, isNonWorkHoliday } = require('./holidayScope');
 const { resolveHistoricalToleranceFields } = require('./templateConfigHistoryResolver');
 const { evaluarFueraDeHorario } = require('./fueraDeHorario');
+const correccionesFichajes = require('./correccionesFichajes');
 
 function isDefaultWorkday(dateString) {
   const dayOfWeek = getLocalDayOfWeek(dateString);
@@ -653,6 +654,8 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
   const [exclusions] = await db.query(exclusionsQuery, exclusionsParams);
 
   const rowsParams = [normalizedDate, nextDayStr(normalizedDate)];
+  // Correcciones de fichajes (etapa G): un fichaje omitido no cuenta.
+  const omitidos = correccionesFichajes.idsOmitidos(await correccionesFichajes.leer(db, tenantId, normalizedDate, nextDayStr(normalizedDate)));
   let rowsQuery = `
       SELECT
         e.employee_id,
@@ -672,9 +675,10 @@ async function calculateLegacyAttendance({ date, db, tenantId }) {
 
       LEFT JOIN Checkins c
         ON c.USERID = u.USERID AND c.tenant_id = u.tenant_id
-        AND c.CHECKTIME >= ? AND c.CHECKTIME < ?
+        AND c.CHECKTIME >= ? AND c.CHECKTIME < ?${omitidos.length ? ' AND c.id NOT IN (?)' : ''}
 
       WHERE (e.exclude_from_report = 0 OR e.exclude_from_report IS NULL)`;
+  if (omitidos.length) rowsParams.push(omitidos);
 
   if (tenantId !== undefined && tenantId !== null) {
     rowsQuery += ` AND e.tenant_id = ?`;

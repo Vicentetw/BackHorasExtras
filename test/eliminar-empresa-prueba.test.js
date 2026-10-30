@@ -1,5 +1,5 @@
 ﻿// "Eliminar empresa de prueba" (2026-10-14): borra la empresa con TODO lo
-// suyo, en una transacciÃ³n, solo si no tiene fichajes ni pagos, y solo si se
+// suyo, en una transacción, solo si no tiene fichajes ni pagos, y solo si se
 // escribe su nombre. Ver motor-laboral/services/eliminarEmpresaPrueba.js.
 // Requiere el backend local (puerto 3000).
 require('dotenv').config();
@@ -52,7 +52,7 @@ before(async () => {
     [NOMBRE, `elim-${SUF}@test.example.com`, PRUEBA]);
   leadId = lead.insertId;
 
-  // La "real": un fichaje alcanza para que no se pueda borrar desde acÃ¡.
+  // La "real": un fichaje alcanza para que no se pueda borrar desde acá.
   await getTestAuthHeaders(UID_REAL, { isSuperadmin: false, tenantId: REAL });
   await db.query(`INSERT INTO Checkins (USERID, tenant_id, CHECKTIME, MACHINE_IP) VALUES (961999, ?, '2026-10-01 08:00:00', 'test')`, [REAL]);
 });
@@ -61,12 +61,12 @@ after(async () => {
   await db.query('DELETE FROM Checkins WHERE tenant_id = ?', [REAL]);
   await db.query('DELETE FROM signup_leads WHERE id = ?', [leadId]).catch(() => {});
   for (const uid of [UID_ADMIN, UID_REAL, UID_SUPER]) await deleteTestUser(uid);
-  // Si algo fallÃ³ a mitad, limpiar-datos-de-prueba.js termina de borrar (ids >= 999900).
+  // Si algo falló a mitad, limpiar-datos-de-prueba.js termina de borrar (ids >= 999900).
   await db.query('DELETE FROM tenants WHERE id = ?', [REAL]).catch(() => {});
   await db.end().catch(() => {});
 });
 
-test('la revisiÃ³n muestra quÃ© tiene la empresa y que se puede borrar', async () => {
+test('la revisión muestra qué tiene la empresa y que se puede borrar', async () => {
   const r = await pedir('GET', `/api/labor-engine/admin/tenants/${PRUEBA}/eliminacion`);
   assert.equal(r.status, 200);
   const d = await r.json();
@@ -74,7 +74,7 @@ test('la revisiÃ³n muestra quÃ© tiene la empresa y que se puede borrar', asy
   assert.deepEqual(d.bloqueos, []);
   const tablas = d.contenido.map((c) => c.tabla);
   for (const t of ['app_users', 'plan_requests', 'tenant_subscriptions', 'event_types', 'work_schedule_templates', 'employees', 'signup_leads']) {
-    assert.ok(tablas.includes(t), `falta ${t} en la revisiÃ³n`);
+    assert.ok(tablas.includes(t), `falta ${t} en la revisión`);
   }
   assert.equal(d.contenido.find((c) => c.tabla === 'signup_leads').seConserva, true);
   assert.ok(d.usuarios.length >= 1);

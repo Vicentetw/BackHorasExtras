@@ -5,9 +5,15 @@
 // Un permiso es el texto "modulo:accion". Cada usuario tiene los de su rol
 // más los sueltos (ver appUserRepository.findByFirebaseUid).
 
-const MODULOS = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'settings', 'users', 'salidas', 'horas_extra'];
+// 'fichajes' (2026-10-30, etapa G): ver y corregir fichajes (omitir, quitar o
+// cambiar el marcador). La migración 20261027 se lo da solo al rol
+// "Administrador de Empresa".
+const MODULOS = ['employees', 'attendance', 'schedules', 'leaves', 'exclusions', 'holidays', 'matching', 'settings', 'users', 'salidas', 'horas_extra', 'fichajes'];
 const ACCIONES = ['read', 'create', 'update', 'delete'];
-const CATALOGO = new Set(MODULOS.flatMap((m) => ACCIONES.map((a) => `${m}:${a}`)));
+// Módulos que no tienen las cuatro acciones: en fichajes no se crea ni se
+// borra nada (el reloj es la prueba); solo se ve y se corrige.
+const ACCIONES_DE = { fichajes: ['read', 'update'] };
+const CATALOGO = new Set(MODULOS.flatMap((m) => (ACCIONES_DE[m] || ACCIONES).map((a) => `${m}:${a}`)));
 
 // Todos los de una empresa: los que tiene el superadmin cuando trabaja en
 // una empresa (modo soporte).
@@ -114,6 +120,7 @@ const NOMBRES = {
   leaves: 'Licencias y vacaciones', exclusions: 'Justificaciones y motivos de ausencia', holidays: 'Feriados',
   matching: 'Vincular reloj con empleados', settings: 'Marcadores y relojes', users: 'Usuarios y roles',
   salidas: 'Autorizar salidas particulares', horas_extra: 'Horas extra y cierre de mes',
+  fichajes: 'Corregir fichajes (omitir o cambiar el marcador)',
 };
 const ACCION = { read: 'Ver', create: 'Crear', update: 'Editar', delete: 'Eliminar' };
 function enPalabras(permisos) {

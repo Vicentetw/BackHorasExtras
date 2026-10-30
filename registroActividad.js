@@ -98,6 +98,8 @@ const ACCIONES = [
   ['POST', /^\/salidas\/justificaciones$/, 'Justificó salidas particulares con un motivo (o quitó la justificación)'],
   ['PUT', /^\/config\/salidas-autorizacion$/, 'Cambió si las salidas particulares requieren autorización'],
   ['POST', /^\/config\/marker-arrival-window-minutes$/, 'Cambió la ventana de llegada de la entrada particular'],
+  ['POST', /^\/api\/correcciones-fichajes$/, 'Corrigió un fichaje (omitirlo, quitarle o cambiarle el marcador)'],
+  ['POST', /^\/api\/correcciones-fichajes\/\d+\/deshacer$/, 'Deshizo una corrección de fichaje'],
   ['POST', /^\/config\/user-exclusions\/range$/, 'Cargó justificaciones (rango de días)'],
   ['POST', /^\/config\/user-exclusions$/, 'Cargó una justificación'],
   ['PUT', /^\/config\/user-exclusions\/\d+$/, 'Modificó una justificación'],

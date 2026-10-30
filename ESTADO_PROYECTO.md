@@ -8,6 +8,59 @@
 > sin un test que fije el caso nuevo y los que ya andaban, y sin medir el
 > antes y el después sobre la copia.**
 >
+> ### L2b + textos rotos en exportaciones — HECHO EN LOCAL, SIN COMMIT (2026-10-30)
+>
+> - **L2b (aprobada):** "Corregir marcador" ya no asigna un marcador a otra
+>   persona; solo lo anula ("no era de nadie"). Backend: `POST
+>   /marker-corrections` con `toEmployeeId` → 400 `SOLO_ANULAR`; frontend:
+>   la ventana solo ofrece anular. El motor sigue entendiendo las "era de X"
+>   viejas (en producción, 0 activas el 29/10). Si el marcador era de otra
+>   persona, se corrige su fichaje (correcciones de fichajes, etapa H).
+> - **"RÃ©gimen" en el Excel de Horas extra por régimen:** no era la
+>   exportación, el archivo `horas-extra-regimen-page.ts` tenía 28 líneas con
+>   texto dañado (se guardó alguna vez con otra codificación): encabezados
+>   del Excel, título del PDF y mensajes de la pantalla. Reparado y
+>   verificado bajando el Excel en Chrome. Revisados los dos repos: el único
+>   otro archivo dañado era un test (solo comentarios).
+> - **Todas las exportaciones:** las 29 usan `shared/export.ts` (.xlsx real y
+>   PDF con limpieza de signos): bien. El CSV de Vincular reloj no tenía la
+>   marca BOM (salía "RazÃ³n" en Excel): agregada. El de Feriados ya la tenía.
+> - Tests: 64 de marcadores y correcciones pasan.
+>
+> ### Buscadores sin tildes — HECHO EN LOCAL (frontend), SIN COMMIT (2026-10-30)
+>
+> - Pedido: en Presentismo "mendez" no encontraba a "MÉNDEZ". Los 27 filtros
+>   por nombre de la pantalla (19 archivos) usan `contiene()` de
+>   `src/app/shared/texto.ts`: ignora mayúsculas y tildes (también la ñ).
+>   Los que buscan en el servidor ya lo hacían (la base compara así).
+> - Verificado: compila; en Chrome, "mendez", "MENDEZ" y "méndez" encuentran
+>   a MÉNDEZ en Presentismo mensual, sin errores. Falta el OK para publicar.
+> - Guion del video reescrito (`GUION_VIDEO_DEMO.md`, versión 2) y primera
+>   corrida del recorrido automático en local (resultado en el guion).
+>
+> ### Correcciones de fichajes, etapa G — HECHA EN LOCAL, SIN COMMIT (2026-10-30)
+>
+> - Qué es: omitir un fichaje o quitarle / cambiarle el marcador, con motivo,
+>   quién, cuándo, deshacer, y **vista previa obligatoria** del impacto en
+>   toda la empresa. Nunca se toca `Checkins` ni los motores. Todo en
+>   `CORRECCIONES_FICHAJES.md` (diseño + sección 12, implementación).
+> - Regla del dueño: **los fichajes de un reloj nunca se mezclan con los de
+>   otro**. Los fichajes sin reloj (antes de jun-2026) eran de prueba: se
+>   bloquean y no se analizan más.
+> - Verificado: 48 pantallas idénticas sin correcciones (sin tabla, con tabla
+>   vacía y al final); 0 marcadores cruzados de reloj en ~2.480 fichajes
+>   reales de octubre; Santi 01/10 real coherente en todas las pantallas;
+>   suite 1225 pass / 17 fail (las mismas 17 de siempre); 32 tests nuevos.
+> - Migración `20261027_correcciones_fichajes.sql`: corrida **solo en la base
+>   local**. En producción la corre el dueño cuando se publique.
+> - Falta autorización para: commit/publicar G, **L2** ("Corregir marcador"
+>   solo del mismo reloj: 0 correcciones activas en producción, no cambia
+>   nada), etapas **H** (ventana de corrección en Presentismo/Salidas),
+>   **I** (pantalla "Fichajes del reloj"), **J** (para revisar), **K**
+>   (cortar la salida al fin del horario: cambia cálculos).
+> - Hallazgo viejo, no tocado: dos fichajes del mismo segundo llegan en un
+>   orden no garantizado (ver sección 12 del documento).
+>
 > ### Entrada particular solo al llegar — PUBLICADO (2026-10-29: backend 9528d45, frontend 4f3b98d)
 >
 > - Caso: SANTI 2616, 01/10. Un 5 suelto a media jornada armaba una salida

@@ -2,6 +2,7 @@
 // motor-laboral/services/cupoMotivos.js. Ver migracion 20261005.
 const { periodoAnual, cupoVigente, calcularConsumo, evaluarCupo } = require('../services/cupoMotivos');
 const { findVigenciasParaCalculo, findFeriadosEnRango } = require('./eventTypeCountModeRepository');
+const correccionesFichajes = require('../services/correccionesFichajes');
 
 const PERIODOS = ['calendario', 'aniversario'];
 const ACCIONES = ['avisar', 'bloquear'];
@@ -104,7 +105,9 @@ async function consumoDeEmpleado(db, {
   if (emp.numerosEnReloj.length) {
     const [fichados] = await db.query(
       `SELECT DISTINCT DATE_FORMAT(CHECKTIME, '%Y-%m-%d') AS d FROM Checkins
-       WHERE tenant_id = ? AND USERID IN (?) AND CHECKTIME >= ? AND CHECKTIME < DATE_ADD(?, INTERVAL 1 DAY)`,
+       WHERE tenant_id = ? AND USERID IN (?) AND CHECKTIME >= ? AND CHECKTIME < DATE_ADD(?, INTERVAL 1 DAY)`
+       // Un fichaje omitido (correcciones de fichajes) no hace "día fichado".
+       + correccionesFichajes.sinOmitidos('id', await correccionesFichajes.idsOmitidosEn(db, tenantId)),
       [tenantId, emp.numerosEnReloj, periodo.desde, periodo.hasta]
     );
     fichados.forEach((f) => diasFichados.add(f.d));
@@ -257,8 +260,9 @@ async function estadoCuposEmpresa(db, tenantId, fecha, porcentaje = 80) {
     if (empleadoDeNumero.size) {
       const [fichados] = await db.query(
         `SELECT USERID, DATE_FORMAT(CHECKTIME, '%Y-%m-%d') AS d FROM Checkins
-         WHERE tenant_id = ? AND USERID IN (?) AND CHECKTIME >= ? AND CHECKTIME < DATE_ADD(?, INTERVAL 1 DAY)
-         GROUP BY USERID, d`,
+         WHERE tenant_id = ? AND USERID IN (?) AND CHECKTIME >= ? AND CHECKTIME < DATE_ADD(?, INTERVAL 1 DAY)`
+         + correccionesFichajes.sinOmitidos('id', await correccionesFichajes.idsOmitidosEn(db, tenantId))
+         + ' GROUP BY USERID, d',
         [tenantId, [...empleadoDeNumero.keys()], ventana.desde, ventana.hasta]
       );
       fichados.forEach((f) => {
