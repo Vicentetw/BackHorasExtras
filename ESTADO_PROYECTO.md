@@ -8,7 +8,7 @@
 > sin un test que fije el caso nuevo y los que ya andaban, y sin medir el
 > antes y el después sobre la copia.**
 >
-> ### Entrada particular solo al llegar — HECHO EN LOCAL, SIN COMMIT NI PUBLICAR (2026-10-29)
+> ### Entrada particular solo al llegar — PUBLICADO (2026-10-29: backend 9528d45, frontend 4f3b98d)
 >
 > - Caso: SANTI 2616, 01/10. Un 5 suelto a media jornada armaba una salida
 >   desde las 07:00.
@@ -21,7 +21,7 @@
 > - Suite: 1194 pass / 17 fail, el baseline esperado. De esas 17, 4 de
 >   attendance-range/daily fallan igual sin el cambio (verificado con
 >   `git stash`).
-> - Falta: el OK del dueño para publicar. No necesita migración.
+> - Publicado con el OK del dueño. No necesita migración.
 > - Pendientes en orden:
 >   - **B**: llegó con el 5 antes de su horario; hay que medirla.
 >   - **Omitir fichaje** con rastro (quién, cuándo, motivo; necesita
