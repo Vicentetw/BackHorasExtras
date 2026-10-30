@@ -92,6 +92,20 @@ test('lo que el reporte descarta se muestra como descartado, con el motivo', () 
   assert.match(f[0].tipos[0].descartado, /primer fichaje/);
 });
 
+test('regreso sin salida con la persona ya trabajando: tachado, con el motivo (SANTI 2616)', () => {
+  const dia = [fichaje('06:54:00'), marcador('12:09:22', 5), fichaje('12:09:28'), fichaje('15:00:00')];
+  const r = clasificar(dia);
+  assert.deepEqual(r[1].tipos.map((x) => x.texto), ['Regreso particular (sin salida registrada)']);
+  assert.match(r[1].tipos[0].descartado, /ya estaba trabajando/);
+});
+
+test('entrada particular al llegar: sigue contando, sin tachar', () => {
+  const dia = [marcador('09:29:55', 5), fichaje('09:30:00'), fichaje('15:00:00')];
+  const r = clasificar(dia);
+  assert.deepEqual(r[0].tipos.map((x) => x.texto), ['Regreso particular (sin salida registrada)']);
+  assert.equal(r[0].tipos[0].descartado, null);
+});
+
 test('sin marcadores, solo entrada, intermedios y salida', () => {
   const f = clasificarFichajesDelDia({ fichajes: ['2026-09-28 13:38:00', '2026-09-28 06:56:00', '2026-09-28 10:00:00'], marcas: [] });
   assert.deepEqual(f.map((x) => [x.hora, x.base]), [['06:56', 'Entrada'], ['10:00', 'Intermedio'], ['13:38', 'Salida']]);

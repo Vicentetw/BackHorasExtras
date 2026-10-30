@@ -25,6 +25,8 @@ const ETIQUETAS = {
   CAMPANA: { salida: 'Salida a campaña', regreso: 'Regreso de campaña' },
 };
 
+const REGRESO_SIN_SALIDA_YA_TRABAJANDO = 'ya estaba trabajando: un regreso sin salida solo cuenta al llegar (primer fichaje del día)';
+
 function etiqueta(categoria, rol) {
   const e = ETIQUETAS[categoria];
   if (e) return e[rol];
@@ -110,7 +112,14 @@ function marcasDeEventos(categoria, r, legajo, fmt, marcadorDe, descarte = () =>
     if (ev.employeeId !== legajo || ev.category !== categoria) continue;
     marcas.push({ categoria, rol: 'regreso', en: fmt(ev.timeIn), marcador: marcadorDe(ev, 'regreso'), sinPar: true });
   }
+  // Regreso sin salida cuando la persona ya estaba trabajando: el motor no lo
+  // cuenta (ver "ENTRADA PARTICULAR SOLO AL LLEGAR"); se muestra tachado y
+  // con el motivo, para que se vea por qué no hay salida.
+  for (const ev of r.regresosDescartados || []) {
+    if (ev.employeeId !== legajo || ev.category !== categoria) continue;
+    marcas.push({ categoria, rol: 'regreso', en: fmt(ev.timeIn), marcador: marcadorDe(ev, 'regreso'), sinPar: true, descartado: REGRESO_SIN_SALIDA_YA_TRABAJANDO });
+  }
   return marcas;
 }
 
-module.exports = { clasificarFichajesDelDia, marcasDeEventos, ETIQUETAS };
+module.exports = { clasificarFichajesDelDia, marcasDeEventos, ETIQUETAS, REGRESO_SIN_SALIDA_YA_TRABAJANDO };

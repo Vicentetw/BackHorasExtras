@@ -41,7 +41,7 @@ const campanaService = require('../motor-laboral/services/campanaService');
 const movementsCalc = require('../motor-laboral/services/movementsCalculations');
 
 const MARCA = 'copia-demo'; // identifica lo copiado (feriados) para poder rehacerlo
-const CONFIG_A_COPIAR = ['markerMaxGapSeconds', 'markerBounceSeconds', 'campanaArrivalCutoffTime', 'campanaPresentismoModo',
+const CONFIG_A_COPIAR = ['markerMaxGapSeconds', 'markerBounceSeconds', 'markerArrivalWindowMinutes', 'campanaArrivalCutoffTime', 'campanaPresentismoModo',
   'particularExitMonthlyLimitMinutes', 'personalLeaveMonthlyLimitMinutes'];
 
 const p2 = (n) => String(n).padStart(2, '0');
@@ -67,6 +67,7 @@ async function copiarLegajoADemo(db, o) {
   const todosLosMarcadores = await campanaService.fetchMarkerMap(db, null, o.origen);
   const maxMarkerGapMs = await campanaService.fetchMarkerMaxGapMs(db, o.origen);
   const ventanaReboteMs = await campanaService.fetchVentanaReboteMs(db, o.origen);
+  const ventanaLlegadaParticularMs = await campanaService.fetchVentanaLlegadaParticularMs(db, o.origen);
   const mapasPorCategoria = {};
   for (const cat of ['PARTICULAR', 'OFICIAL', 'HE', 'CAMPANA']) mapasPorCategoria[cat] = await campanaService.fetchMarkerMap(db, cat, o.origen);
 
@@ -92,10 +93,11 @@ async function copiarLegajoADemo(db, o) {
       for (const cat of Object.keys(mapasPorCategoria)) {
         if (!Object.keys(mapasPorCategoria[cat]).length) continue;
         const r = movementsCalc.detectMovements(delDia, mapasPorCategoria[cat],
-          { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores: correcciones, ownCheckinBounceMs: ventanaReboteMs });
+          { maxMarkerGapMs, todosLosMarcadores, correccionesMarcadores: correcciones, ownCheckinBounceMs: ventanaReboteMs, ventanaLlegadaParticularMs });
         for (const ev of r.closedEvents) if (ev.employeeId === legajoTxt) { anotar(ev.salidaMarkerUserId, ev.salidaMarkerAt); anotar(ev.regresoMarkerUserId, ev.regresoMarkerAt); }
         for (const [id, ev] of r.openEvents) if (id === legajoTxt) anotar(ev.salidaMarkerUserId, ev.salidaMarkerAt);
         for (const ev of r.orphanReturns) if (ev.employeeId === legajoTxt) anotar(ev.regresoMarkerUserId, ev.regresoMarkerAt);
+        for (const ev of r.regresosDescartados || []) if (ev.employeeId === legajoTxt) anotar(ev.regresoMarkerUserId, ev.regresoMarkerAt);
       }
     }
   }

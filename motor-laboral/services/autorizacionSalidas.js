@@ -237,6 +237,7 @@ async function entradasDelDia(db, tenantId, fecha) {
     todosLosMarcadores: await campana.fetchMarkerMap(db, null, tenantId),
     correccionesMarcadores: await campana.fetchCorreccionesMarcadores(db, fecha, hasta, tenantId),
     ownCheckinBounceMs: await campana.fetchVentanaReboteMs(db, tenantId),
+    ventanaLlegadaParticularMs: await campana.fetchVentanaLlegadaParticularMs(db, tenantId),
   });
   const decisiones = requiere ? await leerDecisiones(db, tenantId, fecha, fecha) : new Map();
   for (const r of orphanReturns.filter((x) => x.category === 'PARTICULAR')) {

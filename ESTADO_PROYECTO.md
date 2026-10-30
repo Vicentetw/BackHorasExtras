@@ -4,6 +4,32 @@
 >
 > **Si sos una sesión nueva: leé este bloque entero antes de tocar nada.**
 >
+> **Regla del dueño (2026-10-29): ningún cambio de cálculo sin su aprobación,
+> sin un test que fije el caso nuevo y los que ya andaban, y sin medir el
+> antes y el después sobre la copia.**
+>
+> ### Entrada particular solo al llegar — HECHO EN LOCAL, SIN COMMIT NI PUBLICAR (2026-10-29)
+>
+> - Caso: SANTI 2616, 01/10. Un 5 suelto a media jornada armaba una salida
+>   desde las 07:00.
+> - Aprobado A1 + C, con la ventana de llegada configurable por empresa
+>   (Marcadores → "Llegada con permiso", 2 min por defecto).
+> - Detalle: `MARCADORES_Y_SALIDAS.md` Regla 7 y
+>   `ANALISIS_ENTRADA_PARTICULAR_Y_EDICION.md`.
+> - Medido: −110 salidas particulares falsas (651 h, 40 personas) entre enero
+>   y octubre; Oficial sin cambio.
+> - Suite: 1194 pass / 17 fail, el baseline esperado. De esas 17, 4 de
+>   attendance-range/daily fallan igual sin el cambio (verificado con
+>   `git stash`).
+> - Falta: el OK del dueño para publicar. No necesita migración.
+> - Pendientes en orden:
+>   - **B**: llegó con el 5 antes de su horario; hay que medirla.
+>   - **Omitir fichaje** con rastro (quién, cuándo, motivo; necesita
+>     migración).
+>   - **Pantalla de fichajes en crudo** para verificar errores o reclamos,
+>     para el administrador, el jefe de personal y el encargado de
+>     presentismo (pedido 2026-10-29, a analizar).
+>
 > ### Avisos de fichajes y horas extra sin habilitar — PUBLICADO (2026-10-29: backend ea8ce19, frontend f14c1e0)
 >
 > Se trabaja **de a un punto, con aprobación del dueño en cada uno**.

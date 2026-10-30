@@ -129,6 +129,101 @@ test('detectMovements: caso real Perrotta 02/07/2026 -- aviso de entrada particu
   assert.deepEqual(sinDetalleDeMarcador(orphanReturns[0]), { employeeId: '2525', category: 'PARTICULAR', timeIn: dt('08:43:17'), regresoMarkerUserId: 5 });
 });
 
+test('detectMovements: caso real SANTI 2616 (01/10/2026) -- un 5 suelto a media jornada NO es entrada particular', () => {
+  // Decisión del dueño (2026-10-29): la entrada particular es solo al LLEGAR.
+  // Traza real: entra 06:54, sale con el 6 y vuelve con el 5 al minuto, y
+  // después aprieta el 5 dos veces más sin haber salido (12:09 y 15:06, el
+  // de las 15:06 seguido del 9). Antes cada 5 suelto era una "salida" desde
+  // las 07:00 (13 h). Ahora queda solo la salida real 12:04-12:05.
+  const d = (hms) => new Date(`2026-10-01T${hms}`);
+  const checkins = [
+    { checktime: d('06:54:59'), userId: 2616, employeeId: '2616' },
+    { checktime: d('12:04:02'), userId: 6, employeeId: null },
+    { checktime: d('12:04:08'), userId: 2616, employeeId: '2616' },
+    { checktime: d('12:05:06'), userId: 5, employeeId: null },
+    { checktime: d('12:05:12'), userId: 2616, employeeId: '2616' },
+    { checktime: d('12:09:22'), userId: 5, employeeId: null },
+    { checktime: d('12:09:28'), userId: 2616, employeeId: '2616' },
+    { checktime: d('15:06:08'), userId: 5, employeeId: null },
+    { checktime: d('15:06:14'), userId: 2616, employeeId: '2616' },
+  ];
+  const { closedEvents, openEvents, orphanReturns } = detectMovements(checkins, PARTICULAR_MARKERS);
+
+  assert.equal(closedEvents.length, 1);
+  assert.equal(closedEvents[0].timeOut.getTime(), d('12:04:08').getTime());
+  assert.equal(closedEvents[0].timeIn.getTime(), d('12:05:12').getTime());
+  assert.equal(openEvents.size, 0);
+  assert.equal(orphanReturns.length, 0, 'los 5 de las 12:09 y 15:06 no generan salida');
+});
+
+test('detectMovements: los regresos sin salida que no cuentan se informan aparte (para mostrarlos)', () => {
+  const checkins = [
+    { checktime: dt('07:00:00'), userId: 2525, employeeId: '2525' },
+    { checktime: dt('12:09:22'), userId: 5, employeeId: null },
+    { checktime: dt('12:09:28'), userId: 2525, employeeId: '2525' },
+  ];
+  const { orphanReturns, regresosDescartados } = detectMovements(checkins, PARTICULAR_MARKERS);
+  assert.equal(orphanReturns.length, 0);
+  assert.equal(regresosDescartados.length, 1);
+  assert.equal(regresosDescartados[0].timeIn.getTime(), dt('12:09:28').getTime());
+  assert.equal(regresosDescartados[0].regresoMarkerUserId, 5);
+});
+
+test('detectMovements: el marcador descartado igual se consume (no pasa a la persona siguiente)', () => {
+  // Trampa de MARCADORES_Y_SALIDAS.md: si el 5 quedara vivo, se lo llevaría
+  // el fichaje de 9999 diez segundos después.
+  const checkins = [
+    { checktime: dt('07:00:00'), userId: 2525, employeeId: '2525' },
+    { checktime: dt('12:09:22'), userId: 5, employeeId: null },
+    { checktime: dt('12:09:28'), userId: 2525, employeeId: '2525' },
+    { checktime: dt('12:09:38'), userId: 9999, employeeId: '9999' },
+  ];
+  const { orphanReturns } = detectMovements(checkins, PARTICULAR_MARKERS);
+  assert.equal(orphanReturns.length, 0, 'el 5 no le llega a 9999');
+});
+
+test('detectMovements: la ventana de llegada es configurable por empresa', () => {
+  // Dedo 09:30:00 y el 5 + dedo a los 3 min: con 2 min (por defecto) no es
+  // la llegada; con 5 min sí; con 0, solo vale el primer fichaje.
+  const checkins = [
+    { checktime: dt('09:30:00'), userId: 2525, employeeId: '2525' },
+    { checktime: dt('09:32:55'), userId: 5, employeeId: null },
+    { checktime: dt('09:33:00'), userId: 2525, employeeId: '2525' },
+  ];
+  assert.equal(detectMovements(checkins, PARTICULAR_MARKERS).orphanReturns.length, 0);
+  assert.equal(detectMovements(checkins, PARTICULAR_MARKERS, { ventanaLlegadaParticularMs: 5 * 60000 }).orphanReturns.length, 1);
+  const primero = [
+    { checktime: dt('09:29:55'), userId: 5, employeeId: null },
+    { checktime: dt('09:30:00'), userId: 2525, employeeId: '2525' },
+  ];
+  assert.equal(detectMovements(primero, PARTICULAR_MARKERS, { ventanaLlegadaParticularMs: 0 }).orphanReturns.length, 1);
+});
+
+test('detectMovements: entrada particular dentro de los 2 minutos de su llegada sigue valiendo', () => {
+  // Llegó tarde, puso el dedo y enseguida se acordó del 5 (40 s después,
+  // fuera de la ventana de rebote): sigue siendo su llegada.
+  const checkins = [
+    { checktime: dt('09:30:00'), userId: 2525, employeeId: '2525' },
+    { checktime: dt('09:30:35'), userId: 5, employeeId: null },
+    { checktime: dt('09:30:40'), userId: 2525, employeeId: '2525' },
+  ];
+  const { orphanReturns } = detectMovements(checkins, PARTICULAR_MARKERS);
+  assert.equal(orphanReturns.length, 1);
+  assert.equal(orphanReturns[0].timeIn.getTime(), dt('09:30:40').getTime());
+});
+
+test('detectMovements: regreso OFICIAL sin salida a media jornada sigue igual (puede venir de días anteriores)', () => {
+  const markers = { 4: { category: 'OFICIAL', direction: 'REGRESO' } };
+  const checkins = [
+    { checktime: dt('07:00:00'), userId: 2525, employeeId: '2525' },
+    { checktime: dt('11:00:00'), userId: 4, employeeId: null },
+    { checktime: dt('11:00:05'), userId: 2525, employeeId: '2525' },
+  ];
+  const { orphanReturns } = detectMovements(checkins, markers);
+  assert.equal(orphanReturns.length, 1);
+  assert.equal(orphanReturns[0].category, 'OFICIAL');
+});
+
 test('detectMovements: un marcador vencido (>2min sin consumirse) no se le atribuye a otro empleado', () => {
   // Caso real Perrotta 02/07/2026: badge 6 a las 13:33:54 -- casi seguro para
   // otro empleado (el fichaje que le siguió, 4s después, no resolvió a

@@ -106,6 +106,22 @@ test('POST /config/campana-cutoff y /config/marker-max-gap-seconds tambien queda
   assert.notEqual(gapB.markerMaxGapSeconds, 999);
 });
 
+test('/config/marker-arrival-window-minutes: 2 por defecto, por empresa, valida el valor y pide permiso', async () => {
+  const url = `${BASE_URL}/config/marker-arrival-window-minutes`;
+  const def = await (await fetch(url, { headers: headersB })).json();
+  assert.equal(def.markerArrivalWindowMinutes, 2, 'sin configurar: 2 minutos');
+
+  const post = (h, v) => fetch(url, { method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ markerArrivalWindowMinutes: v }) });
+  assert.equal((await post(headersA, 5)).status, 200);
+  assert.equal((await (await fetch(url, { headers: headersA })).json()).markerArrivalWindowMinutes, 5);
+  assert.equal((await (await fetch(url, { headers: headersB })).json()).markerArrivalWindowMinutes, 2, 'otra empresa no hereda el valor');
+
+  assert.equal((await post(headersA, 0)).status, 200, '0 = solo el primer fichaje');
+  assert.equal((await (await fetch(url, { headers: headersA })).json()).markerArrivalWindowMinutes, 0);
+  for (const malo of [-1, 61, 1.5, 'x']) assert.equal((await post(headersA, malo)).status, 400, `rechaza ${malo}`);
+  assert.equal((await post(headersNoPerm, 3)).status, 403);
+});
+
 test('sin permiso schedules:update, POST /config/overtime-settings responde 403', async () => {
   const res = await fetch(`${BASE_URL}/config/overtime-settings`, {
     method: 'POST',

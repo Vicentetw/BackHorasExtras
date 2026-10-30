@@ -97,6 +97,7 @@ const ACCIONES = [
   ['POST', /^\/salidas\/autorizaciones$/, 'Autorizó / no autorizó salidas particulares'],
   ['POST', /^\/salidas\/justificaciones$/, 'Justificó salidas particulares con un motivo (o quitó la justificación)'],
   ['PUT', /^\/config\/salidas-autorizacion$/, 'Cambió si las salidas particulares requieren autorización'],
+  ['POST', /^\/config\/marker-arrival-window-minutes$/, 'Cambió la ventana de llegada de la entrada particular'],
   ['POST', /^\/config\/user-exclusions\/range$/, 'Cargó justificaciones (rango de días)'],
   ['POST', /^\/config\/user-exclusions$/, 'Cargó una justificación'],
   ['PUT', /^\/config\/user-exclusions\/\d+$/, 'Modificó una justificación'],

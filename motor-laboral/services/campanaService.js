@@ -147,6 +147,17 @@ async function fetchVentanaReboteMs(db, tenantId) {
   return (Number.isFinite(seconds) && seconds > 0 ? seconds : VENTANA_REBOTE_DEFAULT_S) * 1000;
 }
 
+// Ventana de llegada de la entrada particular (ver "ENTRADA PARTICULAR SOLO
+// AL LLEGAR" en movementsCalculations.js): minutos desde el primer fichaje
+// del dia en los que un regreso particular sin salida todavia es la llegada.
+// 0 = solo el primer fichaje. Sin configurar, 2 minutos.
+async function fetchVentanaLlegadaParticularMs(db, tenantId) {
+  const value = await getAppSetting('markerArrivalWindowMinutes', tenantId, db);
+  const minutos = value != null && value !== '' ? Number(value) : NaN;
+  if (!Number.isFinite(minutos) || minutos < 0) return movementsCalc.DEFAULT_VENTANA_LLEGADA_PARTICULAR_MS;
+  return minutos * 60 * 1000;
+}
+
 async function fetchMarkerMaxGapMs(db, tenantId) {
   const value = await getAppSetting('markerMaxGapSeconds', tenantId, db);
   const seconds = value ? Number(value) : 30;
@@ -347,6 +358,7 @@ module.exports = {
   fetchMarkerMap,
   fetchMarkerMaxGapMs,
   fetchVentanaReboteMs,
+  fetchVentanaLlegadaParticularMs,
   fetchCorreccionesMarcadores,
   fetchCampanaSoloAfectados,
   legajosAfectadosACampana,

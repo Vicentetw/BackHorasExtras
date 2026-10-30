@@ -30,6 +30,10 @@ const { timeToMinutes } = require('./attendanceCalculations');
 //     regreso antes de su primer ingreso. El llamador decide que hacer con
 //     esto (ver /attendance-range, que lo usa para sugerir justificar una
 //     tardanza) -- closedEvents/openEvents no cambian, es aditivo.
+//     Desde 2026-10-29, un PARTICULAR solo es orphanReturn si es la LLEGADA
+//     del dia (ver "ENTRADA PARTICULAR SOLO AL LLEGAR").
+//   regresosDescartados: mismo formato -- regresos PARTICULAR sin salida que
+//     no cuentan porque la persona ya estaba trabajando. Solo para mostrarlos.
 // maxMarkerGapMs: si pasa mas de esto entre que se ficha un marcador y el
 // proximo fichaje real que lo "consume", el marcador se descarta por vencido
 // en vez de atribuirse a quien sea que aparezca despues. Caso real que
@@ -69,6 +73,14 @@ const VENTANA_LLEGADA_HE_MS = 2 * 60 * 1000;
 // SALIDA del turno (2559, 06/03/2026: fichó la salida, apretó el 9 y volvió
 // a fichar para empezar horas extra reales -- eso NO es una llegada).
 const PAUSA_QUE_HACE_LLEGADA_MS = 3 * 60 * 60 * 1000;
+
+// Entrada particular (regreso particular sin salida): solo vale si es la
+// LLEGADA del dia -- el primer fichaje, o dentro de estos minutos desde el
+// primero (quien pone el dedo y enseguida se acuerda del marcador). Cada
+// empresa lo ajusta (markerArrivalWindowMinutes, se pasa como
+// ventanaLlegadaParticularMs); 2 min por defecto. Ver "ENTRADA PARTICULAR
+// SOLO AL LLEGAR" en detectMovements.
+const DEFAULT_VENTANA_LLEGADA_PARTICULAR_MS = 2 * 60 * 1000;
 
 // ============================================================================
 // Rebote refinado (opcion `reboteRefinado`, ENCENDIDA por defecto desde 2026-10-06)
@@ -296,6 +308,7 @@ function detectMovements(checkins, markerMap, options = {}) {
   const soloPuedenConsumir = options.soloPuedenConsumir ?? null;
   const ownCheckinBounceMs = options.ownCheckinBounceMs ?? DEFAULT_OWN_CHECKIN_BOUNCE_MS;
   const reboteRefinado = options.reboteRefinado !== false;
+  const ventanaLlegadaParticularMs = options.ventanaLlegadaParticularMs ?? DEFAULT_VENTANA_LLEGADA_PARTICULAR_MS;
   // TODOS los marcadores de la empresa, no solo los de la categoria que se
   // esta detectando en esta pasada. Hace falta para que "gana el ultimo"
   // funcione entre categorias distintas -- ver el comentario en el loop.
@@ -327,6 +340,9 @@ function detectMovements(checkins, markerMap, options = {}) {
   const openEvents = new Map();
   const closedEvents = [];
   const orphanReturns = [];
+  // Regresos particulares sin salida que NO cuentan (la persona ya estaba
+  // trabajando). Solo para mostrarlos tachados en "Fichajes de la persona".
+  const regresosDescartados = [];
   const lastRealCheckinByEmployeeId = new Map();
   // Último regreso de cada persona (cierre o regreso sin salida): para unir
   // un regreso repetido (ver "Marcador repetido" más abajo).
@@ -550,6 +566,30 @@ function detectMovements(checkins, markerMap, options = {}) {
         if (pendiente) marcadoresPorReloj.delete(pendiente.clave);
         continue;
       }
+      // ENTRADA PARTICULAR SOLO AL LLEGAR (decisión del dueño, 2026-10-29):
+      // un regreso particular sin salida es "llegó tarde con permiso" solo si
+      // es su LLEGADA del día (el primer fichaje, o dentro de los 2 minutos
+      // siguientes). Si ya estaba trabajando, ese 5 no dice que estuvo afuera:
+      // es una tecla repetida o equivocada. Antes cada uno abría una salida
+      // desde el horario de entrada (SANTI 2616, 01/10/2026: 5 a las 12:09 y
+      // 15:06 = 13 h de "salida"; AVP ene-oct: 113 casos). El marcador se
+      // consume igual (era de esta persona), pero no genera salida.
+      // Oficial y Campaña no: pueden durar días. Es una regla para todas las
+      // empresas (un fichaje de presencia no puede contar como ausencia); lo
+      // que cada una ajusta es la ventana de llegada.
+      const esSuLlegada = tanda && tanda.primeraDelDia && (row.checktime - tanda.hora) <= ventanaLlegadaParticularMs;
+      if (marcadorAplicable.category === 'PARTICULAR' && !esSuLlegada) {
+        regresosDescartados.push({
+          employeeId: row.employeeId,
+          category: marcadorAplicable.category,
+          timeIn: row.checktime,
+          regresoMarkerUserId: marcadorAplicable.userId,
+          regresoMarkerAt: marcadorAplicable.markedAt,
+          regresoCorregido: marcadorAplicable.corregido === true
+        });
+        if (pendiente) marcadoresPorReloj.delete(pendiente.clave);
+        continue;
+      }
       orphanReturns.push({
         employeeId: row.employeeId,
         category: marcadorAplicable.category,
@@ -565,7 +605,7 @@ function detectMovements(checkins, markerMap, options = {}) {
     if (pendiente) marcadoresPorReloj.delete(pendiente.clave);
   }
 
-  return { closedEvents, openEvents, orphanReturns };
+  return { closedEvents, openEvents, orphanReturns, regresosDescartados };
 }
 
 // Para Particular/Oficial: una salida que sigue abierta al terminar el rango
@@ -758,5 +798,6 @@ module.exports = {
   filterEventsOpenedByFirstCheckinOfDay,
   claveMarcador,
   fechaHoraLocal,
-  VENTANA_MARCADOR_CORREGIDO_MS
+  VENTANA_MARCADOR_CORREGIDO_MS,
+  DEFAULT_VENTANA_LLEGADA_PARTICULAR_MS
 };

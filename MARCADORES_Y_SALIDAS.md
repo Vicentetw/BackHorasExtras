@@ -165,6 +165,29 @@ decidir si la segunda es un rebote del lector o una acción nueva.
 - Tests: `movements-calculations.test.js` ("salida + 9 + dedo", con el reloj
   real del 02/10; "si OTRA persona leyó después del marcador…").
 
+### Regla 7 — La entrada particular es solo al LLEGAR (2026-10-29)
+
+Un regreso particular sin salida ("entrada particular", Regla 3) cuenta solo
+si es la **llegada** de la persona: su primer fichaje del día o dentro de la
+**ventana de llegada** (Marcadores → "Llegada con permiso", por empresa,
+`markerArrivalWindowMinutes`, 2 min por defecto, 0 = solo el primer fichaje).
+
+- **Por qué:** si ya estaba trabajando, la salida "desde su horario de
+  entrada" contradice su propio fichaje (estaba adentro). Caso real: SANTI
+  2616, 01/10/2026 — entró 06:54, apretó el 5 a las 12:09 y 15:06 sin salir:
+  eran dos salidas de 5 h y 8 h desde las 07:00.
+- **Medido (AVP ene–oct 2026, copia):** Particular 2.636 → 2.526 (−110, todas
+  de este tipo, 651 h falsas, 40 personas); ninguna nueva; Oficial sin cambio.
+  Corriendo las versiones del cálculo desde el 02/09 se vio que siempre fue
+  así (no lo rompió un cambio).
+- El marcador **se consume igual** (era de esa persona): no pasa al fichaje
+  de otro. El fichaje se muestra tachado: "no cuenta: ya estaba trabajando".
+- Solo Particular: Oficial y Campaña pueden durar días.
+- Código: "ENTRADA PARTICULAR SOLO AL LLEGAR" en `detectMovements`
+  (`regresosDescartados`). Tests: `movements-calculations.test.js`,
+  `tipos-de-fichaje.test.js`. Análisis completo:
+  `ANALISIS_ENTRADA_PARTICULAR_Y_EDICION.md`.
+
 ### Otras protecciones que ya existen (no duplicarlas)
 
 - **Rebote** (`ownCheckinBounceMs`, 20 s): si la misma persona ficha dos veces
